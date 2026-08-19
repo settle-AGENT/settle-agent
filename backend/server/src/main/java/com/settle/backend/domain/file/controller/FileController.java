@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v1/files")
+@RequestMapping("/api/v1/uploads")
 public class FileController {
 
     private final FileService fileService;
@@ -20,7 +20,7 @@ public class FileController {
         this.fileService = fileService;
     }
 
-    @PostMapping("/presigned-uploads")
+    @PostMapping
     public PresignedUploadResponse createPresignedUpload(
             @Valid @RequestBody PresignedUploadRequest request
     ) {
