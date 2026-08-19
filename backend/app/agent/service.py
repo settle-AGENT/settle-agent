@@ -21,26 +21,54 @@ DocType = Literal["arc_front", "arc_back", "passport"]
 # ──────────────────────────────────────────────────────────
 # 그래프 · 체크포인터 (프로세스당 1회 초기화)
 # ──────────────────────────────────────────────────────────
-@lru_cache(maxsize=1)
-def _graph():
-    url = os.getenv("DATABASE_URL")
-    checkpointer = None
+# 커넥션을 모듈 전역에 붙잡아 둔다.
+# from_conn_string() 의 컨텍스트 매니저를 지역 변수로 두면 GC 시점에
+# 커넥션이 닫혀 "the connection is closed" 가 난다.
+_CONN = None
 
+
+def _make_checkpointer():
+    global _CONN
+
+    url = os.getenv("DATABASE_URL")
     if url:
         try:
+            from psycopg import Connection
+            from psycopg.rows import dict_row
             from langgraph.checkpoint.postgres import PostgresSaver
-            cm = PostgresSaver.from_conn_string(url)
-            checkpointer = cm.__enter__()          # 프로세스 수명 동안 유지
-            checkpointer.setup()                   # 테이블 자동 생성
-        except Exception as exc:                   # noqa: BLE001
-            print(f"[agent] Postgres checkpointer 실패, 메모리로 대체: {exc}")
-            checkpointer = None
 
-    if checkpointer is None:
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
+            _CONN = Connection.connect(
+                url,
+                autocommit=True,        # checkpointer 는 자체 트랜잭션을 쓰지 않는다
+                prepare_threshold=0,
+                row_factory=dict_row,
+            )
+            cp = PostgresSaver(_CONN)
+            cp.setup()                  # 테이블 자동 생성 (idempotent)
+            print("[agent] Postgres checkpointer 연결됨")
+            return cp
+        except Exception as exc:        # noqa: BLE001
+            print(f"[agent] Postgres checkpointer 실패, 메모리로 대체: {exc!r}")
+            if _CONN is not None:
+                try:
+                    _CONN.close()
+                except Exception:       # noqa: BLE001
+                    pass
+                _CONN = None
 
-    return build_graph(checkpointer=checkpointer)
+    from langgraph.checkpoint.memory import MemorySaver
+    print("[agent] MemorySaver 사용 (재시작 시 세션 소멸)")
+    return MemorySaver()
+
+
+@lru_cache(maxsize=1)
+def _graph():
+    return build_graph(checkpointer=_make_checkpointer())
+
+
+def is_persistent() -> bool:
+    """Postgres 에 붙었는지. /health 에서 노출하면 디버깅이 쉽다."""
+    return _CONN is not None and not _CONN.closed
 
 
 def _cfg(session_id: str) -> dict:

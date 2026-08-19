@@ -44,7 +44,11 @@ app.add_middleware(
 
 @app.get("/health", tags=["meta"])
 def health():
-    return {"ok": True, "mode": "agent"}
+    return {
+        "ok": True,
+        "mode": "agent",
+        "persistent": agent.is_persistent(),   # False 면 재시작 시 세션 소멸
+    }
 
 
 @app.post("/api/session", response_model=AgentResponse, tags=["session"])
