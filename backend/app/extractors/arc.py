@@ -321,17 +321,3 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
         "dropped": dropped,
         "raw_texts": texts,
     }
-
-def merge_arc(front: dict, back: dict) -> dict:
-    """앞면·뒷면 추출 결과 병합. 겹치는 필드는 뒷면이 정본."""
-    profile = {front["profile"], back["profile"]}
-    confidence = {front["confidence"], back["confidence"]}
-    return {
-        "profile": profile,
-        "confidence": confidence,
-        "dropped": front["dropped"] + back["dropped"],
-        "missing_sides": [
-            side for side, r in (("arc_front", front), ("arc_back", back))
-            if not r["profile"]
-        ],
-    }

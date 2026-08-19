@@ -1,17 +1,26 @@
-"""체류자격 코드 유효집합"""
+"""rules/*.yaml 로더. import 시점에 한 번만 읽는다."""
+from pathlib import Path
+import yaml
 
-VALID_VISA_CODES = {
-    # 유학·연수
-    "D-2", "D-4", "D-10",
-    # 취업
-    "E-1", "E-2", "E-3", "E-4", "E-5", "E-6", "E-7", "E-9", "E-10",
-    # 거주·결혼
-    "F-1", "F-2", "F-3", "F-4", "F-5", "F-6",
-    # 방문취업
-    "H-1", "H-2",
-    # 기타
-    "A-1", "A-2", "A-3",
-    "C-3", "C-4",
-    "D-1", "D-3", "D-5", "D-6", "D-7", "D-8", "D-9",
-    "G-1",
-}
+RULES_DIR = Path(__file__).resolve().parents[2] / "rules"
+
+
+def _load(name: str) -> dict:
+    return yaml.safe_load((RULES_DIR / name).read_text(encoding="utf-8"))
+
+
+VISA_CODES = _load("visa_codes.yaml")["valid"]
+VALID_VISA_CODES = set(VISA_CODES)
+
+VISA_MATRIX = _load("visa_matrix.yaml")["visa"]
+EVIDENCE = _load("evidence.yaml")
+
+
+def actions_for(visa_type: str) -> dict:
+    """해당 체류자격이 수행 가능한 액션 정의."""
+    return VISA_MATRIX.get(visa_type, {}).get("actions", {})
+
+
+def evidence_labels(ids: list[str]) -> list[str]:
+    """근거 ID → 사람이 읽는 조문명."""
+    return [EVIDENCE[i]["law"] for i in ids if i in EVIDENCE]

@@ -1,0 +1,79 @@
+version: "2026-08-19"
+source: "출입국관리법 시행령 별표1 외"
+
+visa:
+  D-2:
+    name_ko: 유학
+    name_en: Student
+
+    actions:
+      alien_registration:
+        label_ko: 외국인등록
+        label_en: Alien Registration
+        allowed: true
+        prereq: []
+        deadline: { days: 90, from: entry_date }
+        form: integrated_application
+        form_type: registration
+        required_docs: [passport, photo, enrollment_cert, residence_proof]
+        agency: immigration
+        risk_level: L2
+        evidence: [immigration_31]
+
+      mobile_subscription:
+        label_ko: 국내 통신 가입
+        label_en: Mobile Subscription
+        allowed: true
+        prereq: [alien_registration]
+        required_docs: [arc, passport]
+        agency: telecom
+        risk_level: L1
+        note_ko: "비대면 계좌개설의 선행 조건"
+
+      residence_change:
+        label_ko: 체류지 변경신고
+        label_en: Change of Residence
+        allowed: true
+        prereq: [alien_registration]
+        deadline: { days: 15, from: move_date }
+        form: integrated_application
+        form_type: address_change
+        required_docs: [arc, residence_proof]
+        agency: immigration
+        risk_level: L2
+        evidence: [immigration_36]
+
+      work_activity:
+        label_ko: 체류자격외활동허가
+        label_en: Activity Permit
+        allowed: conditional
+        condition_ko: "사전 허가 필요. 학기 중 시간 제한 있음"
+        prereq: [alien_registration]
+        form: integrated_application
+        form_type: activity_permit
+        required_docs: [arc, enrollment_cert, employment_contract]
+        agency: immigration
+        risk_level: L2
+        evidence: [immigration_20]
+
+      open_bank_account:
+        label_ko: 은행 계좌 개설
+        label_en: Open Bank Account
+        allowed: true
+        account_type: limited
+        note_ko: "금융거래한도계좌로 개설되며, 목적 확인 후 한도 해제"
+        prereq: [alien_registration]
+        form: bank_account_open
+        required_docs: [passport, arc, enrollment_cert]
+        agency: bank
+        risk_level: L2
+        evidence: [real_name_3, ftra_5_2]
+        channels:
+          in_person: { available: true }
+          non_face_to_face:
+            available: true
+            extra_prereq: [mobile_subscription]
+        blocked_steps:
+          - step: identity_verification
+            reason_ko: "실명확인은 본인만 가능"
+            evidence: [real_name_3]
