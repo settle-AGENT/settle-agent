@@ -61,6 +61,10 @@ class FileServiceTest {
         }
 
         @Override
+        public void uploadPdf(String objectKey, byte[] bytes) {
+        }
+
+        @Override
         public StoredFile download(String objectKey) {
             return storedFile;
         }

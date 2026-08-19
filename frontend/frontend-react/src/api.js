@@ -167,10 +167,43 @@ export async function getVerdict(profileId, answers) {
   return post("/api/verdict", { profileId, answers });
 }
 
-// 4) 서류 생성(계좌개설신청서 + 통합 신청서)
-export async function buildDocuments(profileId) {
-  if (MOCK) return delay(MOCK_DOCS);
-  return post("/api/documents", { profileId });
+export async function previewAction(actionId, sessionId) {
+  const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/preview`, {
+    method: "POST",
+    headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  await requireOk(response, "PDF 미리보기");
+  return response.json();
+}
+
+export async function approveAction(actionId, sessionId, approved) {
+  const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/approve`, {
+    method: "POST",
+    headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ session_id: sessionId, approved }),
+  });
+  await requireOk(response, approved ? "실행 승인" : "실행 취소");
+  return response.json();
+}
+
+export async function getLedger(sessionId) {
+  const response = await fetch(`/api/ledger?session_id=${encodeURIComponent(sessionId)}`, {
+    headers: authenticatedHeaders(),
+  });
+  await requireOk(response, "실행 이력 불러오기");
+  return response.json();
+}
+
+export async function fetchDocument(url) {
+  const response = await fetch(url, { headers: authenticatedHeaders() });
+  await requireOk(response, "PDF 불러오기");
+  return response.blob();
+}
+
+function authenticatedHeaders(headers = {}) {
+  const token = window.localStorage.getItem("settle_access_token");
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
 }
 
 export function nationalityLabel(code) {
@@ -227,15 +260,6 @@ function mockVerdict(answers = {}) {
     regular: { status: "아직", body: "6개월 이상 체류 기록이나 소득 증빙이 필요해요. 대부분 한도제한계좌로 시작해 나중에 승격해요." },
   };
 }
-
-const MOCK_DOCS = {
-  documents: [
-    { id: "account_opening", title: "계좌개설신청서", subtitle: "계좌개설신청서 · KB국민은행",
-      pages: 2, filled: 12, total: 12, expiresInDays: 7 },
-    { id: "unified", title: "통합 신청서", subtitle: "통합 신청서 · 국가별 양식",
-      pages: 1, filled: 9, total: 11, expiresInDays: 5 },
-  ],
-};
 
 function delay(v, ms = 500) {
   return new Promise((r) => setTimeout(() => r(v), ms));

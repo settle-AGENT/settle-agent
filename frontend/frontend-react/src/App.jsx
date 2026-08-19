@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BridgeMark, TopBar, Rail, PrimaryButton, Field } from "./components.jsx";
 import {
-  signUp, login, uploadAndExtract, confirmProfile, getVerdict, buildDocuments, nationalityLabel,
+  signUp, login, uploadAndExtract, confirmProfile, getVerdict, previewAction, approveAction, getLedger,
+  fetchDocument, nationalityLabel,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
@@ -11,6 +12,7 @@ const SCAN_PAGES = [
   { key: "arcBack", docType: "arc_back", label: "외국인등록증 뒷면", sub: "뒷면" },
   { key: "passport", docType: "passport", label: "여권", sub: "여권 사진면" },
 ];
+const PREVIEW_ACTION_ID = "open_bank_account";
 
 const card = {
   padding: 15, borderRadius: 14, border: "1px solid var(--line)", background: "#fff",
@@ -45,8 +47,17 @@ export default function App() {
   const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
-  const [docs, setDocs] = useState(null);
-  const [openDoc, setOpenDoc] = useState(null);
+  const [agentState, setAgentState] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [previewBlobUrl, setPreviewBlobUrl] = useState("");
+  const [approval, setApproval] = useState(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState("");
+  const [ledger, setLedger] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
@@ -103,6 +114,25 @@ export default function App() {
 
   useEffect(() => () => cameraStreamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
+  useEffect(() => () => {
+    if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
+  }, [previewBlobUrl]);
+
+  const sessionId = agentState?.session_id || extract?.state?.session_id || "demo-001";
+  const documents = agentState?.documents || [];
+
+  useEffect(() => {
+    if (step !== 9) return;
+    let active = true;
+    setLedgerLoading(true);
+    setLedgerError("");
+    getLedger(sessionId)
+      .then((entries) => { if (active) setLedger(Array.isArray(entries) ? entries : []); })
+      .catch((error) => { if (active) setLedgerError(error instanceof Error ? error.message : "실행 이력을 불러오지 못했어요."); })
+      .finally(() => { if (active) setLedgerLoading(false); });
+    return () => { active = false; };
+  }, [step, sessionId]);
+
   useEffect(() => {
     if (step !== 2) return;
     startCamera(false);
@@ -132,6 +162,87 @@ export default function App() {
 
   const go = (n) => setStep(n);
 
+  const openPdfPreview = async () => {
+    if (previewLoading) return;
+    setPreviewLoading(true);
+    setPreviewError("");
+    try {
+      const response = await previewAction(PREVIEW_ACTION_ID, sessionId);
+      setAgentState(response?.state || null);
+      const pendingApproval = response?.ui?.type === "approval"
+        ? response.ui.payload
+        : response?.state?.pending_approval;
+      setApproval(pendingApproval || null);
+      if (response?.ui?.type === "approval") {
+        return;
+      }
+      if (response?.ui?.type !== "doc_preview") {
+        throw new Error(response?.reply || "PDF 미리보기 응답을 확인해 주세요.");
+      }
+      const payload = response.ui.payload;
+      const blob = await fetchDocument(payload.preview_url);
+      const nextBlobUrl = URL.createObjectURL(blob);
+      setPreviewBlobUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextBlobUrl;
+      });
+      setPreview(payload);
+      go(10);
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const openStoredDocument = async (document) => {
+    setPreviewError("");
+    try {
+      const blob = await fetchDocument(document.preview_url);
+      const nextBlobUrl = URL.createObjectURL(blob);
+      setPreviewBlobUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextBlobUrl;
+      });
+      setPreview({ ...document, warnings: [] });
+      go(10);
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+    }
+  };
+
+  const downloadPdf = async (document) => {
+    try {
+      const blob = await fetchDocument(document.pdf_url);
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `${document.title || "document"}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : "PDF를 다운로드하지 못했어요.");
+    }
+  };
+
+  const decideApproval = async (approved) => {
+    if (approvalLoading || !approval?.action_id) return;
+    setApprovalLoading(true);
+    setApprovalError("");
+    try {
+      const response = await approveAction(approval.action_id, sessionId, approved);
+      setAgentState(response?.state || null);
+      const nextApproval = response?.ui?.type === "approval"
+        ? response.ui.payload
+        : response?.state?.pending_approval;
+      setApproval(nextApproval || null);
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
   // ── 0 스플래시 ──
   if (step === 0)
     return (
@@ -153,8 +264,8 @@ export default function App() {
           </div>
           <div style={{ width: "100%" }}><PrimaryButton onClick={() => { setAuthMode("login"); go(-1); }}>시작하기</PrimaryButton></div>
           {isAuthenticated && (
-            <div onClick={() => docs ? go(8) : go(-1)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> 내 서류함 열기 <span style={{ color: "var(--ok)", fontSize: 11 }}>3건 저장됨</span>
+            <div onClick={() => go(9)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> 내 서류함 열기
             </div>
           )}
         </div>
@@ -564,111 +675,114 @@ export default function App() {
           </div>
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          <PrimaryButton onClick={async () => { setDocs(await buildDocuments("mock")); go(7); }}>내 서류함</PrimaryButton>
+          <PrimaryButton onClick={() => go(7)}>내 신청서</PrimaryButton>
         </div>
       </Shell>
     );
 
   // ── 7 신청서 ──
-  if (step === 7 && docs)
+  if (step === 7)
     return (
       <Shell>
         <TopBar title="내 신청서" onBack={() => go(6)} />
         <div style={{ padding: "4px 24px 16px" }}>
           <Rail active={4} />
-          <h2 style={H2}>채워진 신청서 {docs.documents.length}종</h2>
+          <h2 style={H2}>채워진 신청서 {documents.length}종</h2>
           <p style={SUB}>인쇄하거나 창구에서 휴대폰으로 보여주세요.</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {docs.documents.map((d) => (
+          {documents.length === 0 && (
+            <div style={{ ...card, display: "flex", gap: 13 }}>
+              <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
+              <div style={{ flex: 1 }}>
+                <b style={{ fontSize: 14.5 }}>계좌개설신청서</b>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>미리보기를 누르면 AI가 신청서를 생성합니다.</div>
+              </div>
+            </div>
+          )}
+          {documents.map((d) => (
             <div key={d.id} style={{ ...card, display: "flex", gap: 13 }}>
               <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 14.5 }}>{d.title}</b>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{d.subtitle}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                  <div style={{ flex: 1, height: 5, borderRadius: 99, background: "oklch(0.91 0.01 60)", overflow: "hidden" }}>
-                    <div style={{ width: `${(d.filled / d.total) * 100}%`, height: "100%", background: d.filled === d.total ? "var(--ok)" : "var(--warn)" }} />
-                  </div>
-                  <div style={{ ...mono, fontSize: 11, fontWeight: 600, color: d.filled === d.total ? "oklch(0.45 0.12 150)" : "oklch(0.5 0.12 80)" }}>{d.filled}/{d.total}</div>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>{d.filled === d.total ? "법에서 정한 필수 항목만 담아요. 임의로 추가하지 않아요." : "국가별 양식에만 있는 2개 항목: 본국 주소, 로마자 성명."}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{formatDate(d.created_at)}</div>
+                <button type="button" onClick={() => openStoredDocument(d)} className="tap" style={{ marginTop: 10, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>저장된 PDF 보기</button>
               </div>
             </div>
           ))}
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          <PrimaryButton onClick={() => go(8)}>PDF로 저장</PrimaryButton>
-          <div className="tap" style={{ marginTop: 10, minHeight: 50, border: "1px solid var(--line)", borderRadius: 13, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", fontSize: 13.5, fontWeight: 700 }}>PDF 미리보기</div>
+          {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
+          <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
+            {previewLoading ? "PDF 생성 중…" : "PDF 미리보기"}
+          </PrimaryButton>
+          <button type="button" onClick={() => go(9)} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>내 서류함 · 실행 이력</button>
         </div>
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
-  // ── 8 보관함 ──
-  if (step === 8 && docs)
+  // ── 9 내 서류함 / 실행 이력 ──
+  if (step === 9)
     return (
       <Shell>
-        <TopBar title="내 서류함" onBack={() => go(7)} right={<span style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />저장됨</span>} />
-        <div style={{ padding: "8px 24px 16px" }}>
-          <h2 style={H2}>서류가 준비됐어요</h2>
-          <p style={SUB}>파일을 누르면 PDF가 열려요. 모두 휴대폰에 저장되고 인터넷 없이도 열려요.</p>
-        </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {[docs.documents[1], { id: "visit_summary", title: "은행 방문 요약", subtitle: "방문 요약 · 한국어", pages: 1, filled: 6, total: 6, expiresInDays: 6 }].map((d) => (
-            <div key={d.id} onClick={() => { setOpenDoc(d); go(9); }} className="tap" style={{ ...card, display: "flex", gap: 13, alignItems: "center" }}>
-              <div style={{ width: 44, height: 56, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 2px, oklch(0.97 0.008 60) 2px 7px)", display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 5 }}>
-                <span style={{ ...mono, fontSize: 8.5, fontWeight: 700, color: "var(--brand-2)" }}>PDF</span>
-              </div>
-              <div style={{ flex: 1 }}>
-                <b style={{ fontSize: 14.5 }}>{d.title}</b>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif", marginTop: 1 }}>{d.subtitle}</div>
-              </div>
-              <span style={{ padding: "3px 8px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap",
-                background: d.expiresInDays <= 7 ? "oklch(0.6 0.14 80 / 0.14)" : "oklch(0.93 0.008 60)",
-                color: d.expiresInDays <= 7 ? "oklch(0.45 0.12 80)" : "var(--muted)" }}>{d.expiresInDays}일 뒤 만료</span>
+        <TopBar title="내 서류함 · 실행 이력" onBack={() => go(7)} />
+        <div className="scroll" style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+          <section>
+            <h2 style={{ ...H2, fontSize: 20 }}>저장 문서</h2>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+              {documents.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>최근 응답에 저장된 문서가 없습니다.</div>}
+              {documents.map((document) => (
+                <div key={document.id} style={card}>
+                  <b style={{ fontSize: 14 }}>{document.title}</b>
+                  <div style={{ marginTop: 4, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(document.created_at)}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button type="button" onClick={() => openStoredDocument(document)} className="tap" style={smallActionStyle}>미리보기</button>
+                    <button type="button" onClick={() => downloadPdf(document)} className="tap" style={smallActionStyle}>PDF 다운로드</button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-          <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>은행에 가져갈 것</div>
-            {["외국인등록증 (앞·뒤)", "여권", "재학증명서", "본인 명의 휴대폰"].map((item) => <div key={item} style={{ padding: "10px 12px", marginBottom: 7, borderRadius: 10, background: "oklch(.965 .006 60)", fontSize: 12.5, fontWeight: 700 }}><span style={{ color: "var(--ok)", marginRight: 10 }}>✓</span>{item}</div>)}
-            <div style={{ padding: "10px 12px", borderRadius: 10, background: "oklch(.965 .006 60)", fontSize: 12.5, color: "var(--muted)" }}>□　계좌개설신청서</div>
-          </div>
+          </section>
+          <section>
+            <h2 style={{ ...H2, fontSize: 20 }}>실행 이력</h2>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+              {ledgerLoading && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>불러오는 중…</div>}
+              {ledgerError && <div role="alert" className="capture-error" style={{ margin: 0 }}>{ledgerError}</div>}
+              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>아직 승인 후 실행된 작업이 없습니다.</div>}
+              {ledger.map((entry, index) => (
+                <div key={`${entry.action || "action"}-${entry.approved_at || index}`} style={card}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || "실행 작업"}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
+                  <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at)}</div>
+                  {entry.result?.receipt_no && <div style={{ marginTop: 8, fontSize: 12.5 }}>접수번호 {entry.result.receipt_no}</div>}
+                  {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>근거 · {item}</div>)}
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-        <div style={{ padding: "16px 24px 34px" }}>
-          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>최종 계좌 개설 여부는 은행이 결정합니다. 본인확인과 서명은 창구에서 직접 진행합니다.</div>
-        </div>
+        {previewError && <div role="alert" className="capture-error" style={{ margin: "0 20px 12px" }}>{previewError}</div>}
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
-  // ── 9 PDF 뷰어 ──
-  if (step === 9 && openDoc)
+  // ── PDF 뷰어 ──
+  if (step === 10 && preview && previewBlobUrl)
     return (
       <Shell dark>
-        <TopBar title={openDoc.title} onBack={() => go(8)} />
-        <div className="scroll" style={{ padding: "0 20px 20px" }}>
-          <div style={{ background: "#fff", borderRadius: 6, padding: "22px 20px", fontFamily: "'Noto Sans KR',sans-serif" }}>
-            <div style={{ borderBottom: "2px solid oklch(0.25 0.012 60)", paddingBottom: 10, marginBottom: 12 }}>
-              <b style={{ fontSize: 16 }}>{openDoc.title}</b>
-              <div style={{ ...mono, fontSize: 10, color: "var(--muted)", marginTop: 3 }}>{openDoc.filled}/{openDoc.total} FIELDS · {openDoc.pages}p</div>
-            </div>
-            {DOC_ROWS(extract?.profile, nat).map(([k, v]) => (
-              <div key={k} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid oklch(0.92 0.01 60)" }}>
-                <div style={{ width: 96, flex: "none", fontSize: 10.5, color: "var(--muted)" }}>{k}</div>
-                <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{v}</div>
-              </div>
-            ))}
-            <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-              <div style={{ width: 110, textAlign: "center" }}>
-                <div style={{ height: 26, borderBottom: "1px solid oklch(0.4 0.012 60)" }} />
-                <div style={{ fontSize: 9.5, color: "var(--muted)", marginTop: 4 }}>신청인 서명</div>
-              </div>
-            </div>
+        <TopBar title={preview.title} onBack={() => go(9)} />
+        {(preview.warnings || []).length > 0 && (
+          <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
+            {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
           </div>
+        )}
+        <div className="scroll" style={{ padding: "0 20px 20px" }}>
+          <iframe title={preview.title} src={previewBlobUrl} style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
         </div>
         <div style={{ padding: "16px 20px 34px", display: "flex", gap: 9 }}>
-          <FlatBtn>파일로 저장</FlatBtn>
-          <FlatBtn brand>공유</FlatBtn>
+          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>PDF 다운로드</button>
         </div>
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
@@ -741,8 +855,32 @@ function Pick({ children, on, ok, onClick }) {
     </div>
   );
 }
-function FlatBtn({ children, brand }) {
-  return <div className="tap" style={{ flex: 1, minHeight: 52, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 13, fontSize: 13.5, fontWeight: 700, color: "#fff", background: brand ? "var(--brand-2)" : "oklch(0.32 0.012 60)" }}>{children}</div>;
+function ApprovalModal({ approval, loading, error, onDecision }) {
+  return (
+    <div role="dialog" aria-modal="true" aria-label="실행 승인" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
+      <div style={{ width: "100%", padding: "22px 20px 30px", borderRadius: "24px 24px 0 0", background: "#fff" }}>
+        <div style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em" }}>APPROVAL · {approval.risk_level || "L2"}</div>
+        <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || "실행 승인"}</h3>
+        {(approval.summary || []).map((item) => <div key={item} style={{ padding: "7px 0", fontSize: 12.5 }}>· {item}</div>)}
+        {(approval.evidence || []).length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--muted)" }}>근거</div>}
+        {(approval.evidence || []).map((item) => <div key={item} style={{ padding: "4px 0", fontSize: 11.5, color: "var(--muted)" }}>· {item}</div>)}
+        <p style={{ margin: "12px 0", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5 }}>아직 외부 예약이나 제출은 실행되지 않았습니다.</p>
+        {error && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{error}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>취소</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? "처리 중…" : "확인"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const smallActionStyle = { flex: 1, minHeight: 38, borderRadius: 10, border: "1px solid var(--line)", background: "#fff", fontSize: 11.5, fontWeight: 700 };
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("ko-KR");
 }
 function Sheet({ children, title, onClose }) {
   return (
@@ -787,17 +925,4 @@ function nextAction(v) {
     cardTitle: "재학증명서", cardMeta: "재학증명서 또는 입학허가서 · 학교 발급",
     note: "이 서류는 읽지 않아요. 종이만 챙기면 창구에서 확인해요.",
     steps: ["학교 포털에서 인쇄하거나 국제처에 문의하세요.", "종이 원본만 가능해요. 발급 3개월 이내여야 해요.", "아직 재학 전인가요? 입학허가서로 대신할 수 있어요."] };
-}
-function DOC_ROWS(p = {}, nat) {
-  return [
-    ["성명 / Name", p.name_en || "—"],
-    ["국적", nationalityLabel(nat)],
-    ["생년월일", p.birth_date || "—"],
-    ["외국인등록번호", mask(p.arc_no)],
-    ["체류자격", `${p.visa_type || "—"} (유학)`],
-    ["체류기간 만료", p.stay_expiry || "—"],
-    ["국내 체류지", p.addr_kr || "—"],
-    ["거래 목적", "등록금 납부, 본국 송금"],
-    ["희망 계좌", "한도제한계좌 (입출금)"],
-  ];
 }
