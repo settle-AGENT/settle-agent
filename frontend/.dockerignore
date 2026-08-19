@@ -1,15 +1,15 @@
-node_modules
-dist
-coverage
+frontend-react/node_modules
+frontend-react/dist
+frontend-react/coverage
 
 .git
 .github
 .idea
 .vscode
 
-.env
-.env.*
-!.env.example
+frontend-react/.env
+frontend-react/.env.*
+!frontend-react/.env.example
 
 npm-debug.log*
 yarn-debug.log*

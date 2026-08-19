@@ -55,6 +55,13 @@ jobs:
 
       - name: Build Docker images
         run: docker compose build
+        
+      - name: Build frontend Docker image
+        run: |
+          docker build \
+            --file frontend/Dockerfile \
+            --tag settle-frontend:ci \
+            frontend
 
       # 실제 테스트 명령이 정해지면 아래에 추가
       # 예시 구조:
