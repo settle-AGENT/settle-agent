@@ -1,4 +1,4 @@
-name: CI-CD
+name: CI
 
 on:
   pull_request:
@@ -55,6 +55,48 @@ jobs:
 
       - name: Build Docker images
         run: docker compose build
+        
+      - name: Build frontend Docker image
+        run: |
+          docker build \
+            --file frontend/Dockerfile \
+            --tag settle-frontend:ci \
+            frontend
+
+      - name: Test Spring backend
+        working-directory: backend/server
+        run: ./gradlew test --no-daemon
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag settle-backend:ci \
+            backend
+
+      - name: Build AI Docker image
+        run: |
+          docker build \
+            --file ai/Dockerfile \
+            --tag settle-ai:ci \
+            ai
+
+      - name: Smoke test AI Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --detach --name settle-ai-ci --publish 8000:8000 settle-ai:ci
+          trap 'docker logs settle-ai-ci; docker rm --force settle-ai-ci' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          exit 1
 
       # 실제 테스트 명령이 정해지면 아래에 추가
       # 예시 구조:
@@ -63,57 +105,3 @@ jobs:
       #
       # - name: Frontend test
       #   run: docker compose run --rm frontend <프론트엔드 테스트 명령>
-
-  deploy:
-    name: Deploy production
-
-    needs:
-      - branch-policy
-      - ci
-
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    environment: production
-
-    concurrency:
-      group: production
-      cancel-in-progress: false
-
-    env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-
-    steps:
-      - name: Configure SSH
-        shell: bash
-        run: |
-          install -m 700 -d "$HOME/.ssh"
-
-          printf '%s\n' "$DEPLOY_SSH_KEY" \
-            > "$HOME/.ssh/id_ed25519"
-
-          chmod 600 "$HOME/.ssh/id_ed25519"
-
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" \
-            > "$HOME/.ssh/known_hosts"
-
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: Deploy with Docker Compose
-        shell: bash
-        run: |
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            'set -e
-             cd /opt/settle-agent
-             git fetch origin master
-             git switch master
-             git pull --ff-only origin master
-             docker compose up -d --build --remove-orphans'

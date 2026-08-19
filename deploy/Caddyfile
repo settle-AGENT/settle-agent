@@ -1,0 +1,26 @@
+{
+	admin off
+}
+
+{$PUBLIC_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	@api path /api /api/*
+	reverse_proxy @api backend:{$BACKEND_CONTAINER_PORT}
+
+	@backend_health path /health/backend
+	rewrite @backend_health /health
+	reverse_proxy @backend_health backend:{$BACKEND_CONTAINER_PORT}
+
+	@ai_health path /health/ai
+	rewrite @ai_health /health
+	reverse_proxy @ai_health ai:{$AI_CONTAINER_PORT}
+
+	reverse_proxy frontend:{$FRONTEND_CONTAINER_PORT}
+}
