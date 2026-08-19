@@ -1,0 +1,57 @@
+:root {
+  --bg: oklch(0.955 0.008 60);
+  --ink: oklch(0.22 0.012 60);
+  --muted: oklch(0.5 0.01 60);
+  --line: oklch(0.9 0.01 60);
+  --brand: oklch(0.55 0.14 250);
+  --brand-2: oklch(0.7 0.13 45);
+  --ok: oklch(0.55 0.14 150);
+  --warn: oklch(0.6 0.14 80);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+a { color: var(--brand-2); text-decoration: none; }
+a:hover { color: oklch(0.6 0.13 45); }
+button { font-family: inherit; cursor: pointer; }
+.auth-input:focus { border-color: var(--brand-2) !important; box-shadow: 0 0 0 3px oklch(0.7 0.13 45 / 0.1); }
+.auth-input::placeholder { color: oklch(0.65 0.01 60); }
+
+/* 모바일 프레임: 실제 배포 시엔 전체화면, 데스크톱 미리보기용 프레임 */
+.app-shell {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: hidden;
+}
+.phone {
+  width: 390px;
+  height: 844px;
+  max-height: 100vh;
+  background: oklch(0.98 0.008 60);
+  border-radius: 46px;
+  border: 11px solid oklch(0.18 0.012 60);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 30px 60px -30px oklch(0.3 0.02 60 / 0.4);
+  position: relative;
+}
+.phone > * { flex-shrink: 0; }
+.phone .scroll { min-height: 0; }
+@media (max-width: 480px) {
+  .app-shell { padding: 0; }
+  .phone { width: 100vw; height: 100dvh; border-radius: 0; border: none; }
+}
+.scroll { flex: 1 1 auto; overflow-y: auto; scrollbar-width: thin; }
+.scroll::-webkit-scrollbar { width: 4px; }
+.scroll::-webkit-scrollbar-thumb { background: #c9c5c1; border-radius: 999px; }
+.tap:active { transform: scale(0.98); }
