@@ -134,6 +134,8 @@ jobs:
             echo "ECR_AI_REPOSITORY=${ECR_AI_REPOSITORY}"
             echo "IMAGE_TAG=${GITHUB_SHA}"
             echo "PUBLIC_HTTP_PORT=80"
+            echo "PUBLIC_HTTPS_PORT=443"
+            echo "PUBLIC_DOMAIN=15-165-61-91.sslip.io"
             echo "FRONTEND_CONTAINER_PORT=3000"
             echo "BACKEND_CONTAINER_PORT=8080"
             echo "AI_CONTAINER_PORT=8000"
@@ -192,10 +194,10 @@ jobs:
                 "if docker container inspect fsai-caddy >/dev/null 2>&1; then docker rm -f fsai-caddy; fi",
                 "docker compose --env-file .env -f compose.production.yml up -d --remove-orphans",
                 "docker compose --env-file .env -f compose.production.yml ps",
-                "curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors http://127.0.0.1/health",
-                "curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors http://127.0.0.1/health/backend",
-                "curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors http://127.0.0.1/health/ai",
-                "docker image prune -f --filter '\''until=168h'\''"
+                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health",
+                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/backend",
+                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/ai",
+                                "docker image prune -f --filter '\''until=168h'\''"
               ]
             }' > ssm-parameters.json
 

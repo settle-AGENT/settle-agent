@@ -1,9 +1,8 @@
 {
-	auto_https off
 	admin off
 }
 
-:80 {
+{$PUBLIC_DOMAIN} {
 	encode zstd gzip
 
 	header {

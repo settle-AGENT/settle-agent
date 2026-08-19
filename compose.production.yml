@@ -18,12 +18,16 @@ services:
     pull_policy: missing
     ports:
       - "${PUBLIC_HTTP_PORT:-80}:80"
+      - "${PUBLIC_HTTPS_PORT:-443}:443"
     environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
       FRONTEND_CONTAINER_PORT: ${FRONTEND_CONTAINER_PORT:-3000}
       BACKEND_CONTAINER_PORT: ${BACKEND_CONTAINER_PORT:-8080}
       AI_CONTAINER_PORT: ${AI_CONTAINER_PORT:-8000}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - frontend
       - backend
@@ -65,3 +69,6 @@ services:
 networks:
   app:
     driver: bridge
+volumes:
+  caddy_data:
+  caddy_config:
