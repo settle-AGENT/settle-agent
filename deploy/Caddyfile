@@ -12,8 +12,12 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
-	@backend path /api /api/*
-	reverse_proxy @backend backend:{$BACKEND_CONTAINER_PORT}
+	@api path /api /api/*
+	reverse_proxy @api ai:{$AI_CONTAINER_PORT}
+
+	@ai_health path /health/ai
+	rewrite @ai_health /health
+	reverse_proxy @ai_health ai:{$AI_CONTAINER_PORT}
 
 	reverse_proxy frontend:{$FRONTEND_CONTAINER_PORT}
 }

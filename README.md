@@ -7,21 +7,21 @@
 ```bash
 docker compose up -d
 
-cd backend
+cd ai
 cp .env.example .env
 uv sync
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8081
 ```
 
-API 스펙: http://localhost:8000/docs
+API 스펙: http://localhost:8081/docs
 
 ## 구조
 
-- `backend/app/agent/` LangGraph 에이전트 (AI-1)
-- `backend/app/nodes/` Profiler / DocBuilder (AI-2)
-- `backend/rules/`     체류자격·근거법령 룰 (AI-1)
-- `backend/mappings/`  서식 필드 매핑 (AI-2)
-- `backend/app/api/`   FastAPI 라우팅 (FS-2)
+- `ai/app/agent/`      LangGraph 에이전트 (AI-1)
+- `ai/app/nodes/`      Profiler / DocBuilder (AI-2)
+- `ai/rules/`          체류자격·근거법령 룰 (AI-1)
+- `ai/mappings/`       서식 필드 매핑 (AI-2)
+- `ai/app/api/`        FastAPI 라우팅 (FS-2)
 - `frontend/`          Next.js (FS-1)
 - `mock-institution/`  기관 API 시뮬레이터 (Cloud-2)
 - `infra/`             배포 (Cloud-1)

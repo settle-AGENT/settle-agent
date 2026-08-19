@@ -1,6 +1,6 @@
 """외국인등록증 OCR → profile 추출
 
-위치 가정: backend/app/extractors/arc.py
+위치 가정: ai/app/extractors/arc.py
 반환 규약:
   - 값을 못 읽은 필드는 **키 자체를 넣지 않는다** (None을 넣으면 슬롯 필링이 오작동)
   - confidence는 필드별로 함께 반환 (< 0.9 이면 사용자 확인 대상)
@@ -22,7 +22,8 @@ import requests
 CLOVA_INVOKE_URL = os.getenv("CLOVA_INVOKE_URL")
 CLOVA_SECRET_KEY = os.getenv("CLOVA_SECRET_KEY")
 
-CACHE_DIR = Path(__file__).resolve().parents[3] / "seed" / "ocr_cache"
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "seed" / "ocr_cache"
+CACHE_DIR = Path(os.getenv("OCR_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 DocType = Literal["arc_front", "arc_back"]
@@ -320,18 +321,4 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
         "confidence": confidence,
         "dropped": dropped,
         "raw_texts": texts,
-    }
-
-def merge_arc(front: dict, back: dict) -> dict:
-    """앞면·뒷면 추출 결과 병합. 겹치는 필드는 뒷면이 정본."""
-    profile = {front["profile"], back["profile"]}
-    confidence = {front["confidence"], back["confidence"]}
-    return {
-        "profile": profile,
-        "confidence": confidence,
-        "dropped": front["dropped"] + back["dropped"],
-        "missing_sides": [
-            side for side, r in (("arc_front", front), ("arc_back", back))
-            if not r["profile"]
-        ],
     }
