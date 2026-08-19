@@ -216,6 +216,8 @@ def send_message(session_id: str, message: str) -> dict:
 
         extra["profile"] = {asked: value}
         extra["asked_field"] = None
+    else:
+        extra["ask"] = message          # 슬롯 필링 답변이 아니면 자유 질문이다
 
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     return _response(state)

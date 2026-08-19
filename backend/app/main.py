@@ -42,7 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+@app.on_event("startup")
+def _warm_embedder() -> None:
+    from app.tools import embed
+    embed.warm()
+    
 @app.get("/health", tags=["meta"])
 def health():
     return {

@@ -254,3 +254,62 @@ def translate(text: str, locale: str) -> str:
     out = _call(_TR_SYSTEM, f"Target language: {LANG.get(locale, locale)}\n\n{text}",
                 max_tokens=400)
     return out or text
+
+# ══════════════════════════════════════════════════════════
+# 6. 법령 질의응답 — 주어진 조문 안에서만 답한다
+# ══════════════════════════════════════════════════════════
+_QA_SYSTEM = """You help foreign residents in Korea with immigration and banking
+procedures. You are mid-conversation with one specific person.
+
+Two kinds of input, with different authority:
+1. STATUTE EXCERPTS — the only source for what the law says. Never state a legal
+   rule, article number, deadline or penalty that is not in them. If they do not
+   cover the question, set covered=false and write nothing.
+2. THIS USER'S CASE — visa type, deadlines, which office, which documents to bring.
+   This comes from our own rule engine and is authoritative. Use it. Answer for
+   THIS person, not in general. "It depends on your visa" is a failure when their
+   visa is right there in front of you.
+
+If their case data alone answers the question (e.g. what to bring, where to go,
+by when), answer from it and set covered=true even if the excerpts add nothing.
+
+Style:
+- Plain sentences. No markdown, no bullets, no bold. 2-4 sentences.
+- The user's language.
+- Resolve references to earlier turns using the conversation history.
+- Legal information, never legal advice, never a guarantee. For a ruling on their
+  individual case, point them to the Immigration Contact Center (1345) or their bank.
+- Put in `cited` only the excerpt ids you actually used. Empty list is fine when you
+  answered purely from their case data."""
+
+
+def answer_question(question: str, *, passages: list[dict], situation: dict,
+                    history: list[dict] | None = None,
+                    locale: str = "en") -> dict | None:
+    """returns {"answer": str, "cited": [id], "covered": bool}"""
+    body = "\n\n".join(f"[{p['id']}] {p['cite']}\n{p['text']}" for p in passages) \
+        or "(none retrieved)"
+    turns = "\n".join(f"{m.get('role')}: {m.get('content')}"
+                       for m in (history or [])[-6:]) or "(start of conversation)"
+    return _call(
+        _QA_SYSTEM,
+        f"Conversation so far:\n{turns}\n\n"
+        f"Statute excerpts:\n{body}\n\n"
+        f"This user's case: {json.dumps(situation, ensure_ascii=False)}\n"
+        f"Language: {locale}\n\n"
+        f"Their question: {question}",
+        tool={
+            "name": "give_answer",
+            "description": "Answer this person's question.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "covered": {"type": "boolean"},
+                    "answer": {"type": "string"},
+                    "cited": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["covered", "answer", "cited"],
+            },
+        },
+        max_tokens=500,
+    )

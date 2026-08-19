@@ -14,6 +14,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
+from app.nodes import qa
 from app.nodes.planner import build_task_graph, summary
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import profile_to_payload
@@ -404,9 +405,27 @@ def executor(state: AgentState) -> dict:
 
 
 def explainer(state: AgentState) -> dict:
-    """상황 안내. 판정은 룰이 끝냈고, LLM 은 말로 옮기기만 한다."""
+    """자유 질문에 답하거나, 없으면 상황을 안내한다."""
     tasks = state.get("tasks") or []
     locale = state.get("locale", "en")
+
+    # 자유 질문일 때만 법령 검색을 탄다. 슬롯 필링 답변은 질문이 아니다.
+    last = state.get("ask")
+
+    if last and last != state.get("last_qa") and qa.available():
+        got = qa.answer(last, profile=state.get("profile", {}),
+                        tasks=tasks, history=state.get("messages") or [],
+                        locale=locale)
+        if got:
+            reply = got["reply"]
+            if got["cites"]:
+                reply += "\n\n근거 · " + " / ".join(got["cites"])
+            return {"reply": reply, "ui_type": "none",
+                    "last_qa": last, "ask": None}
+        base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
+                "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
+        return {"reply": llm.translate(base, locale) if llm.available() else base,
+                "ui_type": "none", "last_qa": last, "ask": None}
 
     if not tasks:
         base = "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요."
@@ -426,7 +445,7 @@ def explainer(state: AgentState) -> dict:
             "blocked": [{"label": t["label"], "blocked_by": t["blocked_by"]}
                         for t in tasks if t["status"] == "locked"][:3],
             "evidence": nxt["evidence"] if nxt else [],
-            "call_to_action": (f"Tell the user to tap the \"{nxt['label']}\" card to start."
+            "call_to_action": (f'Tell the user to tap the "{nxt["label"]}" card to start.'
                                if nxt else None),
         }, locale=locale)
         if spoken:
@@ -434,8 +453,6 @@ def explainer(state: AgentState) -> dict:
 
     return {"reply": base, "ui_type": "none"}
 
-# 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
-NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
 def ledger_writer(state: AgentState) -> dict:
     """Executor 이후 Task Graph를 다시 계산하고, 새로 열린 일을 알린다."""
     out = planner(state)

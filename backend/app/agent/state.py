@@ -87,6 +87,8 @@ class AgentState(TypedDict, total=False):
     current_action: Annotated[Optional[str], replace]
     missing_fields: Annotated[list[str], replace]         # 슬롯 필링 대상
     asked_field: Annotated[Optional[str], replace]        # 방금 물어본 필드
+    ask: Annotated[Optional[str], replace]               # 이번 턴의 자유 질문
+    last_qa: Annotated[Optional[str], replace]           # 마지막으로 답한 질문
 
     # ── 산출물 ────────────────────────────────────────────
     documents: Annotated[list[dict], union_list]
