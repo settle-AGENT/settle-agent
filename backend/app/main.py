@@ -12,6 +12,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -51,7 +52,6 @@ def health():
     }
 
 
-# app/main.py
 @app.post("/api/session", response_model=AgentResponse, tags=["session"])
 def create_session(locale: str = "en", session_id: str | None = None):
     """session_id 를 주면 그 세션을 이어받고, 없으면 새로 만든다."""
@@ -74,14 +74,17 @@ async def extract_upload(
     file: UploadFile = File(...),
 ):
     image = await file.read()
-    ext = (file.filename or "x.jpg").rsplit(".", 1)[-1].lower()
+    raw_ext = (file.filename or "x.jpg").rsplit(".", 1)[-1].lower()
+    ext = {"jpeg": "jpg", "jpe": "jpg", "heic": "jpg", "heif": "jpg"}.get(raw_ext, raw_ext)
+    if ext not in ("jpg", "png", "pdf", "tiff"):
+        ext = "jpg"
     try:
         return agent.extract(session_id, image, doc_type, ext=ext)
     except Exception as exc:                                  # noqa: BLE001
         raise HTTPException(422, detail={
             "error": "extraction_failed",
-            "message": "신분증을 읽지 못했습니다. 밝은 곳에서 다시 촬영해주세요.",
-            "details": {"reason": str(exc)},
+            "message": f"{doc_type} 이미지를 읽지 못했습니다. 다시 시도해주세요.",
+            "details": {"reason": str(exc), "filename": file.filename, "ext": ext},
         })
 
 
@@ -126,3 +129,28 @@ def read_state(session_id: str = DEFAULT_SID):
 @app.get("/api/ledger", tags=["agent"])
 def ledger(session_id: str = DEFAULT_SID):
     return agent.get_ledger(session_id)
+
+
+# ── 생성된 서류 서빙 ─────────────────────────────────────
+from pathlib import Path as _Path  # noqa: E402
+
+OUTPUT_DIR = _Path(__file__).resolve().parents[1] / "output"
+
+
+@app.get("/api/documents/{document_id}/preview", response_class=HTMLResponse,
+         tags=["documents"])
+def document_preview(document_id: str):
+    """iframe 으로 띄울 HTML. PDF 뷰어 없이 미리보기가 된다."""
+    path = OUTPUT_DIR / f"{document_id}.html"
+    if not path.exists():
+        raise HTTPException(404, "document not found")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/documents/{document_id}.pdf", tags=["documents"])
+def document_pdf(document_id: str):
+    path = OUTPUT_DIR / f"{document_id}.pdf"
+    if not path.exists():
+        raise HTTPException(404, "document not found")
+    return FileResponse(path, media_type="application/pdf",
+                        filename=f"{document_id}.pdf")

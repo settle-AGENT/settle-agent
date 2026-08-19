@@ -31,6 +31,12 @@ def _now() -> str:
 # 슬롯 필링 질문 정의 (mappings 완성 전까지 여기서 관리)
 # ──────────────────────────────────────────────────────────
 QUESTIONS: dict[str, dict] = {
+    "birth_date": {
+        "label": "What is your date of birth?",
+        "input_type": "text",
+        "options": [],
+        "hint": "YYYY-MM-DD",
+    },
     "entry_date": {
         "label": "When did you enter Korea?",
         "input_type": "text",
@@ -72,17 +78,25 @@ QUESTIONS: dict[str, dict] = {
 
 # 액션별 필수 필드 (D2에 mappings/*.yaml 로 이관)
 ACTION_FIELDS: dict[str, list[str]] = {
-    "alien_registration": ["entry_date", "org_name", "phone_kr"],
-    "residence_change": ["phone_kr"],
+    "alien_registration": ["birth_date", "entry_date", "org_name", "phone_kr"],
+    "residence_change": ["birth_date", "phone_kr"],
     "work_activity": ["org_name"],
-    "open_bank_account": ["org_name", "phone_kr", "purpose", "income_source"],
+    "open_bank_account": ["birth_date", "org_name", "phone_kr",
+                          "purpose", "income_source"],
 }
 
 ACTION_TITLES: dict[str, str] = {
-    "alien_registration": "출입국 방문예약 + 사전접수",
-    "residence_change": "체류지 변경신고 접수",
-    "work_activity": "체류자격외활동허가 신청",
-    "open_bank_account": "은행 지점 예약 + 사전접수",
+    "alien_registration": "외국인등록 신청서 제출",
+    "residence_change": "체류지 변경신고 제출",
+    "work_activity": "체류자격외활동허가 신청서 제출",
+    "open_bank_account": "계좌개설 신청서 제출",
+}
+
+AGENCY_LABEL: dict[str, str] = {
+    "immigration": "출입국·외국인청",
+    "bank": "은행 영업점",
+    "telecom": "통신사 대리점",
+    "immigration_or_community_center": "출입국·외국인청 또는 주민센터",
 }
 
 
@@ -211,9 +225,15 @@ def doc_builder(state: AgentState) -> dict:
             doc_id=f"{state['session_id']}-{action}",
         )
     except DocumentIncomplete as exc:
+        labels = {
+            "name_en": "영문 성명", "birth_date": "생년월일", "gender": "성별",
+            "nationality": "국적", "passport_no": "여권번호", "arc_no": "외국인등록번호",
+            "addr_kr": "국내 주소", "phone_kr": "국내 연락처", "org_name": "소속 기관",
+        }
+        need = ", ".join(labels.get(k, k) for k in exc.missing)
         return {
             "missing_fields": exc.missing,
-            "reply": "서류 작성에 필요한 정보가 아직 부족합니다.",
+            "reply": f"서류를 작성하려면 {need}이(가) 더 필요합니다.",
             "ui_type": "none",
             "ui_payload": {},
         }
@@ -229,11 +249,24 @@ def doc_builder(state: AgentState) -> dict:
 
     warnings = [f"{k} 값을 한 번 확인해주세요" for k in result["low_confidence"]]
 
+    from app.nodes.doc_builder import DOC_LABELS
+    docs = [DOC_LABELS.get(d, d) for d in spec.get("required_docs", [])]
+    agency = AGENCY_LABEL.get(spec.get("agency", ""), spec.get("agency", ""))
+
+    summary_lines = [f"{ACTION_TITLES.get(action, action)}"]
+    if agency:
+        summary_lines.append(f"제출처 · {agency}")
+    if docs:
+        summary_lines.append("지참 서류 · " + ", ".join(docs))
+
     pending = {
         "action_id": action,
         "title": ACTION_TITLES.get(action, action),
-        "summary": [ACTION_TITLES.get(action, action), "준비물 체크리스트 발송"],
+        "summary": summary_lines,
         "document_id": doc["id"],
+        "preview_url": doc["preview_url"],      # 승인 화면에서 서류를 바로 본다
+        "pdf_url": doc["pdf_url"],
+        "warnings": warnings,
         "evidence": evidence_labels(spec.get("evidence", [])),
         "risk_level": spec.get("risk_level", "L2"),
     }
@@ -298,7 +331,9 @@ def approval_gate(state: AgentState) -> dict:
         "ui_type": "approval",
         "ui_payload": dict(pending),
     }
-
+def route_from_doc(state: AgentState) -> Literal["approval_gate", "__end__"]:
+    """서류가 실제로 만들어졌을 때만 승인 단계로 넘어간다."""
+    return "approval_gate" if state.get("pending_approval") else END
 
 def route_from_gate(state: AgentState) -> Literal["executor", "__end__"]:
     pending = state.get("pending_approval") or {}
@@ -316,18 +351,44 @@ def executor(state: AgentState) -> dict:
     pending = state.get("pending_approval") or {}
     action = pending.get("action_id") or state.get("current_action")
 
-    # 실제 기관 호출은 Mock Institution API. 여기서는 결과만 기록한다.
-    result = {"receipt_no": f"RCPT-{action[:6].upper()}-0001", "status": "received"}
+    # 실제 기관 접수는 제휴 시 기관 API 호출로 대체된다.
+    # 지금은 아무것도 제출하지 않는다 — 접수번호를 만들어내지 않는 이유다.
+    spec = actions_for(state.get("profile", {}).get("visa_type")).get(action, {})
+    agency = AGENCY_LABEL.get(spec.get("agency", ""), "담당 기관")
+
+    doc = next((d for d in reversed(state.get("documents", []))
+                if d.get("action_id") == action), None)
+    task = next((t for t in state.get("tasks", []) if t["id"] == action), None)
+
+    result = {
+        "document_id": doc["id"] if doc else None,
+        "status": "prepared",              # submitted 아님
+    }
 
     entry = {
         "action": action,
-        "tool": "submit_application",
+        "tool": "prepare_application",
         "risk_level": pending.get("risk_level", "L2"),
         "approved_by": "user",
         "approved_at": _now(),
         "evidence": pending.get("evidence", []),
         "result": result,
     }
+
+    lines = [f"{ACTION_TITLES.get(action, action)} 작성이 끝났습니다.",
+             f"{agency}에 방문해 본인확인 후 제출하시면 됩니다."]
+    if task:
+        if task.get("required_docs"):
+            lines.append("지참 서류 · " + ", ".join(task["required_docs"]))
+        if task.get("deadline"):
+            d = task.get("d_day")
+            if d is not None and d < 0:
+                lines.append(f"기한 · {task['deadline']} — 이미 {abs(d)}일 "
+                             f"지났습니다. 지연 사유 확인이 필요합니다.")
+            elif d is not None:
+                lines.append(f"기한 · {task['deadline']} (D-{d})")
+            else:
+                lines.append(f"기한 · {task['deadline']}")
 
     return {
         "completed": [action],
@@ -336,8 +397,7 @@ def executor(state: AgentState) -> dict:
         "approval_decision": None,
         "current_action": None,
         "ledger": [entry],
-        "reply": (f"접수되었습니다. 접수번호 {result['receipt_no']}\n"
-                  "준비물 체크리스트를 이메일로 보냈습니다."),
+        "reply": "\n".join(lines),
         "ui_type": "none",
         "ui_payload": {},
     }
@@ -360,20 +420,39 @@ def explainer(state: AgentState) -> dict:
         spoken = llm.explain({
             "available_count": sum(1 for t in tasks if t["status"] == "available"),
             "next_action_label": nxt["label"] if nxt else None,
+            "next_action_agency": nxt.get("agency") if nxt else None,
+            "next_action_documents": nxt.get("required_docs") if nxt else [],
             "d_day": nxt["d_day"] if nxt else None,
             "blocked": [{"label": t["label"], "blocked_by": t["blocked_by"]}
                         for t in tasks if t["status"] == "locked"][:3],
             "evidence": nxt["evidence"] if nxt else [],
+            "call_to_action": (f"Tell the user to tap the \"{nxt['label']}\" card to start."
+                               if nxt else None),
         }, locale=locale)
         if spoken:
             return {"reply": spoken, "ui_type": "none"}
 
     return {"reply": base, "ui_type": "none"}
 
-
+# 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
+NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
 def ledger_writer(state: AgentState) -> dict:
-    """Executor 이후 Task Graph를 다시 계산한다 (잠금 해제 반영)."""
-    return planner(state)
+    """Executor 이후 Task Graph를 다시 계산하고, 새로 열린 일을 알린다."""
+    out = planner(state)
+    tasks = out.get("tasks") or []
+
+    avail = [t for t in tasks if t["status"] == "available"]
+    nxt = next((t for a in NEXT_PRIORITY for t in avail if t["id"] == a), None)
+    if not nxt:
+        return out
+
+    line = f"이제 '{nxt['label']}'을(를) 하실 수 있습니다."
+    if nxt.get("agency"):
+        line += f" 제출처는 {nxt['agency']}입니다."
+
+    out["reply"] = (state.get("reply") or "") + "\n\n" + line
+    out["ui_type"] = "none"
+    return out
 
 
 # ══════════════════════════════════════════════════════════
@@ -402,7 +481,10 @@ def build_graph(checkpointer=None):
     })
 
     g.add_edge("slot_filler", END)
-    g.add_edge("doc_builder", "approval_gate")
+    g.add_conditional_edges("doc_builder", route_from_doc, {
+        "approval_gate": "approval_gate",
+        END: END,
+    })
 
     g.add_conditional_edges("approval_gate", route_from_gate, {
         "executor": "executor",

@@ -30,6 +30,7 @@
   .foot { font-size:6.2pt; margin-top:2px; display:flex; justify-content:space-between; }
   .stamp { background:#dfe7f2; font-size:6.2pt; padding:1.5px 3px; }
   .note { color:#8a6d3b; font-size:5.8pt; }
+  @media print { .note { display: none !important; } }
 </style>
 </head>
 <body>
@@ -195,7 +196,7 @@
   <tr>
     <td class="lb" colspan="2">신청인 제출서류<br><span class="en">Required documents</span></td>
     <td class="ck" colspan="7">
-      {% for d in required_docs %}[ ] {{ d }}&nbsp;&nbsp;{% endfor %}<br>
+        {% for d in required_docs %}[V] {{ d }}&nbsp;&nbsp;{% endfor %}<br>
       <span class="en">「출입국관리법 시행규칙」 별표 5의2의 체류자격별·신청구분별 첨부서류 참고</span>
     </td>
   </tr>

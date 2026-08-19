@@ -6,7 +6,8 @@
 """
 import re
 
-from app.extractors.arc import extract_profile
+from app.extractors import arc as arc_ex
+from app.extractors import passport as pp_ex
 
 LABELS = {
     "arc_no":      "Registration No.",
@@ -20,6 +21,10 @@ LABELS = {
     "org_name":    "School / Organization",
     "phone_kr":    "Phone (KR)",
     "purpose":     "Purpose",
+    "gender":          "Sex",
+    "passport_no":     "Passport No.",
+    "passport_issue":  "Passport issue date",
+    "passport_expiry": "Passport expiry",
 }
 
 # 응답에 내보낼 때 마스킹할 필드
@@ -84,7 +89,8 @@ def apply_edits(state: dict, edits: dict) -> dict:
 
 def run(state: dict, image_bytes: bytes, doc_type: str, ext: str = "jpg") -> tuple[dict, dict]:
     """returns (state, ui_payload)"""
-    r = extract_profile(image_bytes, doc_type, ext=ext, use_llm=False)
+    mod = pp_ex if doc_type == "passport" else arc_ex
+    r = mod.extract_profile(image_bytes, doc_type, ext=ext, use_llm=False)
 
     state.setdefault("profile", {}).update(r["profile"])     # 평문 저장
     state.setdefault("confidence", {}).update(r["confidence"])

@@ -39,6 +39,9 @@ class Task(BaseModel):
     deadline: Optional[date] = None
     d_day: Optional[int] = None     # 백엔드가 계산해서 내려줌
     evidence: list[str] = []
+    agency: str = ""                # 제출처 (예: 출입국·외국인청)
+    required_docs: list[str] = []   # 지참 서류
+    note: Optional[str] = None      # 조건 안내
 
 
 class DocRef(BaseModel):

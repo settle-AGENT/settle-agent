@@ -6,6 +6,7 @@ LangGraph 를 몰라도 이 파일의 invoke() 하나만 알면 된다.
 from __future__ import annotations
 
 import os
+import uuid
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
@@ -15,7 +16,6 @@ from app.nodes.planner import summary
 from app.nodes.profiler import profile_to_payload, public_profile
 from app.nodes.profiler import run as profiler_run
 from app.tools import llm
-import uuid
 
 DocType = Literal["arc_front", "arc_back", "passport"]
 
@@ -122,7 +122,10 @@ def _patch(session_id: str, extra: dict[str, Any]) -> dict:
 # public API
 # ──────────────────────────────────────────────────────────
 def start_session(session_id: str | None = None, locale: str = "en") -> dict:
-    """session_id 를 주지 않으면 새 세션을 만든다."""
+    """session_id 를 주면 그 세션을 이어받고, 없으면 새 세션을 만든다.
+
+    데모 대본용으로 고정 id 를 쓰고 싶으면 명시적으로 넘긴다.
+    """
     sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
     state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
     return _response(state)
@@ -167,6 +170,8 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
 
 # 슬롯 필링 필드의 의미와 허용값 (graph.QUESTIONS 와 짝)
 _FIELD_META = {
+    "birth_date":    ("Date of birth (YYYY-MM-DD)", None),
+    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "org_name":      ("Name of the school or organization", None),
     "phone_kr":      ("Phone number in Korea", None),

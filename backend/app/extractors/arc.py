@@ -112,6 +112,19 @@ _RE_ADDR = re.compile(
 # 주소 뒤에 붙어 들어오는 라벨 — 여기서 잘라낸다
 _ADDR_STOP = ("발행국", "일련번호", "신고일자", "체류지", "발급일자", "체류자격",
               "안전칩", "발급", "서울출입국", "출입국")
+_ADDR_TAIL = re.compile(r"(\d|[로길가동읍면리호층번지])$")
+
+
+def _trim_addr(addr: str) -> str:
+    """뒤에 붙은 라벨·OCR 잡음을 잘라낸다."""
+    for stop in _ADDR_STOP:
+        addr = addr.split(stop)[0]
+    toks = addr.split()
+    # 주소 성분으로 끝나는 마지막 토큰까지만 남긴다
+    for i in range(len(toks) - 1, -1, -1):
+        if _ADDR_TAIL.search(toks[i]):
+            return " ".join(toks[: i + 1])
+    return " ".join(toks)    
 _RE_NAME = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]+)+\b")
 
 _LABEL_WORDS = {
@@ -157,10 +170,17 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
     p: dict = {}
     c: dict = {}
 
+    # 등록번호는 앞뒷면 어디서 나오든 잡는다
+    if m := _RE_ARC.search(blob):
+        p["arc_no"] = f"{m.group(1)}-{m.group(2)}"
+        c["arc_no"] = 0.97
+
     if doc_type == "arc_front":
-        if m := _RE_ARC.search(blob):
-            p["arc_no"] = f"{m.group(1)}-{m.group(2)}"
-            c["arc_no"] = 0.97
+        if m := _RE_ADDR.search(blob):
+            addr = _trim_addr(re.sub(r"\s+", " ", m.group(1)).strip())
+            if len(addr) >= 8:
+                p["addr_kr"] = addr
+                c["addr_kr"] = 0.93
 
         for token in sorted(COUNTRY_CODE, key=len, reverse=True):
             if token in blob.upper():
@@ -196,7 +216,7 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
                 addr = addr.split(stop)[0].strip()
             if len(addr) >= 8:
                 p["addr_kr"] = addr
-                c["addr_kr"] = 0.88
+                c["addr_kr"] = 0.93
 
     return p, c
 
@@ -314,6 +334,12 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
     if doc_type == "arc_front":
         profile.update(derive_from_arc(profile.get("arc_no")))
         confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
+    if doc_type == "arc_front":
+        profile.update(derive_from_arc(profile.get("arc_no")))
+        confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
+
+    if profile.get("addr_kr"):                    # LLM 폴백 경로도 한 번 거른다
+        profile["addr_kr"] = _trim_addr(profile["addr_kr"])
 
     return {
         "profile": profile,

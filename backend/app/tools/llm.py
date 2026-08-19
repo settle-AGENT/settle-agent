@@ -181,6 +181,10 @@ Absolute rules:
 - Never cite a law that is not in the provided evidence list.
 - If evidence is empty, do not mention any law.
 - 2-3 short sentences. Warm, concrete, no filler.
+- If next_action_agency / next_action_documents are given, say WHERE to submit
+  and WHAT to bring. Concrete beats vague.
+- End with the call_to_action if one is provided.
+- Plain sentences only. No markdown, no bold, no bullet points.
 - Reply in the requested language."""
 
 
