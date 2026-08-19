@@ -1,0 +1,19 @@
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	@backend path /api /api/*
+	reverse_proxy @backend backend:{$BACKEND_CONTAINER_PORT}
+
+	reverse_proxy frontend:{$FRONTEND_CONTAINER_PORT}
+}
