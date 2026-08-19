@@ -63,6 +63,30 @@ jobs:
             --tag settle-frontend:ci \
             frontend
 
+      - name: Build AI Docker image
+        run: |
+          docker build \
+            --file ai/Dockerfile \
+            --tag settle-ai:ci \
+            ai
+
+      - name: Smoke test AI Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --detach --name settle-ai-ci --publish 8000:8000 settle-ai:ci
+          trap 'docker logs settle-ai-ci; docker rm --force settle-ai-ci' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          exit 1
+
       # 실제 테스트 명령이 정해지면 아래에 추가
       # 예시 구조:
       # - name: Backend test

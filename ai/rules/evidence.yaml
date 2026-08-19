@@ -1,0 +1,30 @@
+immigration_31:
+  law: "출입국관리법 제31조"
+  title: "외국인등록"
+  summary: "90일을 초과하여 체류하는 외국인은 입국일부터 90일 이내에 외국인등록을 하여야 한다"
+  url: "https://www.law.go.kr/법령/출입국관리법"
+
+immigration_36:
+  law: "출입국관리법 제36조"
+  title: "체류지 변경의 신고"
+  summary: "체류지를 변경하였을 때에는 전입한 날부터 15일 이내에 신고하여야 한다"
+  url: "https://www.law.go.kr/법령/출입국관리법"
+
+immigration_20:
+  law: "출입국관리법 제20조"
+  title: "체류자격 외 활동"
+  summary: "체류자격에 해당하는 활동과 함께 다른 활동을 하려면 미리 허가를 받아야 한다"
+  url: "https://www.law.go.kr/법령/출입국관리법"
+
+real_name_3:
+  law: "금융실명거래 및 비밀보장에 관한 법률 제3조"
+  title: "금융실명거래"
+  summary: "금융회사등은 거래자의 실지명의로 금융거래를 하여야 한다"
+  url: "https://www.law.go.kr/법령/금융실명거래및비밀보장에관한법률"
+  tier: L3
+
+ftra_5_2:
+  law: "특정 금융거래정보의 보고 및 이용 등에 관한 법률 제5조의2"
+  title: "금융회사등의 고객확인의무"
+  summary: "금융회사등은 고객의 신원, 거래목적, 자금원천 등을 확인하여야 한다"
+  url: "https://www.law.go.kr/법령/특정금융거래정보의보고및이용등에관한법률"

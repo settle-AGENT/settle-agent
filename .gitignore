@@ -12,4 +12,7 @@ backend/data/
 node_modules/
 .next/
 .DS_Store
+.idea/
+*.iml
 output/
+seed/ocr_cache/
