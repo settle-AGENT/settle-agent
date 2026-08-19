@@ -5,6 +5,8 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
@@ -12,6 +14,7 @@ import java.util.UUID;
 @Entity
 @Table(name = "members")
 public class Member {
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
@@ -19,19 +22,50 @@ public class Member {
     @Column(nullable = false, unique = true, length = 320)
     private String email;
 
-    @Column(nullable = false, length = 100)
+    @Column(name = "password_hash", nullable = false, length = 100)
     private String passwordHash;
 
-    @Column(nullable = false, updatable = false)
+    @Column(length = 20)
+    private String language;
+
+    @Column(length = 100)
+    private String nationality;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
 
     protected Member() {
     }
 
     public Member(String email, String passwordHash) {
+        this(email, passwordHash, null, null);
+    }
+
+    public Member(
+            String email,
+            String passwordHash,
+            String language,
+            String nationality
+    ) {
         this.email = email;
         this.passwordHash = passwordHash;
-        this.createdAt = Instant.now();
+        this.language = language;
+        this.nationality = nationality;
+    }
+
+    @PrePersist
+    void initializeTimestamps() {
+        Instant now = Instant.now();
+        createdAt = now;
+        updatedAt = now;
+    }
+
+    @PreUpdate
+    void updateTimestamp() {
+        updatedAt = Instant.now();
     }
 
     public UUID getId() {
@@ -46,7 +80,19 @@ public class Member {
         return passwordHash;
     }
 
+    public String getLanguage() {
+        return language;
+    }
+
+    public String getNationality() {
+        return nationality;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
     }
 }
