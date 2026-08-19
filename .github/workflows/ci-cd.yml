@@ -2,14 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - develop
-      - master
-
+    branches: [develop, master]
   push:
-    branches:
-      - develop
-      - master
+    branches: [develop, master]
 
 permissions:
   contents: read
@@ -19,13 +14,11 @@ jobs:
     name: Branch policy
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
     env:
       BASE_BRANCH: ${{ github.base_ref }}
       HEAD_BRANCH: ${{ github.head_ref }}
       HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
       CURRENT_REPOSITORY: ${{ github.repository }}
-
     steps:
       - name: Validate branch flow
         shell: bash
@@ -36,72 +29,69 @@ jobs:
               exit 1
             fi
           fi
-
           echo "Branch policy passed."
 
-  ci:
-    name: CI
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Build frontend image
+        run: docker build --file frontend/Dockerfile --tag settle-frontend:ci frontend
 
-      - name: Validate Docker Compose
-        run: docker compose config --quiet
-
-      - name: Build Docker images
-        run: docker compose build
-        
-      - name: Build frontend Docker image
-        run: |
-          docker build \
-            --file frontend/Dockerfile \
-            --tag settle-frontend:ci \
-            frontend
-
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
       - name: Test Spring backend
         working-directory: backend/server
         run: ./gradlew test --no-daemon
+      - name: Build backend image
+        run: docker build --file backend/Dockerfile --tag settle-backend:ci backend
 
-      - name: Build backend Docker image
-        run: |
-          docker build \
-            --file backend/Dockerfile \
-            --tag settle-backend:ci \
-            backend
-
-      - name: Build AI Docker image
-        run: |
-          docker build \
-            --file ai/Dockerfile \
-            --tag settle-ai:ci \
-            ai
-
-      - name: Smoke test AI Docker image
+  ai:
+    name: AI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Disk before build
+        run: df -h /
+      - name: Build AI image
+        run: docker build --file ai/Dockerfile --tag settle-ai:ci ai
+      - name: Smoke test AI image
         shell: bash
         run: |
           set -euo pipefail
-
           docker run --detach --name settle-ai-ci --publish 8000:8000 settle-ai:ci
           trap 'docker logs settle-ai-ci; docker rm --force settle-ai-ci' EXIT
-
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:8000/health; then
-              exit 0
-            fi
+            if curl --fail --silent http://127.0.0.1:8000/health; then exit 0; fi
             sleep 2
           done
-
           exit 1
 
-      # 실제 테스트 명령이 정해지면 아래에 추가
-      # 예시 구조:
-      # - name: Backend test
-      #   run: docker compose run --rm backend <백엔드 테스트 명령>
-      #
-      # - name: Frontend test
-      #   run: docker compose run --rm frontend <프론트엔드 테스트 명령>
+  compose-check:
+    name: Compose validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Validate local compose
+        run: docker compose config --quiet
