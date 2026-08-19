@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 .ruff_cache/
 .pytest_cache/
+.gradle/
+backend/build/
+backend/data/
 node_modules/
 .next/
 .DS_Store
