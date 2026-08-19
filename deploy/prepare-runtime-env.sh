@@ -4,6 +4,17 @@ set -euo pipefail
 
 deploy_root="${DEPLOY_ROOT:-/opt/fsai}"
 
+# Extract a required field from a secret JSON blob, reporting which field failed.
+extract_field() {
+  local label="$1" json="$2" field="$3" value
+  if ! value="$(printf '%s' "$json" | jq -er ".${field}")"; then
+    echo "FAIL: ${label} secret is missing field '${field}' (absent or null)." >&2
+    echo "FAIL: ${label} secret top-level keys: $(printf '%s' "$json" | jq -rc 'keys' 2>&1)" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
 cd "$deploy_root"
 
 : "${AWS_REGION:?AWS_REGION is required}"
@@ -14,6 +25,10 @@ cd "$deploy_root"
 : "${RDS_DATABASE:?RDS_DATABASE is required}"
 : "${AWS_S3_BUCKET:?AWS_S3_BUCKET is required}"
 
+command -v jq >/dev/null || { echo "FAIL: jq is not installed on this instance." >&2; exit 1; }
+command -v aws >/dev/null || { echo "FAIL: aws CLI is not installed on this instance." >&2; exit 1; }
+
+echo "Fetching RDS secret: ${RDS_SECRET_ID}" >&2
 rds_secret_json="$(
   aws secretsmanager get-secret-value \
     --region "$AWS_REGION" \
@@ -22,9 +37,10 @@ rds_secret_json="$(
     --output text
 )"
 
-db_username="$(printf '%s' "$rds_secret_json" | jq -er '.username')"
-db_password="$(printf '%s' "$rds_secret_json" | jq -er '.password')"
+db_username="$(extract_field RDS "$rds_secret_json" username)"
+db_password="$(extract_field RDS "$rds_secret_json" password)"
 
+echo "Fetching app secret: ${APP_SECRET_ID}" >&2
 app_secret_json="$(
   aws secretsmanager get-secret-value \
     --region "$AWS_REGION" \
@@ -33,8 +49,8 @@ app_secret_json="$(
     --output text
 )"
 
-auth_passcode="$(printf '%s' "$app_secret_json" | jq -er '.AUTH_PASSCODE')"
-jwt_secret="$(printf '%s' "$app_secret_json" | jq -er '.JWT_SECRET')"
+auth_passcode="$(extract_field App "$app_secret_json" AUTH_PASSCODE)"
+jwt_secret="$(extract_field App "$app_secret_json" JWT_SECRET)"
 
 dotenv_line() {
   local key="$1"
