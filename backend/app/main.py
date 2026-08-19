@@ -51,9 +51,11 @@ def health():
     }
 
 
+# app/main.py
 @app.post("/api/session", response_model=AgentResponse, tags=["session"])
-def create_session(locale: str = "en"):
-    return agent.start_session(DEFAULT_SID, locale)
+def create_session(locale: str = "en", session_id: str | None = None):
+    """session_id 를 주면 그 세션을 이어받고, 없으면 새로 만든다."""
+    return agent.start_session(session_id, locale)
 
 
 @app.post("/api/uploads/presign", response_model=PresignResponse, tags=["upload"])

@@ -14,6 +14,8 @@ from app.agent.state import new_state
 from app.nodes.planner import summary
 from app.nodes.profiler import profile_to_payload, public_profile
 from app.nodes.profiler import run as profiler_run
+from app.tools import llm
+import uuid
 
 DocType = Literal["arc_front", "arc_back", "passport"]
 
@@ -119,8 +121,10 @@ def _patch(session_id: str, extra: dict[str, Any]) -> dict:
 # ──────────────────────────────────────────────────────────
 # public API
 # ──────────────────────────────────────────────────────────
-def start_session(session_id: str, locale: str = "en") -> dict:
-    state = _graph().invoke(_patch(session_id, {"locale": locale}), _cfg(session_id))
+def start_session(session_id: str | None = None, locale: str = "en") -> dict:
+    """session_id 를 주지 않으면 새 세션을 만든다."""
+    sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
+    state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
     return _response(state)
 
 
@@ -161,14 +165,51 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
     return _response(state)
 
 
+# 슬롯 필링 필드의 의미와 허용값 (graph.QUESTIONS 와 짝)
+_FIELD_META = {
+    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
+    "org_name":      ("Name of the school or organization", None),
+    "phone_kr":      ("Phone number in Korea", None),
+    "purpose":       ("Purpose of the bank account",
+                      {"living_expense": 1, "tuition": 1, "salary": 1, "remittance": 1}),
+    "income_source": ("Source of funds",
+                      {"scholarship": 1, "family_support": 1, "part_time": 1, "savings": 1}),
+}
+
+
 def send_message(session_id: str, message: str) -> dict:
-    """대화 입력. 슬롯 필링 중이면 방금 물어본 필드에 값을 넣는다."""
+    """대화 입력.
+
+    슬롯 필링 중이면 LLM 이 자유 발화에서 값을 뽑는다.
+    추출 실패 시 프로필을 건드리지 않고 되묻는다 — 쓰레기 값이 서류로 가지 않는다.
+    """
     snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
     asked = snap.get("asked_field")
 
     extra: dict[str, Any] = {"messages": [{"role": "user", "content": message}]}
+
     if asked:
-        extra["profile"] = {asked: message}
+        value, failed = message.strip(), None
+
+        if llm.available():
+            label, enum = _FIELD_META.get(asked, (asked, None))
+            parsed = llm.parse_answer(asked, label=label, message=message,
+                                      enum=enum, locale=snap.get("locale", "ko"))
+            if parsed is None:
+                pass                                  # LLM 실패 → 원문 사용
+            elif parsed.get("ok") and parsed.get("value"):
+                value = parsed["value"]
+            else:
+                failed = parsed.get("reason") or "값을 알아듣지 못했습니다."
+                failed = failed.strip()
+
+        if failed:
+            # 같은 필드를 다시 묻는다. asked_field 를 유지한다.
+            state = _graph().get_state(_cfg(session_id)).values
+            return _response(state, failed, "question",
+                             state.get("ui_payload") or {})
+
+        extra["profile"] = {asked: value}
         extra["asked_field"] = None
 
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))

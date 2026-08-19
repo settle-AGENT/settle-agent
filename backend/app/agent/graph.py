@@ -15,8 +15,10 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
 from app.nodes.planner import build_task_graph, summary
+from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import profile_to_payload
 from app.rules.loader import actions_for, evidence_labels
+from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
 
@@ -138,7 +140,11 @@ def _missing_fields(state: AgentState, action: str) -> list[str]:
 
 
 def slot_filler(state: AgentState) -> dict:
-    """부족한 필드 중 하나를 묻는다. 무엇을 물을지는 코드가 정한다."""
+    """부족한 필드 중 하나를 묻는다.
+
+    무엇을 물을지는 코드가 정한다 (_missing_fields).
+    LLM 은 그 필드에 대한 **문장만** 만든다. 실패하면 고정 문구로 폴백.
+    """
     action = state.get("current_action")
     missing = _missing_fields(state, action)
     if not missing:
@@ -146,38 +152,82 @@ def slot_filler(state: AgentState) -> dict:
 
     field = missing[0]
     q = QUESTIONS.get(field, {"label": field, "input_type": "text", "options": []})
+    locale = state.get("locale", "en")
+
+    label, hint = q["label"], q.get("hint")
+    lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
+
+    # LLM 은 문장 생성만. 실패해도 흐름이 끊기지 않는다.
+    if llm.available():
+        written = llm.ask_field(
+            field,
+            label=q["label"],
+            locale=locale,
+            context=state.get("profile", {}),
+            remaining=len(missing),
+        )
+        if written and written.get("question"):
+            label = written["question"]
+            hint = written.get("hint") or hint
+            lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
 
     return {
         "missing_fields": missing,
         "asked_field": field,
-        "reply": f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다.",
+        "reply": lead,
         "ui_type": "question",
         "ui_payload": {
             "field": field,
-            "label": q["label"],
+            "label": label,
             "input_type": q["input_type"],
             "options": q.get("options", []),
-            "hint": q.get("hint"),
+            "hint": hint,
         },
     }
 
 
 def doc_builder(state: AgentState) -> dict:
-    """서류를 생성하고 승인 대기 상태로 만든다.
-
-    실제 렌더는 AI-2의 DocBuilder가 담당한다. 여기서는 문서 참조만 만든다.
-    """
+    """서류를 실제로 생성하고 승인 대기 상태로 만든다."""
     action = state["current_action"]
-    spec = actions_for(state["profile"].get("visa_type")).get(action, {})
+    profile = state.get("profile", {})
+    spec = actions_for(profile.get("visa_type")).get(action, {})
+
+    form = spec.get("form")
+    if not form:
+        return {
+            "reply": "이 단계는 서류 없이 진행됩니다.",
+            "ui_type": "none",
+            "ui_payload": {},
+        }
+
+    try:
+        result = render(
+            form,
+            profile,
+            confidence=state.get("confidence", {}),
+            variant=spec.get("form_type", "default"),
+            required_docs=spec.get("required_docs", []),
+            account_type=spec.get("account_type", "limited"),
+            doc_id=f"{state['session_id']}-{action}",
+        )
+    except DocumentIncomplete as exc:
+        return {
+            "missing_fields": exc.missing,
+            "reply": "서류 작성에 필요한 정보가 아직 부족합니다.",
+            "ui_type": "none",
+            "ui_payload": {},
+        }
 
     doc = {
-        "id": f"doc-{action}",
-        "title": ACTION_TITLES.get(action, action),
+        "id": result["document_id"],
+        "title": result["title"],
         "action_id": action,
-        "preview_url": f"/api/documents/doc-{action}/preview",
-        "pdf_url": f"/api/documents/doc-{action}.pdf",
+        "preview_url": f"/api/documents/{result['document_id']}/preview",
+        "pdf_url": f"/api/documents/{result['document_id']}.pdf",
         "created_at": _now(),
     }
+
+    warnings = [f"{k} 값을 한 번 확인해주세요" for k in result["low_confidence"]]
 
     pending = {
         "action_id": action,
@@ -188,17 +238,20 @@ def doc_builder(state: AgentState) -> dict:
         "risk_level": spec.get("risk_level", "L2"),
     }
 
+    checks = "검증 5개 항목 모두 통과했습니다." if not warnings else \
+             f"검증 통과. {len(warnings)}개 항목은 확인을 권합니다."
+
     return {
         "documents": [doc],
         "pending_approval": pending,
-        "reply": "서류를 작성했습니다. 검증 5개 항목 모두 통과했습니다.",
+        "reply": f"서류를 작성했습니다. {checks}",
         "ui_type": "doc_preview",
         "ui_payload": {
             "document_id": doc["id"],
             "title": doc["title"],
             "preview_url": doc["preview_url"],
             "pdf_url": doc["pdf_url"],
-            "warnings": [],
+            "warnings": warnings,
         },
     }
 
@@ -291,14 +344,31 @@ def executor(state: AgentState) -> dict:
 
 
 def explainer(state: AgentState) -> dict:
-    """설명·안내. 여기가 LLM을 쓰는 자리다 (지금은 룰 기반 요약)."""
+    """상황 안내. 판정은 룰이 끝냈고, LLM 은 말로 옮기기만 한다."""
     tasks = state.get("tasks") or []
+    locale = state.get("locale", "en")
+
     if not tasks:
-        return {
-            "reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
-            "ui_type": "none",
-        }
-    return {"reply": summary(tasks), "ui_type": "none"}
+        base = "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요."
+        return {"reply": llm.translate(base, locale) if llm.available() else base,
+                "ui_type": "none"}
+
+    base = summary(tasks)
+
+    if llm.available():
+        nxt = next((t for t in tasks if t["status"] == "available"), None)
+        spoken = llm.explain({
+            "available_count": sum(1 for t in tasks if t["status"] == "available"),
+            "next_action_label": nxt["label"] if nxt else None,
+            "d_day": nxt["d_day"] if nxt else None,
+            "blocked": [{"label": t["label"], "blocked_by": t["blocked_by"]}
+                        for t in tasks if t["status"] == "locked"][:3],
+            "evidence": nxt["evidence"] if nxt else [],
+        }, locale=locale)
+        if spoken:
+            return {"reply": spoken, "ui_type": "none"}
+
+    return {"reply": base, "ui_type": "none"}
 
 
 def ledger_writer(state: AgentState) -> dict:
