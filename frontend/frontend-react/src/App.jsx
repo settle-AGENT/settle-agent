@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { BridgeMark, TopBar, Rail, PrimaryButton, Field } from "./components.jsx";
 import {
   extractDocs, saveProfile, getVerdict, buildDocuments, nationalityLabel,
@@ -31,10 +31,18 @@ export default function App() {
   const [extract, setExtract] = useState(null);
   const [confirmed, setConfirmed] = useState({}); // 저신뢰 필드 확인 여부
 
-  const [answers, setAnswers] = useState({ phone: null, cert: "yes", purposes: { 0: true, 2: true } });
+  const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
   const [verdict, setVerdict] = useState(null);
+  const [chatLoading, setChatLoading] = useState(false);
   const [docs, setDocs] = useState(null);
   const [openDoc, setOpenDoc] = useState(null);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    if (step !== 4) return;
+    const frame = requestAnimationFrame(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }));
+    return () => cancelAnimationFrame(frame);
+  }, [step, answers.phone, answers.cert, answers.purposes, verdict, chatLoading]);
 
   const go = (n) => setStep(n);
 
@@ -237,120 +245,117 @@ export default function App() {
     );
   }
 
-  // ── 4 추가 질문 ──
-  if (step === 4)
-    return (
-      <Shell>
-        <TopBar title="몇 가지 질문" onBack={() => go(3)} />
-        <Rail active={2} />
-        <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>두 가지만 더</h2>
-          <p style={SUB}>서류에서 읽을 수 없는 항목이에요. 은행 창구에서 물어보는 것들이에요.</p>
-        </div>
-        <div className="scroll" style={{ padding: "6px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
-          <div>
-            <QTitle>본인 명의 국내 휴대폰이 있나요?</QTitle>
-            <div style={{ margin: "-7px 0 9px", fontSize: 11, color: "var(--muted)" }}>본인 명의 국내 통신사 개통 휴대폰</div>
-            <Row2>
-              <Pick ok on={answers.phone === "yes"} onClick={() => setAnswers({ ...answers, phone: "yes" })}>네, 있어요</Pick>
-              <Pick on={answers.phone === "no"} onClick={() => setAnswers({ ...answers, phone: "no" })}>아직 없어요</Pick>
-            </Row2>
-            {answers.phone === "yes" && <Field label="휴대폰 번호" value="010-4•••-••21  영업 일치 확인됨" />}
-          </div>
-          <div>
-            <QTitle>재학증명서 또는 입학허가서가 있나요?</QTitle>
-            <Row2>
-              <Pick ok on={answers.cert === "yes"} onClick={() => setAnswers({ ...answers, cert: "yes" })}>있어요</Pick>
-              <Pick on={answers.cert === "no"} onClick={() => setAnswers({ ...answers, cert: "no" })}>아직 없어요</Pick>
-            </Row2>
-          </div>
-          <div>
-            <QTitle>계좌를 왜 만드나요?</QTitle>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {PURPOSES.map((label, i) => {
-                const on = answers.purposes[i];
-                return (
-                  <div key={label} onClick={() => setAnswers({ ...answers, purposes: { ...answers.purposes, [i]: !on } })} className="tap"
-                    style={{ minHeight: 44, display: "flex", alignItems: "center", padding: "0 15px", borderRadius: 999, fontSize: 13.5, fontWeight: on ? 700 : 600,
-                      border: on ? "1.5px solid var(--brand-2)" : "1px solid oklch(0.88 0.01 60)", background: on ? "oklch(0.7 0.13 45 / 0.08)" : "#fff" }}>
-                    {label}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        <div style={{ padding: "14px 24px 34px" }}>
-          <PrimaryButton disabled={!answers.phone} onClick={async () => {
-            const scenario = new URLSearchParams(window.location.search).get("scenario");
-            setVerdict(await getVerdict("mock", { ...answers, scenario }));
-            go(5);
-          }}>결과 보기</PrimaryButton>
-        </div>
-      </Shell>
-    );
+  // ── 4 AI 상담 + 심사 ──
+  if (step === 4) {
+    const hasPurpose = Object.values(answers.purposes).some(Boolean);
+    const updatePhone = (phone) => { setAnswers((value) => ({ ...value, phone })); setVerdict(null); };
+    const updateCert = (cert) => { setAnswers((value) => ({ ...value, cert })); setVerdict(null); };
+    const togglePurpose = (index) => {
+      setAnswers((value) => ({ ...value, purposes: { ...value.purposes, [index]: !value.purposes[index] } }));
+      setVerdict(null);
+    };
+    const runVerdict = async () => {
+      setChatLoading(true);
+      const scenario = new URLSearchParams(window.location.search).get("scenario");
+      setVerdict(await getVerdict("mock", { ...answers, scenario }));
+      setChatLoading(false);
+    };
 
-  // ── 5 판정 결과 ──
-  if (step === 5 && verdict)
+    if (verdict) {
+      const editAnswers = () => setVerdict(null);
+      return (
+        <Shell>
+          <TopBar title="첫계좌 AI" onBack={editAnswers} right={<span className="review-status"><i />심사 완료</span>} />
+          <Rail active={3} />
+          <div className="scroll review-scroll">
+            <section className="review-hero">
+              <div className="review-kicker">계좌&nbsp;&nbsp;개설&nbsp;&nbsp;진단&nbsp;&nbsp;결과</div>
+              <h1>{verdict.headline}</h1>
+              <p>{verdict.summary}</p>
+            </section>
+
+            <div className="review-content">
+              {verdict.blocker && (
+                <section className="review-card blocker">
+                  <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
+                  <p>{verdict.blocker.body}</p>
+                </section>
+              )}
+              <AccountCard title="한도제한계좌" subtitle="한도제한계좌 · 1일 이체 100만원 한도" account={verdict.limited} />
+              <AccountCard title="일반계좌" subtitle="일반계좌" account={verdict.regular} />
+
+              <details className="review-sources">
+                <summary>판정 근거</summary>
+                {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
+              </details>
+              <p className="review-disclaimer">이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.</p>
+            </div>
+          </div>
+          <div className="review-actions">
+            <button type="button" onClick={editAnswers} className="review-edit tap">답변 수정</button>
+            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind)}</button>
+          </div>
+        </Shell>
+      );
+    }
+
     return (
       <Shell>
-        <div style={{ paddingTop: 46 }}><Rail active={3} /></div>
-        <div style={{ padding: "8px 24px 20px", background: "oklch(0.22 0.012 60)", color: "#fff" }}>
-          <div style={{ ...mono, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: verdict.blocker ? "oklch(0.8 0.1 80)" : "oklch(0.75 0.03 150)", marginBottom: 12 }}>계좌 개설 진단 결과</div>
-          <h2 style={{ margin: 0, fontSize: 27, fontWeight: 800, lineHeight: 1.22, letterSpacing: "-0.02em" }}>{verdict.headline}</h2>
-          <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.5, color: "oklch(.82 .012 60)" }}>{verdict.summary}</div>
-        </div>
-        <div className="scroll" style={{ padding: "18px 24px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {verdict.blocker && (
-            <div style={{ ...card, border: "1.5px solid var(--warn)", background: "oklch(0.6 0.14 80 / 0.07)" }}>
-              <RowBetween>
-                <b style={{ fontSize: 15.5 }}>{verdict.blocker.title}</b>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "oklch(0.5 0.14 80)", whiteSpace: "nowrap" }}>{verdict.blocker.badge}</span>
-              </RowBetween>
-              {verdict.blocker.meta && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{verdict.blocker.meta}</div>}
-              <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.blocker.body}</div>
-            </div>
+        <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
+        <Rail active={3} />
+        <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <ChatBubble avatar>
+            서류 확인이 끝났어요. 은행 방문 가능 여부를 확인할게요. 아래 질문에 순서대로 답해 주세요.
+          </ChatBubble>
+
+          <ChatBubble avatar>
+            <b>본인 명의 국내 휴대폰이 있나요?</b>
+            <span>국내 통신사에서 본인 명의로 개통한 휴대폰이에요.</span>
+            <ChatOptions>
+              <ChatChoice selected={answers.phone === "yes"} onClick={() => updatePhone("yes")}>네, 있어요</ChatChoice>
+              <ChatChoice selected={answers.phone === "no"} onClick={() => updatePhone("no")}>아직 없어요</ChatChoice>
+            </ChatOptions>
+          </ChatBubble>
+
+          {answers.phone && (
+            <>
+              <ChatBubble mine>{answers.phone === "yes" ? "네, 본인 명의 휴대폰이 있어요." : "아직 본인 명의 휴대폰이 없어요."}</ChatBubble>
+              <ChatBubble avatar>
+                <b>재학증명서 또는 입학허가서가 있나요?</b>
+                <span>은행에는 촬영본이 아닌 종이 원본을 제출해요.</span>
+                <ChatOptions>
+                  <ChatChoice selected={answers.cert === "yes"} onClick={() => updateCert("yes")}>있어요</ChatChoice>
+                  <ChatChoice selected={answers.cert === "no"} onClick={() => updateCert("no")}>아직 없어요</ChatChoice>
+                </ChatOptions>
+              </ChatBubble>
+            </>
           )}
-          <div style={{ ...card, border: verdict.limited.ready ? "1.5px solid var(--ok)" : "1px solid var(--line)", background: verdict.limited.ready ? "oklch(0.55 0.14 150 / 0.06)" : "#fff" }}>
-            <RowBetween>
-              <b style={{ fontSize: 15.5 }}>한도제한계좌</b>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: verdict.limited.ready ? "oklch(0.45 0.12 150)" : "oklch(0.55 0.14 80)", whiteSpace: "nowrap" }}>{verdict.limited.status}</span>
-            </RowBetween>
-            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>1일 이체 100만원 한도</div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.limited.body}</div>
-          </div>
-          <div style={card}>
-            <RowBetween>
-              <b style={{ fontSize: 15.5 }}>일반계좌</b>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: "oklch(0.55 0.14 80)", whiteSpace: "nowrap" }}>{verdict.regular.status}</span>
-            </RowBetween>
-            <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.regular.body}</div>
-          </div>
-          <div style={{ padding: "14px 15px", borderRadius: 14, background: "oklch(0.93 0.008 60)" }}>
-            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 9 }}>판정 근거</div>
-            {verdict.sources.map((s) => (
-              <div key={s} style={{ fontSize: 12.5, lineHeight: 1.45, color: "oklch(0.35 0.012 60)", fontFamily: "'Noto Sans KR',sans-serif", marginBottom: 6 }}>· {s}</div>
-            ))}
-          </div>
-        </div>
-        <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--muted)" }}>이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.</div>
-          <div style={{ display: "flex", gap: 9 }}>
-            <button type="button" onClick={() => go(4)} className="tap"
-              style={{ width: 88, minHeight: 54, flex: "none", borderRadius: 13, border: "1px solid var(--line)", background: "#fff", color: "var(--ink)", fontSize: 13, fontWeight: 700 }}>
-              답변 수정
-            </button>
-            <div style={{ minHeight: 54, flex: 1, borderRadius: 13, background: "#c44f40", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 10px", textAlign: "center", fontSize: 14, fontWeight: 800 }} onClick={() => go(6)} className="tap">{verdictCta(verdict.kind)}</div>
-          </div>
+
+          {answers.cert && (
+            <>
+              <ChatBubble mine>{answers.cert === "yes" ? "학교 서류를 준비했어요." : "학교 서류는 아직 없어요."}</ChatBubble>
+              <ChatBubble avatar>
+                <b>계좌를 주로 어디에 사용할 건가요?</b>
+                <span>여러 개를 선택할 수 있어요.</span>
+                <ChatOptions wrap>
+                  {PURPOSES.map((label, index) => <ChatChoice key={label} selected={!!answers.purposes[index]} onClick={() => togglePurpose(index)}>{label}</ChatChoice>)}
+                </ChatOptions>
+                {hasPurpose && !verdict && <button type="button" disabled={chatLoading} onClick={runVerdict} className="chat-submit tap">{chatLoading ? "확인하고 있어요…" : "선택 완료 · 심사하기"}</button>}
+              </ChatBubble>
+            </>
+          )}
+
+          <div ref={chatEndRef} aria-hidden="true" />
         </div>
       </Shell>
     );
+  }
 
   // ── 6 준비 안내 ──
   if (step === 6 && verdict)
     return (
       <Shell>
-        <TopBar title="준비할 것" onBack={() => go(5)} />
+        <TopBar title="준비할 것" onBack={() => go(4)} />
         <Rail active={4} />
         <div style={{ padding: "4px 24px 16px" }}>
           <div style={{ padding: 17, borderRadius: 16, background: "#c44f40", color: "#fff" }}>
@@ -505,14 +510,31 @@ function AuthInput({ label, type = "text", value, onChange, placeholder, ...inpu
     </label>
   );
 }
-function QTitle({ children }) {
-  return <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 10, fontFamily: "'Noto Sans KR',sans-serif" }}>{children}</div>;
+function ChatBubble({ children, mine, avatar, wide }) {
+  return (
+    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}`}>
+      {avatar && <BridgeMark size={32} />}
+      <div className="chat-bubble">{children}</div>
+    </div>
+  );
+}
+function ChatOptions({ children, wrap }) {
+  return <div className={`chat-options${wrap ? " wrap" : ""}`}>{children}</div>;
+}
+function ChatChoice({ children, selected, onClick }) {
+  return <button type="button" onClick={onClick} className={`chat-choice tap${selected ? " selected" : ""}`}>{selected && <span>✓</span>}{children}</button>;
+}
+function AccountCard({ title, subtitle, account }) {
+  return (
+    <section className={`review-card account${account.ready ? " ready" : ""}`}>
+      <div className="review-card-head"><b>{title}</b><span>{account.status}</span></div>
+      <div className="review-card-sub">{subtitle}</div>
+      <p>{account.body}</p>
+    </section>
+  );
 }
 function Row2({ children }) {
   return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 10 }}>{children}</div>;
-}
-function RowBetween({ children }) {
-  return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>{children}</div>;
 }
 function Pick({ children, on, ok, onClick }) {
   const accent = ok ? "var(--ok)" : "var(--brand-2)";
