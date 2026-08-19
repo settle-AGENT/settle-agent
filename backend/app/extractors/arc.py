@@ -321,7 +321,7 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
     profile, confidence = parse_rules(texts, doc_type)
 
     # 규칙으로 못 잡은 것만 LLM에 맡긴다
-    want = [k for k in _TARGET[doc_type] if k not in profile]
+    want = [k for k in _TARGET.get(doc_type, []) if k not in profile]
     if use_llm and want:
         for k, v in structure_with_llm(texts, want).items():
             if k == "nationality":

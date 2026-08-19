@@ -435,7 +435,7 @@ def explainer(state: AgentState) -> dict:
     base = summary(tasks)
 
     if llm.available():
-        nxt = next((t for t in tasks if t["status"] == "available"), None)
+        nxt = _next_action(tasks)
         spoken = llm.explain({
             "available_count": sum(1 for t in tasks if t["status"] == "available"),
             "next_action_label": nxt["label"] if nxt else None,
@@ -453,13 +453,22 @@ def explainer(state: AgentState) -> dict:
 
     return {"reply": base, "ui_type": "none"}
 
+# 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
+NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
+
+
+def _next_action(tasks: list[dict]) -> dict | None:
+    """지금 먼저 권할 액션. 우선순위에 없는 조건부 액션은 권하지 않는다."""
+    avail = [t for t in tasks if t["status"] == "available"]
+    return next((t for a in NEXT_PRIORITY for t in avail if t["id"] == a), None)
+
+
 def ledger_writer(state: AgentState) -> dict:
     """Executor 이후 Task Graph를 다시 계산하고, 새로 열린 일을 알린다."""
     out = planner(state)
     tasks = out.get("tasks") or []
 
-    avail = [t for t in tasks if t["status"] == "available"]
-    nxt = next((t for a in NEXT_PRIORITY for t in avail if t["id"] == a), None)
+    nxt = _next_action(tasks)
     if not nxt:
         return out
 

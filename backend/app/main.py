@@ -11,6 +11,8 @@ import json
 import os
 
 from dotenv import load_dotenv
+import traceback
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +27,8 @@ from app.api.schemas import (  # noqa: E402
     PresignRequest,
     PresignResponse,
 )
-from app.agent import service as agent  # noqa: E402
+from app.agent import service as agent
+from app.extractors.arc import OcrFailed  # noqa: E402
 from app.agent.service import PrerequisiteMissing  # noqa: E402
 
 DEFAULT_SID = "demo-001"
@@ -84,11 +87,23 @@ async def extract_upload(
         ext = "jpg"
     try:
         return agent.extract(session_id, image, doc_type, ext=ext)
-    except Exception as exc:                                  # noqa: BLE001
+
+    except OcrFailed as exc:
+        # 예상된 실패 — 사용자가 다시 촬영하면 해결된다. 422 로 안내한다.
         raise HTTPException(422, detail={
             "error": "extraction_failed",
-            "message": f"{doc_type} 이미지를 읽지 못했습니다. 다시 시도해주세요.",
-            "details": {"reason": str(exc), "filename": file.filename, "ext": ext},
+            "message": str(exc),
+            "details": {"doc_type": doc_type, "filename": file.filename, "ext": ext},
+        })
+
+    except Exception as exc:                                  # noqa: BLE001
+        # 버그 — 사용자에게 "다시 촬영하세요" 라고 하면 영원히 해결되지 않는다.
+        traceback.print_exc()
+        raise HTTPException(500, detail={
+            "error": "internal",
+            "message": "서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            "details": {"reason": f"{type(exc).__name__}: {exc}",
+                        "doc_type": doc_type, "filename": file.filename},
         })
 
 
