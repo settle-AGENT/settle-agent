@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.nodes.planner import build_task_graph, summary
 from app.nodes.profiler import apply_edits, public_profile
 from app.nodes.profiler import run as profiler_run
 from app.api.schemas import (
@@ -61,6 +62,8 @@ def _new_session() -> dict:
         "pending_approval": None,
         "slot_step": 0,
         "current_action": None,
+        "completed": [],       # 완료된 action_id
+        "in_progress": [],     # 진행 중인 action_id
     }
 
 
@@ -70,28 +73,45 @@ def _session(sid: str) -> dict:
     return SESSIONS[sid]
 
 
+def _tasks(sid: str) -> list[dict]:
+    """프로필에 체류자격이 있으면 룰로 계산, 없으면 시드 폴백."""
+    s = _session(sid)
+    if s["profile"].get("visa_type"):
+        return build_task_graph(
+            s["profile"],
+            completed=set(s["completed"]),
+            in_progress=set(s["in_progress"]),
+        )
+    return s["tasks"]
+
+
 def _state(sid: str) -> SessionState:
     s = _session(sid)
     return SessionState(
         session_id=sid,
         locale="en",
         profile=public_profile(s["profile"]),   # 마스킹된 사본. 원본은 SESSIONS에
-        tasks=[Task(**t) for t in s["tasks"]],
+        tasks=[Task(**t) for t in _tasks(sid)],
         documents=s["documents"],
         pending_approval=s["pending_approval"],
     )
 
 
 def _unlock(sid: str, done_action: str) -> None:
-    """done_action 완료 처리 후 prereq를 만족하게 된 액션 잠금 해제."""
+    """액션 완료 처리. 잠금 해제는 planner가 prereq로 자동 계산한다."""
     s = _session(sid)
-    done = {t["id"] for t in s["tasks"] if t["status"] == "done"} | {done_action}
+    if done_action not in s["completed"]:
+        s["completed"].append(done_action)
+    if done_action in s["in_progress"]:
+        s["in_progress"].remove(done_action)
+
+    # 시드 폴백 경로(프로필 없음)에서도 화면이 맞도록 유지
+    done = set(s["completed"])
     for t in s["tasks"]:
-        if t["id"] == done_action:
+        if t["id"] in done:
             t["status"] = "done"
         elif t["status"] == "locked" and all(p in done for p in t["prereq"]):
-            t["status"] = "available"
-            t["blocked_by"] = []
+            t["status"], t["blocked_by"] = "available", []
 
 
 def _resp(sid: str, reply: str, ui_type: str = "none", payload: dict | None = None) -> AgentResponse:
@@ -284,7 +304,7 @@ def _build_doc(sid: str, action_id: str) -> dict:
 @app.post("/api/actions/{action_id}/start", response_model=AgentResponse, tags=["agent"])
 def start_action(action_id: str, req: ActionRequest):
     s = _session(req.session_id)
-    target = next((t for t in s["tasks"] if t["id"] == action_id), None)
+    target = next((t for t in _tasks(req.session_id) if t["id"] == action_id), None)
     if target is None:
         raise HTTPException(404, "unknown action")
     if target["status"] == "locked":
@@ -295,6 +315,8 @@ def start_action(action_id: str, req: ActionRequest):
                     "details": {"prereq": target["prereq"]}},
         )
 
+    if action_id not in s["in_progress"]:
+        s["in_progress"].append(action_id)
     target["status"] = "in_progress"
     s["current_action"] = action_id
     s["slot_step"] = 0
@@ -322,6 +344,8 @@ def approve_action(action_id: str, req: ApproveRequest):
 
     if not req.approved:
         s["pending_approval"] = None
+        if action_id in s["in_progress"]:
+            s["in_progress"].remove(action_id)
         for t in s["tasks"]:
             if t["id"] == action_id and t["status"] == "in_progress":
                 t["status"] = "available"
@@ -377,9 +401,12 @@ async def extract_upload(
         })
 
     low = [f["key"] for f in payload["fields"] if f["confidence"] < 0.90]
-    reply = ("신분증을 확인했습니다. 값이 맞는지 봐주세요."
-             if not low else
-             f"신분증을 확인했습니다. {len(low)}개 항목은 확인이 필요합니다.")
+    head = ("신분증을 확인했습니다."
+            if not low else
+            f"신분증을 확인했습니다. {len(low)}개 항목은 확인이 필요합니다.")
+
+    tasks = _tasks(session_id)
+    reply = f"{head}\n{summary(tasks)}" if tasks else head
 
     return _resp(session_id, reply, "profile_confirm", payload)
 
