@@ -127,6 +127,7 @@ jobs:
           set -euo pipefail
 
           {
+            echo "AWS_REGION=${AWS_REGION}"
             echo "ECR_REGISTRY=${ECR_REGISTRY}"
             echo "ECR_FRONTEND_REPOSITORY=${ECR_FRONTEND_REPOSITORY}"
             echo "ECR_BACKEND_REPOSITORY=${ECR_BACKEND_REPOSITORY}"
