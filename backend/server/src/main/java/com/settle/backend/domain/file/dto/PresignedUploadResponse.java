@@ -1,7 +1,9 @@
 package com.settle.backend.domain.file.dto;
 
+import java.util.UUID;
+
 public record PresignedUploadResponse(
-        String objectKey,
+        UUID uploadId,
         String uploadUrl,
         long expiresInSeconds
 ) {

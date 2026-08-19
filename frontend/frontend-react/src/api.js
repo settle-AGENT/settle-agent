@@ -1,8 +1,7 @@
 // 백엔드(Spring Boot) API 클라이언트.
-// 엔드포인트가 아직 없으면 자동으로 목데이터로 폴백한다(MOCK=true).
-// 실제 API가 준비되면 MOCK=false 로 바꾸거나 VITE_USE_MOCK=false 로 실행.
+// 목 모드가 필요한 경우에만 VITE_USE_MOCK=true로 실행한다.
 
-const MOCK = import.meta.env.VITE_USE_MOCK !== "false";
+const MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
 async function post(path, body) {
   const res = await fetch(path, {
@@ -12,6 +11,18 @@ async function post(path, body) {
   });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json();
+}
+
+async function requireOk(res, label) {
+  if (res.ok) return res;
+  let message = `${label}에 실패했어요. (${res.status})`;
+  try {
+    const error = await res.json();
+    message = error?.detail?.message || error?.detail || error?.message || message;
+  } catch {
+    // 응답 본문이 JSON이 아니면 상태 코드 메시지를 사용한다.
+  }
+  throw new Error(message);
 }
 
 // ── 목데이터: seed/ocr_cache 의 실제 인물(NGUYEN VAN A) 기준 ──────────
@@ -47,15 +58,107 @@ const NATIONALITY_LABEL = {
 
 // ── API ─────────────────────────────────────────────────────────────
 // 1) 외국인등록증/여권 OCR 추출
+export async function signUp({ email, password, passwordConfirm }) {
+  if (MOCK) return delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" });
+  return authPost("/api/v1/auth/signup", { email, password, passwordConfirm });
+}
+
+export async function login({ email, password, passcode }) {
+  if (MOCK) return delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" });
+  return authPost("/api/v1/auth/login", { email, password, passcode });
+}
+
+async function authPost(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || "인증 요청을 처리하지 못했어요.");
+  return payload;
+}
+
 export async function extractDocs({ arcFront, arcBack, passport }) {
   if (MOCK) return delay(MOCK_EXTRACT);
   return post("/api/ocr/extract", { arcFront, arcBack, passport });
 }
 
-// 2) 프로필 확정 + 추가 답변 저장
-export async function saveProfile(profile, answers) {
-  if (MOCK) return delay({ profileId: "mock-" + Date.now(), profile, answers });
-  return post("/api/profile", { profile, answers });
+export async function uploadAndExtract(file, documentType) {
+  if (file.type !== "image/png") throw new Error("PNG 이미지만 업로드할 수 있어요.");
+  if (MOCK) return delay(normalizeMockExtraction(MOCK_EXTRACT));
+
+  const createUpload = await requireOk(await fetch("/api/v1/uploads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documentType }),
+  }), "업로드 준비");
+  const { uploadId, uploadUrl } = await createUpload.json();
+
+  await requireOk(await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "image/png" },
+    body: file,
+  }), "사진 업로드");
+
+  const extraction = await requireOk(await fetch("/api/v1/documents/extractions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uploadId }),
+  }), "서류 인식");
+  return normalizeExtraction(await extraction.json());
+}
+
+function normalizeExtraction(response) {
+  const fields = response?.ui?.type === "profile_confirm" ? response.ui.payload?.fields || [] : [];
+  return {
+    profile: response?.state?.profile || {},
+    fields,
+    state: response?.state || {},
+    confidence: Object.fromEntries(fields.map((field) => [field.key, field.confidence])),
+    agentResponse: response,
+  };
+}
+
+function normalizeMockExtraction(mock) {
+  const readonly = new Set(["arc_no"]);
+  const labels = {
+    name_en: "이름", arc_no: "등록번호", nationality: "국적", visa_type: "체류자격",
+    stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", sex: "성별",
+  };
+  const fields = Object.entries(mock.profile).map(([key, value]) => ({
+    key, label: labels[key] || key, value, confidence: mock.confidence[key] ?? 1, editable: !readonly.has(key),
+  }));
+  return normalizeExtraction({
+    reply: "신분증을 확인했습니다.",
+    ui: { type: "profile_confirm", payload: { fields } },
+    state: { session_id: "demo-001", profile: mock.profile },
+  });
+}
+
+// 2) OCR 프로필 확정. message는 dirty 필드만 담은 JSON 문자열이다.
+export async function confirmProfile(sessionId, dirtyFields) {
+  if (MOCK) return delay({
+    reply: "프로필을 확인했어요. 몇 가지만 더 여쭤볼게요.",
+    ui: { type: "question", payload: { field: "phone_kr" } },
+    state: { session_id: sessionId, profile: { ...MOCK_EXTRACT.profile, ...dirtyFields } },
+  });
+
+  const response = await fetch("/api/profile/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, message: JSON.stringify(dirtyFields) }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const payload = body.detail || body;
+    const error = new Error(payload.message || `프로필 확인에 실패했어요. (${response.status})`);
+    error.status = response.status;
+    error.code = payload.error || payload.code;
+    error.details = payload.details || {};
+    throw error;
+  }
+  return body;
 }
 
 // 3) 룰 엔진 판정

@@ -59,21 +59,20 @@ export function PrimaryButton({ children, onClick, disabled }) {
   );
 }
 
-export function Field({ label, value, confidence, confirmed, onFix }) {
-  const low = confidence != null && confidence < 0.9 && !confirmed;
+export function Field({ label, value, confidence, editable = false, dirty, error, onChange }) {
+  const low = confidence != null && confidence < 0.9;
   return (
-    <div onClick={low ? onFix : undefined} className={low ? "tap" : ""}
-      style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.6 0.14 80 / 0.07)" : "#fff",
-        border: low ? "1.5px solid var(--warn)" : "1px solid var(--line)" }}>
+    <div style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.8 0.1 80 / 0.16)" : "#fff",
+      border: error ? "1.5px solid #b64b3d" : low ? "1.5px solid var(--warn)" : "1px solid var(--line)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
-        {confidence != null && (
-          <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
-            {confirmed ? "확인됨" : low ? `${Math.round(confidence * 100)}% · 눌러서 확인` : `${Math.round(confidence * 100)}%`}
-          </span>
-        )}
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
+          {error ? "확인 필요" : dirty ? "수정됨" : low ? "확인 필요" : confidence != null ? `${Math.round(confidence * 100)}%` : !editable ? "수정 불가" : ""}
+        </span>
       </div>
-      <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      <input className="profile-field-input" value={value ?? ""} disabled={!editable}
+        onChange={editable ? (event) => onChange?.(event.target.value) : undefined} />
+      {error && <div style={{ marginTop: 5, color: "#b64b3d", fontSize: 10.5 }}>{error}</div>}
     </div>
   );
 }

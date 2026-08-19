@@ -1,14 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { BridgeMark, TopBar, Rail, PrimaryButton, Field } from "./components.jsx";
 import {
-  extractDocs, saveProfile, getVerdict, buildDocuments, nationalityLabel,
+  signUp, login, uploadAndExtract, confirmProfile, getVerdict, buildDocuments, nationalityLabel,
 } from "./api.js";
+import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
 const PURPOSES = ["등록금 납부", "아르바이트 급여", "본국 송금", "생활비", "장학금"];
 const SCAN_PAGES = [
-  { key: "arcFront", label: "외국인등록증 앞면", sub: "앞면" },
-  { key: "arcBack", label: "외국인등록증 뒷면", sub: "뒷면" },
-  { key: "passport", label: "여권", sub: "여권 사진면" },
+  { key: "arcFront", docType: "arc_front", label: "외국인등록증 앞면", sub: "앞면" },
+  { key: "arcBack", docType: "arc_back", label: "외국인등록증 뒷면", sub: "뒷면" },
+  { key: "passport", docType: "passport", label: "여권", sub: "여권 사진면" },
 ];
 
 const card = {
@@ -20,21 +21,114 @@ const mono = { fontFamily: "'IBM Plex Mono',monospace" };
 
 export default function App() {
   const [step, setStep] = useState(0);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(window.localStorage.getItem("settle_access_token")));
   const [authMode, setAuthMode] = useState("login");
-  const [auth, setAuth] = useState({ nickname: "", password: "", passwordConfirm: "", passcode: "" });
+  const [auth, setAuth] = useState({ email: "", password: "", passwordConfirm: "", passcode: "" });
   const [authMessage, setAuthMessage] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [lang, setLang] = useState("en");
   const [nat, setNat] = useState(null);
 
   const [scan, setScan] = useState(0);
   const [shots, setShots] = useState({});
+  const [captureError, setCaptureError] = useState("");
+  const [captureLoading, setCaptureLoading] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
   const [extract, setExtract] = useState(null);
-  const [confirmed, setConfirmed] = useState({}); // 저신뢰 필드 확인 여부
+  const [profileDraft, setProfileDraft] = useState({});
+  const [dirtyFields, setDirtyFields] = useState({});
+  const [profileErrors, setProfileErrors] = useState({});
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [profileReplies, setProfileReplies] = useState([]);
 
-  const [answers, setAnswers] = useState({ phone: null, cert: "yes", purposes: { 0: true, 2: true } });
+  const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
   const [verdict, setVerdict] = useState(null);
+  const [chatLoading, setChatLoading] = useState(false);
   const [docs, setDocs] = useState(null);
   const [openDoc, setOpenDoc] = useState(null);
+  const chatEndRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const nativeCameraInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const cameraRequestRef = useRef(false);
+  const pastedImageHandlerRef = useRef(null);
+
+  const startCamera = async (allowNativeFallback = true) => {
+    if (cameraRequestRef.current || cameraStreamRef.current) return;
+    cameraRequestRef.current = true;
+    setCaptureError("");
+    setCameraStarting(true);
+    let timeoutId;
+    let timedOut = false;
+    let streamRequest;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        if (allowNativeFallback) nativeCameraInputRef.current?.click();
+        else setCaptureError("이 브라우저는 웹 카메라를 지원하지 않아요. 기기 카메라로 열기를 눌러 주세요.");
+        return;
+      }
+      streamRequest = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      const timeout = new Promise((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          timedOut = true;
+          reject(new Error("브라우저가 카메라 요청에 응답하지 않았어요. Chrome를 완전히 종료한 뒤 다시 실행해 주세요."));
+        }, 8000);
+      });
+      cameraStreamRef.current = await Promise.race([streamRequest, timeout]);
+      setCameraOpen(true);
+    } catch (error) {
+      if (timedOut) streamRequest?.then((stream) => stream.getTracks().forEach((track) => track.stop())).catch(() => {});
+      setCaptureError(error?.name === "NotAllowedError" ? "카메라 권한을 허용해 주세요." : error instanceof Error ? error.message : "카메라를 열지 못했어요.");
+    } finally {
+      window.clearTimeout(timeoutId);
+      cameraRequestRef.current = false;
+      setCameraStarting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (step !== 4) return;
+    const frame = requestAnimationFrame(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }));
+    return () => cancelAnimationFrame(frame);
+  }, [step, answers.phone, answers.cert, answers.purposes, verdict, chatLoading]);
+
+  useEffect(() => {
+    if (cameraOpen && videoRef.current && cameraStreamRef.current) {
+      videoRef.current.srcObject = cameraStreamRef.current;
+      videoRef.current.play().catch(() => setCaptureError("카메라 미리보기를 시작하지 못했어요."));
+    }
+  }, [cameraOpen]);
+
+  useEffect(() => () => cameraStreamRef.current?.getTracks().forEach((track) => track.stop()), []);
+
+  useEffect(() => {
+    if (step !== 2) return;
+    startCamera(false);
+    return () => {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      setCameraOpen(false);
+      setCameraStarting(false);
+    };
+  }, [step]);
+
+  useEffect(() => {
+    if (step !== 2) return;
+    const pasteImage = (event) => {
+      const imageItem = [...(event.clipboardData?.items || [])].find((item) => item.type.startsWith("image/"));
+      const image = imageItem?.getAsFile();
+      if (!image) {
+        setCaptureError("클립보드에 이미지가 없어요. 이미지를 복사한 뒤 다시 붙여넣어 주세요.");
+        return;
+      }
+      event.preventDefault();
+      pastedImageHandlerRef.current?.(image);
+    };
+    window.addEventListener("paste", pasteImage);
+    return () => window.removeEventListener("paste", pasteImage);
+  }, [step]);
 
   const go = (n) => setStep(n);
 
@@ -58,9 +152,11 @@ export default function App() {
             D-2 STUDENT VISA · BETA
           </div>
           <div style={{ width: "100%" }}><PrimaryButton onClick={() => { setAuthMode("login"); go(-1); }}>시작하기</PrimaryButton></div>
-          <div onClick={() => docs ? go(8) : go(-1)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-            <span aria-hidden="true">🗂️</span> 내 서류함 열기 <span style={{ color: "var(--ok)", fontSize: 11 }}>3건 저장됨</span>
-          </div>
+          {isAuthenticated && (
+            <div onClick={() => docs ? go(8) : go(-1)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> 내 서류함 열기 <span style={{ color: "var(--ok)", fontSize: 11 }}>3건 저장됨</span>
+            </div>
+          )}
         </div>
       </Shell>
     );
@@ -69,21 +165,33 @@ export default function App() {
   if (step === -1) {
     const signup = authMode === "signup";
     const passwordMatches = auth.password && auth.password === auth.passwordConfirm;
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(auth.email.trim());
     const canSubmit = signup
-      ? auth.nickname.trim().length >= 2 && auth.password.length >= 4 && passwordMatches
-      : auth.nickname.trim().length >= 2 && auth.password.length >= 4 && /^\d{4}$/.test(auth.passcode);
+      ? validEmail && auth.password.length >= 8 && passwordMatches
+      : validEmail && auth.password.length >= 8 && /^\d{4}$/.test(auth.passcode);
     const updateAuth = (key) => (e) => setAuth((value) => ({ ...value, [key]: e.target.value }));
-    const submitAuth = (e) => {
+    const submitAuth = async (e) => {
       e.preventDefault();
-      if (!canSubmit) return;
-      if (signup) {
-        setAuthMode("login");
-        setAuth((value) => ({ ...value, password: "", passwordConfirm: "", passcode: "" }));
-        setAuthMessage("회원가입이 완료됐어요. 로그인해 주세요.");
-        return;
-      }
+      if (!canSubmit || authLoading) return;
+      setAuthLoading(true);
       setAuthMessage("");
-      go(1);
+      try {
+        if (signup) {
+          await signUp(auth);
+          setAuthMode("login");
+          setAuth((value) => ({ ...value, password: "", passwordConfirm: "", passcode: "" }));
+          setAuthMessage("회원가입이 완료됐어요. 로그인해 주세요.");
+          return;
+        }
+        const response = await login(auth);
+        window.localStorage.setItem("settle_access_token", response.accessToken);
+        setIsAuthenticated(true);
+        go(1);
+      } catch (error) {
+        setAuthMessage(error instanceof Error ? error.message : "인증 요청을 처리하지 못했어요.");
+      } finally {
+        setAuthLoading(false);
+      }
     };
     return (
       <Shell>
@@ -91,11 +199,11 @@ export default function App() {
         <div style={{ padding: "18px 26px 12px" }}>
           <BridgeMark size={56} />
           <h2 style={{ ...H2, marginTop: 20 }}>{signup ? "첫계좌를 시작해요" : "다시 만나서 반가워요"}</h2>
-          <p style={SUB}>{signup ? "사용할 닉네임과 비밀번호를 입력해 주세요." : "닉네임과 비밀번호, 4자리 Passcode를 입력해 주세요."}</p>
+          <p style={SUB}>{signup ? "사용할 이메일과 8자리 이상 비밀번호를 입력해 주세요." : "이메일과 비밀번호, 4자리 Passcode를 입력해 주세요."}</p>
         </div>
         <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
           {authMessage && <div role="status" style={{ padding: "11px 13px", borderRadius: 11, background: "oklch(.55 .14 150/.09)", color: "oklch(.42 .12 150)", fontSize: 12.5, lineHeight: 1.45 }}>{authMessage}</div>}
-          <AuthInput label="닉네임" value={auth.nickname} onChange={updateAuth("nickname")} placeholder="닉네임을 입력하세요" autoComplete="username" />
+          <AuthInput label="이메일" type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" />
           <AuthInput label="비밀번호" type="password" value={auth.password} onChange={updateAuth("password")} placeholder="비밀번호를 입력하세요" autoComplete={signup ? "new-password" : "current-password"} />
           {signup ? (
             <>
@@ -107,7 +215,7 @@ export default function App() {
           )}
         </form>
         <div style={{ padding: "12px 26px 34px" }}>
-          <PrimaryButton disabled={!canSubmit} onClick={() => submitAuth({ preventDefault() {} })}>{signup ? "회원가입" : "로그인"}</PrimaryButton>
+          <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? "처리 중…" : signup ? "회원가입" : "로그인"}</PrimaryButton>
           <button type="button" onClick={() => { setAuthMode(signup ? "login" : "signup"); setAuthMessage(""); }}
             style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
             {signup ? "이미 계정이 있나요? 로그인" : "계정이 없나요? 회원가입"}
@@ -140,18 +248,61 @@ export default function App() {
 
   // ── 2 촬영 ──
   if (step === 2) {
-    const allShot = SCAN_PAGES.every((p) => shots[p.key]);
-    const shoot = async () => {
-      const next = { ...shots, [SCAN_PAGES[scan].key]: true };
-      setShots(next);
-      const empty = SCAN_PAGES.findIndex((p) => !next[p.key]);
-      if (empty === -1) {
-        const data = await extractDocs(next);
-        setExtract(data);
-        setNat(data?.profile?.nationality || null);
-        go(3);
-      } else setScan(empty);
+    const stopCamera = () => {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      setCameraOpen(false);
     };
+    const uploadPng = async (png) => {
+      setCaptureError("");
+      setCaptureLoading(true);
+      try {
+        const page = SCAN_PAGES[scan];
+        const data = await uploadAndExtract(png, page.docType);
+        const next = { ...shots, [page.key]: png };
+        setShots(next);
+        setExtract(data);
+        setProfileDraft(Object.fromEntries((data.fields || []).map((field) => [field.key, field.value])));
+        setDirtyFields({});
+        setProfileErrors({});
+        setNat(data?.profile?.nationality || null);
+        const empty = SCAN_PAGES.findIndex((page) => !next[page.key]);
+        if (empty === -1) {
+          go(3);
+        } else setScan(empty);
+      } catch (error) {
+        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+      } finally {
+        setCaptureLoading(false);
+      }
+    };
+    const selectImage = async (event) => {
+      const source = event.target.files?.[0];
+      event.target.value = "";
+      if (!source) return;
+      try {
+        await uploadPng(await convertImageToPng(source));
+      } catch (error) {
+        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+      }
+    };
+    pastedImageHandlerRef.current = async (source) => {
+      try {
+        await uploadPng(await convertImageToPng(source));
+      } catch (error) {
+        setCaptureError(error instanceof Error ? error.message : "붙여넣은 이미지를 처리하지 못했어요.");
+      }
+    };
+    const takePhoto = async () => {
+      try {
+        const png = await captureVideoFrameAsPng(videoRef.current, `${SCAN_PAGES[scan].key}.png`);
+        stopCamera();
+        await uploadPng(png);
+      } catch (error) {
+        setCaptureError(error instanceof Error ? error.message : "사진을 처리하지 못했어요.");
+      }
+    };
+    const currentShot = shots[SCAN_PAGES[scan].key];
     return (
       <Shell>
         <TopBar title="서류 촬영" onBack={() => go(1)} />
@@ -177,18 +328,27 @@ export default function App() {
           })}
         </div>
         <div style={{ margin: "0 24px", flex: 1, minHeight: 220, borderRadius: 18, background: "oklch(0.18 0.012 60)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 20 }}>
-          {shots[SCAN_PAGES[scan].key] && (
+          {currentShot && (
             <div style={{ width: 40, height: 40, borderRadius: 99, background: "var(--ok)", color: "#fff", fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
           )}
-          <div style={{ width: "92%", height: "72%", minHeight: 150, border: "1px dashed oklch(0.65 0.01 60)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "repeating-linear-gradient(135deg,transparent 0 10px,oklch(.4 .01 60/.13) 10px 20px)" }}>
-            <div style={{ ...mono, fontSize: 11, color: "oklch(0.7 0.01 60)", textAlign: "center" }}>{SCAN_PAGES[scan].label}</div>
+          <div className="scan-preview">
+            {cameraStarting
+              ? <div className="camera-starting" role="status">카메라 권한을 확인하는 중이에요.<small>브라우저 팝업에서 ‘허용’을 눌러 주세요.</small></div>
+              : cameraOpen
+              ? <video ref={videoRef} autoPlay playsInline muted aria-label={`${SCAN_PAGES[scan].label} 카메라 미리보기`} />
+              : currentShot
+              ? <ImagePreview file={currentShot} alt={`${SCAN_PAGES[scan].label} 촬영 미리보기`} />
+              : <div style={{ ...mono, fontSize: 11, color: "oklch(0.7 0.01 60)", textAlign: "center" }}>{SCAN_PAGES[scan].label}</div>}
           </div>
-          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; 조명 상태 좋음</div>
+          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {cameraStarting ? "카메라 권한 대기 중" : cameraOpen ? "카메라 준비됨" : currentShot ? "PNG 변환 완료" : "카드를 안내선 안에 맞춰 주세요"}</div>
         </div>
-        <div style={{ margin: "12px 24px 0", padding: "10px 13px", borderRadius: 12, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.5, color: "var(--muted)" }}>재학증명서는 사진 촬영 없이 종이 원본만 준비하면 돼요. 발급처는 뒤에서 안내해 드려요.</div>
+        {captureError && <div role="alert" className="capture-error">{captureError} <button type="button" onClick={() => nativeCameraInputRef.current?.click()}>기기 카메라로 열기</button></div>}
+        <div style={{ margin: "12px 24px 0", padding: "10px 13px", borderRadius: 12, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.5, color: "var(--muted)" }}>이미지를 복사했다면 <b>Cmd+V</b> 또는 <b>Ctrl+V</b>로 붙여넣을 수 있어요.<br />재학증명서는 사진 촬영 없이 종이 원본만 준비하면 돼요.</div>
         <div style={{ padding: "16px 24px 34px", display: "flex", gap: 12 }}>
-          <div style={{ flex: 1 }}><PrimaryButton onClick={shoot}>{allShot ? "이 장 다시 찍기" : "촬영하기"}</PrimaryButton></div>
-          <div className="tap" style={{ minHeight: 56, padding: "0 18px", display: "flex", alignItems: "center", borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", fontSize: 14, fontWeight: 600 }}>파일 첨부</div>
+          <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
+          <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
+          <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? "업로드·인식 중…" : cameraStarting ? "카메라 연결 중…" : cameraOpen ? "사진 찍기" : currentShot ? "이 장 다시 찍기" : "촬영하기"}</PrimaryButton></div>
+          <button type="button" disabled={captureLoading || cameraStarting} onClick={cameraOpen ? stopCamera : () => fileInputRef.current?.click()} className="file-attach tap">{cameraOpen ? "닫기" : "파일 첨부"}</button>
         </div>
       </Shell>
     );
@@ -196,161 +356,191 @@ export default function App() {
 
   // ── 3 프로필 만들기 (OCR 확인) ──
   if (step === 3) {
-    const p = extract?.profile || {};
-    const c = extract?.confidence || {};
-    const lowKeys = Object.keys(c).filter((k) => c[k] < 0.9 && !confirmed[k]);
-    const canGo = lowKeys.length === 0;
-    const fieldRow = (key, label, value) => (
-      <Field key={key} label={label} value={value}
-        confidence={c[key]} confirmed={confirmed[key]} onFix={() => setConfirmed((s) => ({ ...s, [key]: true }))} />
-    );
+    const fields = extract?.fields || [];
+    const updateField = (field, value) => {
+      if (!field.editable) return;
+      setProfileDraft((current) => ({ ...current, [field.key]: value }));
+      setDirtyFields((current) => {
+        const next = { ...current };
+        if (value === field.value) delete next[field.key];
+        else next[field.key] = value;
+        return next;
+      });
+      setProfileErrors((current) => {
+        const next = { ...current };
+        delete next[field.key];
+        return next;
+      });
+    };
+    const submitProfile = async () => {
+      setProfileSubmitting(true);
+      setProfileErrors({});
+      try {
+        const sessionId = extract?.state?.session_id || "demo-001";
+        const response = await confirmProfile(sessionId, dirtyFields);
+        setExtract((current) => ({
+          ...current,
+          profile: response.state?.profile || {},
+          state: response.state || {},
+          agentResponse: response,
+        }));
+        setDirtyFields({});
+        if (response.reply) setProfileReplies((current) => [...current, response.reply]);
+        if (response.ui?.type === "question") go(4);
+      } catch (error) {
+        if (error?.status === 422 && error?.code === "validation_failed") {
+          const details = error.details;
+          const entries = Array.isArray(details)
+            ? details.map((detail) => [detail.field, detail.reason || error.message])
+            : Object.entries(details || {}).map(([field, reason]) => [field, String(reason)]);
+          setProfileErrors(Object.fromEntries(entries.filter(([field]) => field && field !== "message")));
+        }
+        if (!error?.details || Object.keys(error.details).length === 0) {
+          setProfileErrors({ _form: error instanceof Error ? error.message : "프로필을 확인하지 못했어요." });
+        }
+      } finally {
+        setProfileSubmitting(false);
+      }
+    };
     return (
       <Shell>
         <TopBar title="프로필 만들기" onBack={() => go(2)} />
         <Rail active={2} />
         <div style={{ padding: "4px 24px 14px" }}>
           <h2 style={H2}>카드에서 만든 프로필</h2>
-          <p style={SUB}>{canGo ? "모든 항목을 확인했어요. 계속 진행할 수 있어요." : `수정하려면 항목을 누르세요. ${lowKeys.length}개 항목을 확인해야 해요.`}</p>
+          <p style={SUB}>노란색 항목을 확인하고, 잘못 읽은 값만 수정해 주세요.</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 9 }}>
-          <Label>외국인등록증에서</Label>
-          {fieldRow("name_en", "이름", p.name_en)}
-          <Row2>
-            {fieldRow("visa_type", "체류자격", p.visa_type)}
-            {fieldRow("arc_no", "등록번호", mask(p.arc_no))}
-          </Row2>
-          {fieldRow("addr_kr", "체류지 (뒷면)", p.addr_kr)}
-          {fieldRow("stay_expiry", "체류기간", `2026.02.28 → ${p.stay_expiry}`)}
-          <Label>여권에서</Label>
-          <Row2>
-            <Field label="여권번호" value="C41•••••" />
-            <Field label="만료일" value="2031.04.09" />
-          </Row2>
+          <Label>OCR 추출 결과</Label>
+          {fields.map((field) => (
+            <Field key={field.key} label={field.label} value={profileDraft[field.key] ?? field.value}
+              confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
+              error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} />
+          ))}
+          {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
         </div>
         <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>확인하기 전에는 진행되지 않아요. 읽지 못한 값은 임의로 채우지 않아요.</div>
-          <PrimaryButton disabled={!canGo} onClick={async () => { await saveProfile(p, answers); go(4); }}>
-            {canGo ? "확인하고 계속" : `확인 (${lowKeys.length}개 남음)`}
+          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>수정 불가 항목은 마스킹된 값으로 전송되지 않아요.</div>
+          <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
+            {profileSubmitting ? "확인 중…" : "확인하고 계속"}
           </PrimaryButton>
         </div>
       </Shell>
     );
   }
 
-  // ── 4 추가 질문 ──
-  if (step === 4)
-    return (
-      <Shell>
-        <TopBar title="몇 가지 질문" onBack={() => go(3)} />
-        <Rail active={2} />
-        <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>두 가지만 더</h2>
-          <p style={SUB}>서류에서 읽을 수 없는 항목이에요. 은행 창구에서 물어보는 것들이에요.</p>
-        </div>
-        <div className="scroll" style={{ padding: "6px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
-          <div>
-            <QTitle>본인 명의 국내 휴대폰이 있나요?</QTitle>
-            <div style={{ margin: "-7px 0 9px", fontSize: 11, color: "var(--muted)" }}>본인 명의 국내 통신사 개통 휴대폰</div>
-            <Row2>
-              <Pick ok on={answers.phone === "yes"} onClick={() => setAnswers({ ...answers, phone: "yes" })}>네, 있어요</Pick>
-              <Pick on={answers.phone === "no"} onClick={() => setAnswers({ ...answers, phone: "no" })}>아직 없어요</Pick>
-            </Row2>
-            {answers.phone === "yes" && <Field label="휴대폰 번호" value="010-4•••-••21  영업 일치 확인됨" />}
-          </div>
-          <div>
-            <QTitle>재학증명서 또는 입학허가서가 있나요?</QTitle>
-            <Row2>
-              <Pick ok on={answers.cert === "yes"} onClick={() => setAnswers({ ...answers, cert: "yes" })}>있어요</Pick>
-              <Pick on={answers.cert === "no"} onClick={() => setAnswers({ ...answers, cert: "no" })}>아직 없어요</Pick>
-            </Row2>
-          </div>
-          <div>
-            <QTitle>계좌를 왜 만드나요?</QTitle>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {PURPOSES.map((label, i) => {
-                const on = answers.purposes[i];
-                return (
-                  <div key={label} onClick={() => setAnswers({ ...answers, purposes: { ...answers.purposes, [i]: !on } })} className="tap"
-                    style={{ minHeight: 44, display: "flex", alignItems: "center", padding: "0 15px", borderRadius: 999, fontSize: 13.5, fontWeight: on ? 700 : 600,
-                      border: on ? "1.5px solid var(--brand-2)" : "1px solid oklch(0.88 0.01 60)", background: on ? "oklch(0.7 0.13 45 / 0.08)" : "#fff" }}>
-                    {label}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        <div style={{ padding: "14px 24px 34px" }}>
-          <PrimaryButton disabled={!answers.phone} onClick={async () => {
-            const scenario = new URLSearchParams(window.location.search).get("scenario");
-            setVerdict(await getVerdict("mock", { ...answers, scenario }));
-            go(5);
-          }}>결과 보기</PrimaryButton>
-        </div>
-      </Shell>
-    );
+  // ── 4 AI 상담 + 심사 ──
+  if (step === 4) {
+    const hasPurpose = Object.values(answers.purposes).some(Boolean);
+    const updatePhone = (phone) => { setAnswers((value) => ({ ...value, phone })); setVerdict(null); };
+    const updateCert = (cert) => { setAnswers((value) => ({ ...value, cert })); setVerdict(null); };
+    const togglePurpose = (index) => {
+      setAnswers((value) => ({ ...value, purposes: { ...value.purposes, [index]: !value.purposes[index] } }));
+      setVerdict(null);
+    };
+    const runVerdict = async () => {
+      setChatLoading(true);
+      const scenario = new URLSearchParams(window.location.search).get("scenario");
+      setVerdict(await getVerdict("mock", { ...answers, scenario }));
+      setChatLoading(false);
+    };
 
-  // ── 5 판정 결과 ──
-  if (step === 5 && verdict)
+    if (verdict) {
+      const editAnswers = () => setVerdict(null);
+      return (
+        <Shell>
+          <TopBar title="첫계좌 AI" onBack={editAnswers} right={<span className="review-status"><i />심사 완료</span>} />
+          <Rail active={3} />
+          <div className="scroll review-scroll">
+            <section className="review-hero">
+              <div className="review-kicker">계좌&nbsp;&nbsp;개설&nbsp;&nbsp;진단&nbsp;&nbsp;결과</div>
+              <h1>{verdict.headline}</h1>
+              <p>{verdict.summary}</p>
+            </section>
+
+            <div className="review-content">
+              {verdict.blocker && (
+                <section className="review-card blocker">
+                  <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
+                  <p>{verdict.blocker.body}</p>
+                </section>
+              )}
+              <AccountCard title="한도제한계좌" subtitle="한도제한계좌 · 1일 이체 100만원 한도" account={verdict.limited} />
+              <AccountCard title="일반계좌" subtitle="일반계좌" account={verdict.regular} />
+
+              <details className="review-sources">
+                <summary>판정 근거</summary>
+                {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
+              </details>
+              <p className="review-disclaimer">이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.</p>
+            </div>
+          </div>
+          <div className="review-actions">
+            <button type="button" onClick={editAnswers} className="review-edit tap">답변 수정</button>
+            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind)}</button>
+          </div>
+        </Shell>
+      );
+    }
+
     return (
       <Shell>
-        <div style={{ paddingTop: 46 }}><Rail active={3} /></div>
-        <div style={{ padding: "8px 24px 20px", background: "oklch(0.22 0.012 60)", color: "#fff" }}>
-          <div style={{ ...mono, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: verdict.blocker ? "oklch(0.8 0.1 80)" : "oklch(0.75 0.03 150)", marginBottom: 12 }}>계좌 개설 진단 결과</div>
-          <h2 style={{ margin: 0, fontSize: 27, fontWeight: 800, lineHeight: 1.22, letterSpacing: "-0.02em" }}>{verdict.headline}</h2>
-          <div style={{ marginTop: 10, fontSize: 12.5, lineHeight: 1.5, color: "oklch(.82 .012 60)" }}>{verdict.summary}</div>
-        </div>
-        <div className="scroll" style={{ padding: "18px 24px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {verdict.blocker && (
-            <div style={{ ...card, border: "1.5px solid var(--warn)", background: "oklch(0.6 0.14 80 / 0.07)" }}>
-              <RowBetween>
-                <b style={{ fontSize: 15.5 }}>{verdict.blocker.title}</b>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "oklch(0.5 0.14 80)", whiteSpace: "nowrap" }}>{verdict.blocker.badge}</span>
-              </RowBetween>
-              {verdict.blocker.meta && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{verdict.blocker.meta}</div>}
-              <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.blocker.body}</div>
-            </div>
+        <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
+        <Rail active={3} />
+        <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {profileReplies.map((reply, index) => <ChatBubble avatar key={`${reply}-${index}`}>{reply}</ChatBubble>)}
+          <ChatBubble avatar>
+            서류 확인이 끝났어요. 은행 방문 가능 여부를 확인할게요. 아래 질문에 순서대로 답해 주세요.
+          </ChatBubble>
+
+          <ChatBubble avatar>
+            <b>본인 명의 국내 휴대폰이 있나요?</b>
+            <span>국내 통신사에서 본인 명의로 개통한 휴대폰이에요.</span>
+            <ChatOptions>
+              <ChatChoice selected={answers.phone === "yes"} onClick={() => updatePhone("yes")}>네, 있어요</ChatChoice>
+              <ChatChoice selected={answers.phone === "no"} onClick={() => updatePhone("no")}>아직 없어요</ChatChoice>
+            </ChatOptions>
+          </ChatBubble>
+
+          {answers.phone && (
+            <>
+              <ChatBubble mine>{answers.phone === "yes" ? "네, 본인 명의 휴대폰이 있어요." : "아직 본인 명의 휴대폰이 없어요."}</ChatBubble>
+              <ChatBubble avatar>
+                <b>재학증명서 또는 입학허가서가 있나요?</b>
+                <span>은행에는 촬영본이 아닌 종이 원본을 제출해요.</span>
+                <ChatOptions>
+                  <ChatChoice selected={answers.cert === "yes"} onClick={() => updateCert("yes")}>있어요</ChatChoice>
+                  <ChatChoice selected={answers.cert === "no"} onClick={() => updateCert("no")}>아직 없어요</ChatChoice>
+                </ChatOptions>
+              </ChatBubble>
+            </>
           )}
-          <div style={{ ...card, border: verdict.limited.ready ? "1.5px solid var(--ok)" : "1px solid var(--line)", background: verdict.limited.ready ? "oklch(0.55 0.14 150 / 0.06)" : "#fff" }}>
-            <RowBetween>
-              <b style={{ fontSize: 15.5 }}>한도제한계좌</b>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: verdict.limited.ready ? "oklch(0.45 0.12 150)" : "oklch(0.55 0.14 80)", whiteSpace: "nowrap" }}>{verdict.limited.status}</span>
-            </RowBetween>
-            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>1일 이체 100만원 한도</div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.limited.body}</div>
-          </div>
-          <div style={card}>
-            <RowBetween>
-              <b style={{ fontSize: 15.5 }}>일반계좌</b>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: "oklch(0.55 0.14 80)", whiteSpace: "nowrap" }}>{verdict.regular.status}</span>
-            </RowBetween>
-            <div style={{ fontSize: 13, lineHeight: 1.5, color: "oklch(0.38 0.012 60)", marginTop: 9 }}>{verdict.regular.body}</div>
-          </div>
-          <div style={{ padding: "14px 15px", borderRadius: 14, background: "oklch(0.93 0.008 60)" }}>
-            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 9 }}>판정 근거</div>
-            {verdict.sources.map((s) => (
-              <div key={s} style={{ fontSize: 12.5, lineHeight: 1.45, color: "oklch(0.35 0.012 60)", fontFamily: "'Noto Sans KR',sans-serif", marginBottom: 6 }}>· {s}</div>
-            ))}
-          </div>
-        </div>
-        <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--muted)" }}>이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.</div>
-          <div style={{ display: "flex", gap: 9 }}>
-            <button type="button" onClick={() => go(4)} className="tap"
-              style={{ width: 88, minHeight: 54, flex: "none", borderRadius: 13, border: "1px solid var(--line)", background: "#fff", color: "var(--ink)", fontSize: 13, fontWeight: 700 }}>
-              답변 수정
-            </button>
-            <div style={{ minHeight: 54, flex: 1, borderRadius: 13, background: "#c44f40", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 10px", textAlign: "center", fontSize: 14, fontWeight: 800 }} onClick={() => go(6)} className="tap">{verdictCta(verdict.kind)}</div>
-          </div>
+
+          {answers.cert && (
+            <>
+              <ChatBubble mine>{answers.cert === "yes" ? "학교 서류를 준비했어요." : "학교 서류는 아직 없어요."}</ChatBubble>
+              <ChatBubble avatar>
+                <b>계좌를 주로 어디에 사용할 건가요?</b>
+                <span>여러 개를 선택할 수 있어요.</span>
+                <ChatOptions wrap>
+                  {PURPOSES.map((label, index) => <ChatChoice key={label} selected={!!answers.purposes[index]} onClick={() => togglePurpose(index)}>{label}</ChatChoice>)}
+                </ChatOptions>
+                {hasPurpose && !verdict && <button type="button" disabled={chatLoading} onClick={runVerdict} className="chat-submit tap">{chatLoading ? "확인하고 있어요…" : "선택 완료 · 심사하기"}</button>}
+              </ChatBubble>
+            </>
+          )}
+
+          <div ref={chatEndRef} aria-hidden="true" />
         </div>
       </Shell>
     );
+  }
 
   // ── 6 준비 안내 ──
   if (step === 6 && verdict)
     return (
       <Shell>
-        <TopBar title="준비할 것" onBack={() => go(5)} />
+        <TopBar title="준비할 것" onBack={() => go(4)} />
         <Rail active={4} />
         <div style={{ padding: "4px 24px 16px" }}>
           <div style={{ padding: 17, borderRadius: 16, background: "#c44f40", color: "#fff" }}>
@@ -496,6 +686,15 @@ function Shell({ children, dark }) {
 function Label({ children }) {
   return <div style={{ padding: "6px 0", ...mono, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)" }}>{children}</div>;
 }
+function ImagePreview({ file, alt }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    const nextUrl = URL.createObjectURL(file);
+    setUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [file]);
+  return url ? <img src={url} alt={alt} /> : null;
+}
 function AuthInput({ label, type = "text", value, onChange, placeholder, ...inputProps }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -505,14 +704,31 @@ function AuthInput({ label, type = "text", value, onChange, placeholder, ...inpu
     </label>
   );
 }
-function QTitle({ children }) {
-  return <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 10, fontFamily: "'Noto Sans KR',sans-serif" }}>{children}</div>;
+function ChatBubble({ children, mine, avatar, wide }) {
+  return (
+    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}`}>
+      {avatar && <BridgeMark size={32} />}
+      <div className="chat-bubble">{children}</div>
+    </div>
+  );
+}
+function ChatOptions({ children, wrap }) {
+  return <div className={`chat-options${wrap ? " wrap" : ""}`}>{children}</div>;
+}
+function ChatChoice({ children, selected, onClick }) {
+  return <button type="button" onClick={onClick} className={`chat-choice tap${selected ? " selected" : ""}`}>{selected && <span>✓</span>}{children}</button>;
+}
+function AccountCard({ title, subtitle, account }) {
+  return (
+    <section className={`review-card account${account.ready ? " ready" : ""}`}>
+      <div className="review-card-head"><b>{title}</b><span>{account.status}</span></div>
+      <div className="review-card-sub">{subtitle}</div>
+      <p>{account.body}</p>
+    </section>
+  );
 }
 function Row2({ children }) {
   return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 10 }}>{children}</div>;
-}
-function RowBetween({ children }) {
-  return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>{children}</div>;
 }
 function Pick({ children, on, ok, onClick }) {
   const accent = ok ? "var(--ok)" : "var(--brand-2)";

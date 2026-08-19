@@ -63,6 +63,17 @@ jobs:
             --tag settle-frontend:ci \
             frontend
 
+      - name: Test Spring backend
+        working-directory: backend/server
+        run: ./gradlew test --no-daemon
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag settle-backend:ci \
+            backend
+
       - name: Build AI Docker image
         run: |
           docker build \

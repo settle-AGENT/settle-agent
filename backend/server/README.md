@@ -31,4 +31,4 @@ src/main/java/com/settle/backend
 3. `POST /api/v1/documents/extractions`에 object key와 문서 종류를 전달합니다.
 4. 백엔드가 AI 서버에 추출을 요청하고 반환 JSON과 원본 object key를 저장합니다.
 
-현재는 API 계약과 계층만 구성했습니다. DB, JWT, S3, AI 서버 연동 전에는 관련 API가 `501 FEATURE_NOT_CONFIGURED`를 반환합니다.
+회원 인증은 PostgreSQL과 연결되며 JWT를 발급합니다. S3·AI 서버 연동은 환경 설정이 필요합니다.

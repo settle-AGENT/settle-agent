@@ -5,5 +5,5 @@ import java.util.Map;
 
 public interface AiDocumentClient {
 
-    Map<String, Object> extract(String objectKey, DocumentType documentType);
+    Map<String, Object> extract(String sessionId, byte[] image, DocumentType documentType);
 }

@@ -1,15 +1,35 @@
 package com.settle.backend.domain.document.service;
 
-import com.settle.backend.common.exception.FeatureNotConfiguredException;
+import com.settle.backend.domain.document.client.AiDocumentClient;
 import com.settle.backend.domain.document.dto.ExtractDocumentRequest;
-import com.settle.backend.domain.document.dto.ExtractDocumentResponse;
+import com.settle.backend.domain.file.service.FileService;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
 public class DocumentService {
+    private final FileService fileService;
+    private final AiDocumentClient aiDocumentClient;
 
-    public ExtractDocumentResponse extractAndSave(UUID memberId, ExtractDocumentRequest request) {
-        throw new FeatureNotConfiguredException("AI 서버 클라이언트와 문서 저장소가 아직 연결되지 않았습니다.");
+    public DocumentService(FileService fileService, AiDocumentClient aiDocumentClient) {
+        this.fileService = fileService;
+        this.aiDocumentClient = aiDocumentClient;
+    }
+
+    public Map<String, Object> extractAndSave(UUID memberId, ExtractDocumentRequest request) {
+        FileService.PreparedUpload prepared = fileService.prepareForExtraction(memberId, request.uploadId());
+        try {
+            Map<String, Object> response = aiDocumentClient.extract(
+                    memberId.toString(),
+                    prepared.bytes(),
+                    prepared.ticket().documentType()
+            );
+            fileService.markDone(prepared.ticket());
+            return response;
+        } catch (RuntimeException exception) {
+            fileService.markFailed(prepared.ticket());
+            throw exception;
+        }
     }
 }
