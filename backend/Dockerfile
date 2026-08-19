@@ -4,13 +4,13 @@ FROM eclipse-temurin:21-jdk AS build
 
 WORKDIR /workspace
 
-COPY gradlew .
-COPY gradle gradle
-COPY build.gradle* settings.gradle* ./
+COPY server/gradlew .
+COPY server/gradle gradle
+COPY server/build.gradle server/settings.gradle ./
 
 RUN chmod +x gradlew
 
-COPY src src
+COPY server/src src
 
 RUN ./gradlew clean bootJar --no-daemon
 
