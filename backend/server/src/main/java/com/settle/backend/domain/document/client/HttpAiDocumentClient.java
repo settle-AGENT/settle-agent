@@ -2,7 +2,7 @@ package com.settle.backend.domain.document.client;
 
 import com.settle.backend.domain.file.entity.DocumentType;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
@@ -15,11 +15,8 @@ import org.springframework.web.client.RestClient;
 public class HttpAiDocumentClient implements AiDocumentClient {
     private final RestClient restClient;
 
-    public HttpAiDocumentClient(
-            RestClient.Builder builder,
-            @Value("${settle.ai.base-url}") String baseUrl
-    ) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+    public HttpAiDocumentClient(@Qualifier("aiRestClient") RestClient restClient) {
+        this.restClient = restClient;
     }
 
     @Override
