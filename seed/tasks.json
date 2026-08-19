@@ -1,0 +1,52 @@
+[
+  {
+    "id": "alien_registration",
+    "label": "외국인등록",
+    "status": "available",
+    "prereq": [],
+    "blocked_by": [],
+    "deadline": "2026-11-13",
+    "d_day": 87,
+    "evidence": ["출입국관리법 제31조"]
+  },
+  {
+    "id": "mobile_subscription",
+    "label": "국내 통신 가입",
+    "status": "locked",
+    "prereq": ["alien_registration"],
+    "blocked_by": ["외국인등록"],
+    "deadline": null,
+    "d_day": null,
+    "evidence": []
+  },
+  {
+    "id": "residence_change",
+    "label": "체류지 변경신고",
+    "status": "locked",
+    "prereq": ["alien_registration"],
+    "blocked_by": ["외국인등록"],
+    "deadline": null,
+    "d_day": null,
+    "evidence": ["출입국관리법 제36조"]
+  },
+  {
+    "id": "work_activity",
+    "label": "체류자격외활동허가",
+    "status": "locked",
+    "prereq": ["alien_registration"],
+    "blocked_by": ["외국인등록"],
+    "deadline": null,
+    "d_day": null,
+    "evidence": ["출입국관리법 제20조"]
+  },
+  {
+    "id": "open_bank_account",
+    "label": "은행 계좌 개설",
+    "status": "locked",
+    "prereq": ["alien_registration"],
+    "blocked_by": ["외국인등록"],
+    "deadline": null,
+    "d_day": null,
+    "evidence": ["금융실명법 제3조", "특정금융정보법 제5조의2"]
+  }
+]

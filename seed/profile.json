@@ -1,0 +1,19 @@
+{
+  "session_id": "demo-001",
+  "locale": "en",
+  "name_en": "NGUYEN VAN A",
+  "nationality": "VNM",
+  "birth_date": "1999-01-01",
+  "sex": "M",
+  "passport_no": "M12345678",
+  "passport_expiry": "2030-05-20",
+  "arc_no": null,
+  "visa_type": "D-2",
+  "entry_date": "2026-08-15",
+  "stay_expiry": "2027-02-28",
+  "addr_kr": null,
+  "phone_kr": null,
+  "org_name": null,
+  "purpose": null,
+  "income_source": null
+}
