@@ -45,6 +45,7 @@ jobs:
           test -f ai/Dockerfile
           test -f compose.production.yml
           test -f deploy/Caddyfile
+          test -f deploy/prepare-runtime-env.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
@@ -135,15 +136,23 @@ jobs:
             echo "FRONTEND_CONTAINER_PORT=3000"
             echo "BACKEND_CONTAINER_PORT=8080"
             echo "AI_CONTAINER_PORT=8000"
+            echo "RDS_SECRET_ID=rds!db-9e062b45-1069-445e-9b94-894666f24268"
+            echo "APP_SECRET_ID=fsai/hackathon/app-runtime"
+            echo "RDS_ENDPOINT=fsai-hackathon-pg.cxcaw6gicm6c.ap-northeast-2.rds.amazonaws.com"
+            echo "RDS_PORT=5432"
+            echo "RDS_DATABASE=settlement"
+            echo "AWS_S3_BUCKET=fsai-hackathon-assets-apne2-20260819"
           } > deploy.env
 
           COMPOSE_B64="$(base64 -w 0 compose.production.yml)"
           CADDY_B64="$(base64 -w 0 deploy/Caddyfile)"
+          RUNTIME_ENV_B64="$(base64 -w 0 deploy/prepare-runtime-env.sh)"
           ENV_B64="$(base64 -w 0 deploy.env)"
 
           jq -n \
             --arg compose "$COMPOSE_B64" \
             --arg caddy "$CADDY_B64" \
+            --arg runtime_env "$RUNTIME_ENV_B64" \
             --arg envfile "$ENV_B64" \
             --arg region "$AWS_REGION" \
             --arg registry "$ECR_REGISTRY" \
@@ -160,6 +169,10 @@ jobs:
                   " | base64 -d > /opt/fsai/deploy/Caddyfile"
                 ),
                 (
+                  "printf %s " + ($runtime_env | @sh) +
+                  " | base64 -d > /opt/fsai/deploy/prepare-runtime-env.sh"
+                ),
+                (
                   "printf %s " + ($envfile | @sh) +
                   " | base64 -d > /opt/fsai/.env"
                 ),
@@ -170,8 +183,12 @@ jobs:
                   ($registry | @sh)
                 ),
                 "cd /opt/fsai",
+                "set -a && . /opt/fsai/.env && set +a",
+                "chmod 700 /opt/fsai/deploy/prepare-runtime-env.sh",
+                "/opt/fsai/deploy/prepare-runtime-env.sh",
                 "docker compose --env-file .env -f compose.production.yml config --quiet",
                 "docker compose --env-file .env -f compose.production.yml pull",
+                "if docker container inspect fsai-caddy >/dev/null 2>&1; then docker rm -f fsai-caddy; fi",
                 "docker compose --env-file .env -f compose.production.yml up -d --remove-orphans",
                 "docker compose --env-file .env -f compose.production.yml ps",
                 "curl --fail --silent --show-error --retry 12 --retry-delay 5 --retry-all-errors http://127.0.0.1/health",
