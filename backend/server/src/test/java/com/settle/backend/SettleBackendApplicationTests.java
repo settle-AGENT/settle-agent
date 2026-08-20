@@ -48,7 +48,15 @@ class SettleBackendApplicationTests {
                 .andExpect(jsonPath("$['paths']['/api/session']['post']['security'][0].bearerAuth").isArray())
                 .andExpect(jsonPath("$['paths']['/api/profile/confirm']['post']['responses']['403']").exists())
                 .andExpect(jsonPath("$['paths']['/api/v1/documents/extractions']['post']['responses']['415']").exists())
-                .andExpect(jsonPath("$['paths']['/api/v1/uploads']['post']['responses']['401']").exists());
+                .andExpect(jsonPath("$['paths']['/api/v1/uploads']['post']['responses']['401']").exists())
+                .andExpect(jsonPath("$['paths']['/api/ledger']['get']['security'][0].bearerAuth").isArray())
+                .andExpect(jsonPath("$['paths']['/api/ledger']['get']['responses']['403']").exists())
+                .andExpect(jsonPath(
+                        "$['paths']['/api/actions/{actionId}/approve']['post']['responses']['403']"
+                ).exists())
+                .andExpect(jsonPath(
+                        "$['paths']['/api/documents/{documentId}/download']['get']['responses']['404']"
+                ).exists());
     }
 
     @Test
