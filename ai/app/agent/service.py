@@ -6,11 +6,13 @@ LangGraph 를 몰라도 이 파일의 invoke() 하나만 알면 된다.
 from __future__ import annotations
 
 import os
+import re
 import uuid
+from datetime import date
 from functools import lru_cache
 from typing import Any, ClassVar, Literal, Optional
 
-from app.agent.graph import CITE_LABEL, ask_visa, build_graph
+from app.agent.graph import ACTION_FIELDS, CITE_LABEL, ask_visa, build_graph
 from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
 from app.nodes import qa, researcher
@@ -20,6 +22,7 @@ from app.nodes.profiler import (
     HARD_KEYS,
     SOFT_KEYS,
     conflicts,
+    display_value,
     profile_to_payload,
     public_profile,
 )
@@ -28,6 +31,17 @@ from app.tools import llm
 from app.tools import progress as progress_events
 
 DocType = Literal["arc_front", "arc_back", "passport"]
+
+
+def _normalize_phone_kr(value: str) -> str | None:
+    """국내 휴대전화 번호를 검증하고 문서에 쓸 형식으로 정규화한다."""
+    text = str(value).strip()
+    if not re.fullmatch(r"[0-9\s-]+", text):
+        return None
+    digits = re.sub(r"\D", "", text)
+    if not re.fullmatch(r"010\d{8}", digits):
+        return None
+    return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
 
 
 # ──────────────────────────────────────────────────────────
@@ -164,7 +178,9 @@ def _response(state: dict, reply: str | None = None,
         "state": {
             "session_id": state.get("session_id", ""),
             "locale": state.get("locale", "en"),
-            "profile": public_profile(state.get("profile", {})),
+            "profile": public_profile(
+                state.get("profile", {}), state.get("locale") or "en"
+            ),
             "tasks": state.get("tasks", []),
             "documents": state.get("documents", []),
             "pending_approval": state.get("pending_approval"),
@@ -201,11 +217,32 @@ def start_session(session_id: str | None = None, locale: str = "en",
                 patch[key] = source[key]
     if _seen(sid):
         snap = _graph().get_state(_cfg(sid)).values
+        # stay_expiry가 필수였던 이전 버전에서 질문 중이던 세션도
+        # 새 정책을 바로 따라간다. 답을 억지로 받지 않고 문서 생성을 재개한다.
+        if (snap.get("current_action") == "open_bank_account"
+                and snap.get("asked_field") == "stay_expiry"):
+            patch.update({"asked_field": None, "missing_fields": []})
         if snap.get("current_action") and not snap.get("action_authorized"):
             patch.update({
                 "current_action": None,
                 "asked_field": None,
                 "missing_fields": [],
+                "pending_approval": None,
+                "approval_decision": None,
+            })
+        pending = snap.get("pending_approval") or {}
+        raw_phone = (snap.get("profile") or {}).get("phone_kr")
+        if (pending.get("action_id")
+                and "phone_kr" in ACTION_FIELDS.get(pending["action_id"], [])
+                and raw_phone
+                and _normalize_phone_kr(raw_phone) is None):
+            # 이전 버전에서 검증 없이 저장된 번호가 있으면, 그 값으로 만든
+            # 승인 대기 문서를 이어가지 않고 해당 질문부터 다시 시작한다.
+            patch.update({
+                "profile": {"phone_kr": None},
+                "current_action": pending["action_id"],
+                "action_authorized": True,
+                "asked_field": None,
                 "pending_approval": None,
                 "approval_decision": None,
             })
@@ -522,6 +559,42 @@ def send_message(session_id: str, message: str, emit=None) -> dict:
             else:
                 failed = "값을 알아듣지 못했습니다."
 
+        # LLM 추출은 문장에서 값을 찾는 일만 담당한다. 실제 신청서에
+        # 쓸 수 있는 값인지는 서버가 결정적으로 검증해야 한다.
+        if asked == "phone_kr" and not failed:
+            normalized_phone = _normalize_phone_kr(value)
+            if normalized_phone is None:
+                failed = (
+                    "010으로 시작하는 11자리 휴대전화 번호를 입력해 주세요."
+                    if locale == "ko"
+                    else "Enter an 11-digit mobile number starting with 010."
+                )
+                failed_locale = locale
+            else:
+                value = normalized_phone
+
+        if asked in {"birth_date", "entry_date"} and not failed:
+            try:
+                parsed_date = date.fromisoformat(str(value).strip())
+            except ValueError:
+                parsed_date = None
+            if parsed_date is None:
+                failed = (
+                    "날짜를 YYYY-MM-DD 형식으로 입력해 주세요."
+                    if locale == "ko"
+                    else "Enter the date in YYYY-MM-DD format."
+                )
+                failed_locale = locale
+            elif parsed_date > date.today():
+                failed = (
+                    "입국일은 오늘 이후 날짜일 수 없어요. 실제 입국일을 입력해 주세요."
+                    if asked == "entry_date" and locale == "ko"
+                    else "생년월일은 오늘 이후 날짜일 수 없어요."
+                    if locale == "ko"
+                    else "The date cannot be later than today."
+                )
+                failed_locale = locale
+
         if failed:
             # 값으로 못 읽었다. 오타일 수도 있지만 "그만할래" 일 수도 있다.
             # 그대로 되물으면 빠져나갈 길이 없어 같은 질문만 반복된다.
@@ -556,6 +629,9 @@ def send_message(session_id: str, message: str, emit=None) -> dict:
 
         extra["ask_tries"] = 0
 
+        # 프로필에는 규칙·PDF가 쓰는 enum을 유지하되, 대화 이력에는
+        # 사용자가 선택한 표시명을 남겨 후속 AI 응답에 내부 값이 안 새게 한다.
+        extra["messages"][0]["content"] = display_value(asked, value, locale)
         extra["profile"] = {asked: value}
         extra["asked_field"] = None
         progress("profile", f"확인한 {field_name}을 프로필에 반영하고 있어요")
@@ -756,6 +832,52 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
     profile = profile or {}
     spec = actions_for(profile.get("visa_type")).get(action_id) or {}
     form = spec.get("form")
+
+    if task["status"] == "done":
+        extra["pending_offer"] = None
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        return _response(state,
+                         _pick(_ACK, "done", locale).format(task["label"]),
+                         "none", {}, reply_locale=locale)
+
+    # 작성 화면을 제안하기 전에 선행조건부터 확인한다. 예전에는 form 여부를
+    # 먼저 봐서 잠긴 계좌개설 버튼을 보여준 뒤 클릭 시 409로 막고 있었다.
+    if task["status"] == "locked":
+        target = _blocking(tasks, task)
+        reply, offer = _offer_start(profile, target, locale)
+        choice_payload = {}
+        if target["id"] != task["id"]:
+            missing_count = sum(1 for field in ACTION_FIELDS.get(target["id"], [])
+                                if not profile.get(field))
+            if action_id == "open_bank_account" and target["id"] == "alien_registration":
+                reply = (
+                    f"아직 외국인등록이 되어 있지 않네요! {missing_count}가지만 여쭤볼게요."
+                    if locale == "ko"
+                    else f"Your alien registration is not complete yet. I only need to ask {missing_count} questions."
+                )
+                choice_payload = {
+                    "presentation": "chat_choice",
+                    "primary_label": "진행하기" if locale == "ko" else "Continue",
+                    "secondary_label": "대화하기" if locale == "ko" else "Keep chatting",
+                }
+            else:
+                reply = (
+                    f"{task['label']} 전에 {target['label']} 완료 여부를 먼저 확인해야 해요. "
+                    f"아직 완료되지 않았다면 아래에서 먼저 진행해 주세요."
+                    if locale == "ko"
+                    else f"Before {task['label']}, we need to confirm that {target['label']} is complete. "
+                         "If it is not complete, start with the option below."
+                )
+        extra["pending_offer"] = offer
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        if not offer:
+            return _response(state, reply, "none", {}, reply_locale=locale)
+        return _response(state, reply, "action_offer", {
+            "action_id": offer["action_id"],
+            "label": offer["label"],
+            **choice_payload,
+        }, reply_locale=locale)
+
     if form in SUPPORTED_DOCUMENT_FORMS:
         extra["pending_offer"] = {
             "kind": "start_action", "action_id": action_id,
@@ -773,22 +895,12 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
             "label": task["label"],
         }, reply_locale=locale)
 
-    if task["status"] == "done":
-        extra["pending_offer"] = None
-        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
-        return _response(state,
-                         _pick(_ACK, "done", locale).format(task["label"]),
-                         "none", {}, reply_locale=locale)
-
-    # 잠겼으면 풀어 줄 선행 과제를 권한다. 사용자가 원한 것을 기억해 두지 않아도
-    # 선행이 끝나면 planner 가 다시 available 로 올려 준다.
-    target = _blocking(tasks, task) if task["status"] == "locked" else task
-    reply, offer = _offer_start(profile or {}, target, locale)
-    if target["id"] != task["id"]:
-        reply = f"{task['label']}은(는) 아직 잠겨 있습니다. " + reply
+    reply, offer = _offer_start(profile, task, locale)
 
     extra["pending_offer"] = offer
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    if not offer:
+        return _response(state, reply, "none", {}, reply_locale=locale)
     return _response(state, reply, "action_offer", {
         "action_id": offer["action_id"],
         "label": offer["label"],
@@ -871,6 +983,22 @@ def approve(session_id: str, action_id: str, approved: bool = True) -> dict:
         raise NothingToApprove(action_id)
     if pending.get("action_id") != action_id:
         raise ApprovalMismatch(action_id, pending.get("action_id"))
+
+    raw_phone = (snap.get("profile") or {}).get("phone_kr")
+    if (approved
+            and "phone_kr" in ACTION_FIELDS.get(action_id, [])
+            and (not raw_phone or _normalize_phone_kr(raw_phone) is None)):
+        # 오래 열린 화면에서 승인 버튼을 누르더라도 잘못된 연락처가 실행
+        # 단계로 넘어가지 않는다. 승인 상태를 해제하고 전화번호를 다시 묻는다.
+        state = _graph().invoke(_patch(session_id, {
+            "profile": {"phone_kr": None},
+            "current_action": action_id,
+            "action_authorized": True,
+            "asked_field": None,
+            "pending_approval": None,
+            "approval_decision": None,
+        }), _cfg(session_id))
+        return _response(state)
 
     state = _graph().invoke(_patch(session_id, {
         "approval_decision": "approve" if approved else "reject",

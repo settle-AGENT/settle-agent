@@ -72,9 +72,13 @@ export function TopBar({ title, onBack, right }) {
   return (
     <div className="top-bar">
       {onBack && (
-        <button type="button" onClick={onBack} aria-label="이전 화면" className="top-bar-back tap">‹</button>
+        <button type="button" onClick={onBack} aria-label="이전 화면" className="top-bar-back tap">
+          <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <path d="M15 18 9 12l6-6" />
+          </svg>
+        </button>
       )}
-      <div style={{ fontSize: 16, fontWeight: 800 }}>{title}</div>
+      <div className="top-bar-title">{title}</div>
       {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
     </div>
   );

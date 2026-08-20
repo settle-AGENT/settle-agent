@@ -39,7 +39,7 @@ fields:
     label_en: Status of stay
   stay_expiry:
     from: profile.stay_expiry
-    required: true
+    required: false
     label_ko: 체류기간 만료일
     label_en: Period of sojourn until
   addr_kr:
