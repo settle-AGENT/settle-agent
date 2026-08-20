@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import com.settle.backend.common.auth.SessionAccessDeniedException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.settle.backend.domain.document.service.GeneratedDocumentService;
 import com.settle.backend.domain.profile.client.AiProfileClient;
 import com.settle.backend.domain.profile.dto.ProfileConfirmRequest;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
@@ -19,13 +20,15 @@ import org.springframework.http.ResponseEntity;
 class ProfileServiceTest {
     private static final UUID MEMBER_ID = UUID.randomUUID();
     private final AiProfileClient aiProfileClient = mock(AiProfileClient.class);
+    private final GeneratedDocumentService documentService = mock(GeneratedDocumentService.class);
     private final ProfileService profileService = new ProfileService(
             aiProfileClient,
-            new ObjectMapper()
+            new ObjectMapper(),
+            documentService
     );
 
     @Test
-    void forwardsAJsonObjectStringWithoutChangingTheResponse() {
+    void forwardsAJsonObjectStringAndAppliesStoredDocuments() {
         ProfileConfirmRequest request = new ProfileConfirmRequest(
                 MEMBER_ID.toString(),
                 "{\"nationality\":\"VNM\"}"
@@ -36,6 +39,8 @@ class ProfileServiceTest {
                 "reply", "다음 질문입니다."
         ));
         when(aiProfileClient.confirm(request)).thenReturn(upstream);
+        when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
+                .thenReturn(upstream);
 
         ResponseEntity<Map<String, Object>> result = profileService.confirm(MEMBER_ID, request);
 
@@ -46,7 +51,10 @@ class ProfileServiceTest {
     @Test
     void acceptsAnEmptyJsonObjectWhenNoFieldWasEdited() {
         ProfileConfirmRequest request = new ProfileConfirmRequest(MEMBER_ID.toString(), "{}");
-        when(aiProfileClient.confirm(request)).thenReturn(ResponseEntity.ok(Map.of()));
+        ResponseEntity<Map<String, Object>> upstream = ResponseEntity.ok(Map.of());
+        when(aiProfileClient.confirm(request)).thenReturn(upstream);
+        when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
+                .thenReturn(upstream);
 
         profileService.confirm(MEMBER_ID, request);
 
