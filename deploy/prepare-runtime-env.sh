@@ -51,6 +51,9 @@ app_secret_json="$(
 
 auth_passcode="$(extract_field App "$app_secret_json" AUTH_PASSCODE)"
 jwt_secret="$(extract_field App "$app_secret_json" JWT_SECRET)"
+clova_invoke_url="$(extract_field App "$app_secret_json" CLOVA_INVOKE_URL)"
+clova_secret_key="$(extract_field App "$app_secret_json" CLOVA_SECRET_KEY)"
+anthropic_api_key="$(extract_field App "$app_secret_json" ANTHROPIC_API_KEY)"
 
 dotenv_line() {
   local key="$1"
@@ -76,3 +79,17 @@ chmod 600 "$runtime_env"
 } > "$runtime_env"
 
 mv "$runtime_env" "${deploy_root}/.env.secrets"
+
+# AI receives a separate raw env file. Keep this distinct from the backend
+# JDBC-style .env.secrets so the Python service gets a native PostgreSQL URL.
+ai_runtime_env="$(mktemp "${deploy_root}/runtime.env.XXXXXX")"
+chmod 600 "$ai_runtime_env"
+
+{
+  printf 'DATABASE_URL=%s\n' "postgresql://${db_username}:${db_password}@${RDS_ENDPOINT}:${RDS_PORT}/${RDS_DATABASE}"
+  printf 'CLOVA_INVOKE_URL=%s\n' "$clova_invoke_url"
+  printf 'CLOVA_SECRET_KEY=%s\n' "$clova_secret_key"
+  printf 'ANTHROPIC_API_KEY=%s\n' "$anthropic_api_key"
+} > "$ai_runtime_env"
+
+mv "$ai_runtime_env" "${deploy_root}/runtime.env"

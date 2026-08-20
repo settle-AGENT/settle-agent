@@ -29,6 +29,7 @@ visa:
         agency: telecom
         risk_level: L1
         note_ko: "비대면 계좌개설의 선행 조건"
+        note_en: "Required before you can open an account without visiting a branch"
 
       residence_change:
         label_ko: 체류지 변경신고
@@ -48,6 +49,7 @@ visa:
         label_en: Activity Permit
         allowed: conditional
         condition_ko: "사전 허가 필요. 학기 중 시간 제한 있음"
+        condition_en: "Prior permission required. Hours are capped during term time"
         prereq: [alien_registration]
         form: integrated_application
         form_type: activity_permit
@@ -62,6 +64,7 @@ visa:
         allowed: true
         account_type: limited
         note_ko: "금융거래한도계좌로 개설되며, 목적 확인 후 한도 해제"
+        note_en: "Opens as a limited-transaction account; the cap is lifted once your purpose is verified"
         prereq: [alien_registration]
         form: bank_account_open
         required_docs: [passport, arc, enrollment_cert]
@@ -76,4 +79,5 @@ visa:
         blocked_steps:
           - step: identity_verification
             reason_ko: "실명확인은 본인만 가능"
+            reason_en: "Identity verification must be done in person"
             evidence: [real_name_3]

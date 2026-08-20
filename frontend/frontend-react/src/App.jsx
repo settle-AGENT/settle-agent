@@ -135,7 +135,7 @@ export default function App() {
   const documents = agentState?.documents || [];
 
   useEffect(() => {
-    if (step !== 9) return;
+    if (step !== 9 || !sessionId) return;
     let active = true;
     setLedgerLoading(true);
     setLedgerError("");
@@ -279,6 +279,24 @@ export default function App() {
     return true;
   };
 
+  const openCabinetFromHome = async () => {
+    if (sessionLoading) return;
+    setSessionLoading(true);
+    setToast("");
+    try {
+      const response = agentState?.session_id ? null : await createSession(lang);
+      if (response) applyAgent(response);
+      if (!(response?.state?.session_id || agentState?.session_id)) {
+        throw new Error("상담 세션을 확인하지 못했어요.");
+      }
+      go(9);
+    } catch (error) {
+      if (!handleAuthError(error)) setToast(error?.message || "서류함을 불러오지 못했어요.");
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
   // ── 0 스플래시 ──
   if (step === 0)
     return (
@@ -298,12 +316,21 @@ export default function App() {
           <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
             D-2 STUDENT VISA · BETA
           </div>
-          <div style={{ width: "100%" }}><PrimaryButton onClick={() => { setAuthMode("login"); go(-1); }}>시작하기</PrimaryButton></div>
+          <div style={{ width: "100%" }}>
+            <PrimaryButton onClick={() => {
+              if (isAuthenticated) go(1);
+              else {
+                setAuthMode("login");
+                go(-1);
+              }
+            }}>시작하기</PrimaryButton>
+          </div>
           {isAuthenticated && (
-            <div onClick={() => go(9)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> 내 서류함 열기
+            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> {sessionLoading ? "서류함 불러오는 중…" : "내 서류함 열기"}
             </div>
           )}
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
         </div>
       </Shell>
     );

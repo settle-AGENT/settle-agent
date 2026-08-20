@@ -6,13 +6,13 @@ on:
       - develop
       - master
 
-  push:
-    branches:
-      - develop
-      - master
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   branch-policy:
@@ -38,6 +38,59 @@ jobs:
           fi
 
           echo "Branch policy passed."
+
+  changes:
+    name: Detect changes
+    needs: branch-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      ai: ${{ steps.filter.outputs.ai }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect changed services
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          changed_files="$(mktemp)"
+          git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+
+          echo "Changed files:"
+          cat "$changed_files"
+
+          global_pattern='^(\.github/workflows/|docker-compose\.yml$|compose\.production\.yml$|deploy/)'
+
+          if grep -Eq "^(frontend/)|${global_pattern}" "$changed_files"; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if grep -Eq "^(backend/)|${global_pattern}" "$changed_files"; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if grep -Eq "^(ai/)|${global_pattern}" "$changed_files"; then
+            echo "ai=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ai=false" >> "$GITHUB_OUTPUT"
+          fi
 
   compose-check:
     name: Compose validate
@@ -65,12 +118,13 @@ jobs:
 
           # env_file 참조 때문에 파일이 존재해야 검증이 통과한다
           touch .env.secrets
-
+          touch runtime.env
           docker compose --file compose.production.yml config --quiet
 
   frontend:
     name: Frontend
-    needs: branch-policy
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -80,16 +134,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
       - name: Build frontend Docker image
-        run: |
-          docker build \
-            --file frontend/Dockerfile \
-            --tag settle-frontend:ci \
-            frontend
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          tags: settle-frontend:ci
+          cache-from: type=gha,scope=ci-frontend
+          cache-to: type=gha,mode=max,scope=ci-frontend,ignore-error=true
 
   backend:
     name: Backend
-    needs: branch-policy
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -109,20 +170,34 @@ jobs:
             backend/server/*.gradle*
             backend/server/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Test Spring backend
+      - name: Test and package Spring backend once
         working-directory: backend/server
-        run: ./gradlew test --no-daemon
-
-      - name: Build backend Docker image
+        shell: bash
         run: |
-          docker build \
-            --file backend/Dockerfile \
-            --tag settle-backend:ci \
-            backend
+          set -euo pipefail
+          ./gradlew test bootJar --no-daemon
+
+          jar_file="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' | head -n 1)"
+          test -n "$jar_file"
+          cp "$jar_file" ../app.jar
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build backend runtime image
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.runtime
+          push: false
+          tags: settle-backend:ci
+          cache-from: type=gha,scope=ci-backend
+          cache-to: type=gha,mode=max,scope=ci-backend,ignore-error=true
 
   ai:
     name: AI
-    needs: branch-policy
+    needs: changes
+    if: needs.changes.outputs.ai == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -132,19 +207,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Disk space before build
-        run: df -h /
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
 
       - name: Build AI Docker image
-        run: |
-          docker build \
-            --file ai/Dockerfile \
-            --tag settle-ai:ci \
-            ai
-
-      - name: Disk space after build
-        if: always()
-        run: df -h /
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./ai
+          file: ./ai/Dockerfile
+          push: false
+          load: true
+          tags: settle-ai:ci
+          cache-from: type=gha,scope=ci-ai
+          cache-to: type=gha,mode=max,scope=ci-ai,ignore-error=true
 
       - name: Smoke test AI Docker image
         shell: bash
@@ -155,6 +230,7 @@ jobs:
           trap 'docker logs settle-ai-ci; docker rm --force settle-ai-ci' EXIT
 
           for attempt in $(seq 1 30); do
+            echo "AI health check attempt ${attempt}/30"
             if curl --fail --silent http://127.0.0.1:8000/health; then
               exit 0
             fi
@@ -162,3 +238,45 @@ jobs:
           done
 
           exit 1
+
+  ci-result:
+    name: CI Result
+    if: always()
+    needs:
+      - branch-policy
+      - changes
+      - compose-check
+      - frontend
+      - backend
+      - ai
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify required jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Branch policy: ${{ needs.branch-policy.result }}"
+          echo "Detect changes: ${{ needs.changes.result }}"
+          echo "Compose validate: ${{ needs.compose-check.result }}"
+          echo "Frontend: ${{ needs.frontend.result }}"
+          echo "Backend: ${{ needs.backend.result }}"
+          echo "AI: ${{ needs.ai.result }}"
+
+          [[ "${{ needs.branch-policy.result }}" == "success" ]]
+          [[ "${{ needs.changes.result }}" == "success" ]]
+          [[ "${{ needs.compose-check.result }}" == "success" ]]
+
+          for result in \
+            "${{ needs.frontend.result }}" \
+            "${{ needs.backend.result }}" \
+            "${{ needs.ai.result }}"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::A service validation job finished with status: $result"
+              exit 1
+            fi
+          done
+
+          echo "All required CI checks passed."

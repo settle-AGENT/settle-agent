@@ -62,6 +62,9 @@ services:
     platform: linux/amd64
     image: ${ECR_REGISTRY:?ECR_REGISTRY is required}/${ECR_AI_REPOSITORY:-fsai/ai}:${IMAGE_TAG:?IMAGE_TAG is required}
     pull_policy: always
+    env_file:
+      - path: ./runtime.env
+        format: raw
     expose:
       - "${AI_CONTAINER_PORT:-8000}"
     environment:

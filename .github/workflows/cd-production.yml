@@ -26,26 +26,14 @@ env:
   ECR_AI_REPOSITORY: ${{ vars.ECR_AI_REPOSITORY }}
 
 jobs:
-  build-and-push:
-    name: Build and push images
+  build-frontend:
+    name: Build and push frontend
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
-
-      - name: Validate Docker build files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f frontend/Dockerfile
-          test -f backend/Dockerfile
-          test -f ai/Dockerfile
-          test -f compose.production.yml
-          test -f deploy/Caddyfile
-          test -f deploy/prepare-runtime-env.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
@@ -53,7 +41,7 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: github-${{ github.run_id }}-${{ github.run_attempt }}
+          role-session-name: frontend-${{ github.run_id }}-${{ github.run_attempt }}
           mask-aws-account-id: true
 
       - name: Log in to Amazon ECR
@@ -76,6 +64,30 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
+  build-ai:
+    name: Build and push AI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: ai-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
       - name: Build and push AI
         uses: docker/build-push-action@v7.2.0
         with:
@@ -88,11 +100,56 @@ jobs:
           cache-from: type=gha,scope=ai
           cache-to: type=gha,mode=max,scope=ai
 
+  build-backend:
+    name: Build and push backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: backend-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            backend/server/*.gradle*
+            backend/server/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Package Spring backend once
+        working-directory: backend/server
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew bootJar --no-daemon
+
+          jar_file="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' | head -n 1)"
+          test -n "$jar_file"
+          cp "$jar_file" ../app.jar
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
       - name: Build and push backend
         uses: docker/build-push-action@v7.2.0
         with:
           context: ./backend
-          file: ./backend/Dockerfile
+          file: ./backend/Dockerfile.runtime
           platforms: linux/amd64
           push: true
           tags: |
@@ -103,7 +160,9 @@ jobs:
   deploy:
     name: Deploy to EC2 with SSM
     needs:
-      - build-and-push
+      - build-frontend
+      - build-ai
+      - build-backend
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -111,6 +170,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f compose.production.yml
+          test -f deploy/Caddyfile
+          test -f deploy/prepare-runtime-env.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
@@ -248,7 +316,7 @@ jobs:
                 ;;
             esac
 
-            echo "Waiting for SSM command: ${STATUS:-Pending}"
+            echo "Waiting for SSM command (${attempt}/120): ${STATUS:-Pending}"
             sleep 5
           done
 

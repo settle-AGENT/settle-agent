@@ -39,6 +39,9 @@ class Task(BaseModel):
     deadline: Optional[date] = None
     d_day: Optional[int] = None     # 백엔드가 계산해서 내려줌
     evidence: list[str] = []
+    agency: str = ""                # 제출처 (예: 출입국·외국인청)
+    required_docs: list[str] = []   # 지참 서류
+    note: Optional[str] = None      # 조건 안내
 
 
 class DocRef(BaseModel):
@@ -53,11 +56,19 @@ class DocRef(BaseModel):
 class PendingApproval(BaseModel):
     action_id: str
     title: str
+    # 아래는 새로고침 후 승인 모달을 복원하기 위한 값. 전부 기본값이 있어
+    # 기존 클라이언트는 영향받지 않는다 (필드 추가만 허용 규칙).
+    summary: list[str] = []
+    document_id: Optional[str] = None
+    preview_url: Optional[str] = None
+    pdf_url: Optional[str] = None
+    evidence: list[str] = []
+    risk_level: Literal["L1", "L2", "L3"] = "L2"
 
 
 class SessionState(BaseModel):
     session_id: str
-    locale: str = "ko"              # ko | en | vi
+    locale: str = "ko"              # ko | en
     profile: dict[str, Any] = {}
     tasks: list[Task] = []
     documents: list[DocRef] = []
