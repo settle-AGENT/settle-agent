@@ -233,6 +233,7 @@ def slot_filler(state: AgentState) -> dict:
     # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
     label = _text(q["label"], locale)
     hint = _text(q.get("hint"), locale)
+    # 말풍선은 진행 상황만. 한국어로 쓰고 출구에서 locale 로 옮긴다.
     lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
     written_locale = None
 
@@ -248,9 +249,10 @@ def slot_filler(state: AgentState) -> dict:
         if written and written.get("question"):
             label = written["question"]
             hint = written.get("hint") or hint
-            lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
-            written_locale = _written_locale(label, locale)
 
+    # reply 에는 질문을 넣지 않는다. 질문은 ui.payload.label 이 들고 있고
+    # 프론트가 그것으로 질문 카드를 그리므로, 여기에 또 쓰면 같은 문장이
+    # 말풍선과 카드에 두 번 보인다. 말풍선은 진행 상황만 알린다.
     return {
         "missing_fields": missing,
         "asked_field": field,

@@ -10,9 +10,10 @@ import uuid
 from functools import lru_cache
 from typing import Any, ClassVar, Literal, Optional
 
-from app.agent.graph import build_graph
+from app.agent.graph import CITE_LABEL, build_graph
 from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
+from app.nodes import qa, researcher
 from app.nodes.planner import MENU_TITLE, menu_options, summary
 from app.nodes.profiler import (
     HARD_KEYS,
@@ -391,6 +392,18 @@ def send_message(session_id: str, message: str) -> dict:
             if intent.get("intent") == "cancel":
                 return _abandon(session_id, extra, snap, locale)
 
+            # 값이 아니라 물음이었다면 답해 준다. 슬롯을 채우는 중이라고
+            # 사용자의 질문을 못 들은 척하면, 취소 말고는 나갈 길이 없다.
+            if intent.get("intent") == "question":
+                answered = _answer_aside(message, snap, locale)
+                if answered:
+                    state = _graph().get_state(_cfg(session_id)).values
+                    # ui 는 question 그대로 둔다 — 프론트가 질문 카드를 다시
+                    # 그리므로 본문에서 같은 질문을 반복할 이유가 없다.
+                    return _response(state, answered, "question",
+                                     state.get("ui_payload") or {},
+                                     reply_locale=locale)
+
             state = _graph().get_state(_cfg(session_id)).values
             # 두 번 이상 못 읽었으면 나가는 방법을 알려준다.
             tries = int(snap.get("ask_tries") or 0) + 1
@@ -453,6 +466,33 @@ def send_message(session_id: str, message: str) -> dict:
     extra["pending_offer"] = None
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     return _response(state)
+
+
+def _answer_aside(question: str, snap: dict, locale: str) -> str | None:
+    """슬롯 필링 중에 들어온 질문에 답한다. 상태는 건드리지 않는다.
+
+    그래프를 태우지 않는 이유 — router 는 current_action 이 있으면 무조건
+    slot_filler 로 보내므로, 그쪽으로 가면 질문이 또 삼켜진다.
+    """
+    profile = snap.get("profile") or {}
+    tasks = snap.get("tasks") or []
+    history = snap.get("messages") or []
+
+    got = None
+    if researcher.available():
+        got = researcher.answer(question, profile=profile, tasks=tasks,
+                                history=history, locale=locale)
+    if got is None and qa.available():
+        got = qa.answer(question, profile=profile, tasks=tasks,
+                        history=history, locale=locale)
+    if not got:
+        return None
+
+    reply = got["reply"]
+    if got.get("cites"):
+        reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
+                 + " / ".join(got["cites"])
+    return reply
 
 
 def _abandon(session_id: str, extra: dict, snap: dict, locale: str) -> dict:
