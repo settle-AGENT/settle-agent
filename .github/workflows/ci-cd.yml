@@ -118,6 +118,7 @@ jobs:
 
           # env_file 참조 때문에 파일이 존재해야 검증이 통과한다
           touch .env.secrets
+          touch runtime.env
           docker compose --file compose.production.yml config --quiet
 
   frontend:
