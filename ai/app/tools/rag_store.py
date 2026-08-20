@@ -188,6 +188,13 @@ def load(url: str | None = None, *, force: bool = False) -> dict:
                 return {"state": "ready", "chunks": count, "fingerprint": want}
 
             rows = _rows()
+            if not rows:
+                # 여기서 그냥 진행하면 아래 DELETE 가 기존 데이터까지 지운다.
+                # 적재 실패가 멀쩡한 벡터를 날리는 일은 없어야 한다.
+                raise RuntimeError(
+                    "적재할 조각이 없습니다. 코퍼스나 구운 파일을 확인하세요: "
+                    f"{BAKED if BAKED.exists() else [str(s) for s in SOURCES]}")
+
             print(f"[rag] {len(rows)}행 적재 중… (기존 {count}행, fingerprint={want})")
             with conn.cursor() as cur:
                 cur.executemany(
@@ -216,9 +223,16 @@ _lock = threading.Lock()
 
 
 def status() -> dict:
-    """/health 가 그대로 내보내는 값. ready 가 false 면 벡터 검색이 죽어 있다."""
-    return {**_status, "expected": expected_count(),
-            "ready": _status.get("state") == "ready"}
+    """/health 가 그대로 내보내는 값. ready 가 false 면 벡터 검색이 죽어 있다.
+
+    state 만 보면 안 된다 — 0건으로 끝난 적재도 state 는 ready 다. CD 게이트가
+    .rag.ready 를 보고 배포를 막으므로, 여기서 건수까지 확인해야 막으려던
+    상황을 실제로 막는다.
+    """
+    expected = expected_count()
+    chunks = _status.get("chunks", 0)
+    return {**_status, "expected": expected,
+            "ready": _status.get("state") == "ready" and chunks >= expected}
 
 
 def ensure_loaded_async() -> None:
