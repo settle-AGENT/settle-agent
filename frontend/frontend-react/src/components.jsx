@@ -19,9 +19,9 @@ export function BridgeMark({ size = 60, bg = "oklch(0.97 0.01 250)" }) {
 
 export function TopBar({ title, onBack, right }) {
   return (
-    <div style={{ padding: "48px 24px 12px", display: "flex", alignItems: "center", gap: 14 }}>
+    <div className="top-bar">
       {onBack && (
-        <div onClick={onBack} className="tap" style={{ fontSize: 20, color: "var(--muted)", padding: "4px 8px 4px 0" }}>‹</div>
+        <button type="button" onClick={onBack} aria-label="이전 화면" className="top-bar-back tap">‹</button>
       )}
       <div style={{ fontSize: 13, fontWeight: 700 }}>{title}</div>
       {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
@@ -49,13 +49,14 @@ export function Rail({ active }) {
 
 export function PrimaryButton({ children, onClick, disabled }) {
   return (
-    <div onClick={disabled ? undefined : onClick} className={disabled ? "" : "tap"}
+    <button type="button" disabled={disabled} onClick={onClick} className={`primary-button${disabled ? "" : " tap"}`}
       style={{ minHeight: 56, display: "flex", alignItems: "center", justifyContent: "center",
+        width: "100%", border: 0,
         borderRadius: 14, fontSize: 15.5, fontWeight: 700, transition: "transform .12s",
         background: disabled ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)",
         color: disabled ? "oklch(0.55 0.01 60)" : "#fff" }}>
       {children}
-    </div>
+    </button>
   );
 }
 
@@ -67,7 +68,7 @@ export function Field({ label, value, confidence, editable = false, dirty, error
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
-          {error ? "확인 필요" : dirty ? "수정됨" : low ? "확인 필요" : confidence != null ? `${Math.round(confidence * 100)}%` : !editable ? "수정 불가" : ""}
+          {error ? "확인 필요" : dirty ? "수정됨" : low ? "확인 필요" : !editable ? "수정 불가" : ""}
         </span>
       </div>
       <input className="profile-field-input" value={value ?? ""} disabled={!editable}
