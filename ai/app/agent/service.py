@@ -69,7 +69,12 @@ def _graph():
 
 
 def is_persistent() -> bool:
-    """Postgres 에 붙었는지. /health 에서 노출하면 디버깅이 쉽다."""
+    """Checkpointer를 초기화하고 Postgres 연결 상태를 반환한다.
+
+    배포 직후에도 /health가 실제 RDS 연결을 검증해야 하므로,
+    첫 Agent 요청을 기다리지 않고 그래프를 여기서 초기화한다.
+    """
+    _graph()
     return _CONN is not None and not _CONN.closed
 
 
