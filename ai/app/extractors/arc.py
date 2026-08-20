@@ -214,6 +214,12 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
         p["arc_no"] = f"{m.group(1)}-{m.group(2)}"
         c["arc_no"] = 0.97
 
+    # 체류자격도 마찬가지다. 앞면에 "체류자격 유학(D-2)" 로 인쇄돼 있는데
+    # 뒷면에서만 뽑으면, 앞면만 올린 사람에게 체류자격을 되묻게 된다.
+    if m := _RE_VISA.search(blob):
+        p["visa_type"] = f"{m.group(1)}-{m.group(2)}"
+        c["visa_type"] = 0.95
+
     if doc_type == "arc_front":
         if m := _RE_ADDR.search(blob):
             addr = _trim_addr(re.sub(r"\s+", " ", m.group(1)).strip())
@@ -240,10 +246,6 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
                 break
 
     else:  # arc_back
-        if m := _RE_VISA.search(blob):
-            p["visa_type"] = f"{m.group(1)}-{m.group(2)}"
-            c["visa_type"] = 0.95
-
         dates = sorted({_fmt_date(m) for m in _RE_DATE.finditer(blob)})
         if dates:
             p["stay_expiry"] = dates[-1]      # 가장 늦은 날짜 = 만료일

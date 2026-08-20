@@ -10,10 +10,12 @@ import uuid
 from functools import lru_cache
 from typing import Any, ClassVar, Literal, Optional
 
-from app.agent.graph import build_graph
+from app.agent.graph import CITE_LABEL, ask_visa, build_graph
 from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
+from app.nodes import qa, researcher
 from app.nodes.planner import MENU_TITLE, menu_options, summary
+from app.rules.loader import VISA_CODES
 from app.nodes.profiler import (
     HARD_KEYS,
     SOFT_KEYS,
@@ -255,8 +257,9 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
 
 # 슬롯 필링 필드의 의미와 허용값 (graph.QUESTIONS 와 짝)
 _FIELD_META = {
+    "visa_type":     ("Korean visa status code, e.g. D-2",
+                      {c: 1 for c in VISA_CODES}),
     "birth_date":    ("Date of birth (YYYY-MM-DD)", None),
-    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "org_name":      ("Name of the school or organization", None),
     "phone_kr":      ("Phone number in Korea", None),
@@ -299,6 +302,16 @@ _ACK = {
                 "en": "There is nothing to do right now."},
     # 할 일이 없는 것과 아직 모르는 것은 다르다. 프로필이 비었는데 "없습니다"
     # 라고 하면 사용자는 앱이 고장 났다고 생각한다.
+    "cancelled": {
+        "ko": "{}은(는) 그만두겠습니다. 아무것도 제출되지 않았습니다. "
+              "다시 하시려면 언제든 말씀해주세요.",
+        "en": "Stopping {}. Nothing was submitted. "
+              "Tell me whenever you want to pick it up again.",
+    },
+    "escape": {
+        "ko": "그만두시려면 \"취소\" 라고 말씀해주세요.",
+        "en": "Say \"cancel\" if you want to stop.",
+    },
     "no_profile": {"ko": "외국인등록증을 먼저 촬영해주세요. "
                          "체류자격을 알아야 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
                    "en": "Please photograph your residence card first. "
@@ -350,6 +363,7 @@ def send_message(session_id: str, message: str) -> dict:
     """
     snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
     asked = snap.get("asked_field")
+    tasks = snap.get("tasks") or []
 
     extra: dict[str, Any] = {"messages": [{"role": "user", "content": message}]}
 
@@ -372,11 +386,38 @@ def send_message(session_id: str, message: str) -> dict:
                 failed = "값을 알아듣지 못했습니다."
 
         if failed:
-            # 같은 필드를 다시 묻는다. asked_field 를 유지한다.
+            # 값으로 못 읽었다. 오타일 수도 있지만 "그만할래" 일 수도 있다.
+            # 그대로 되물으면 빠져나갈 길이 없어 같은 질문만 반복된다.
+            # 실패했을 때만 의도를 확인한다 — 정상 답변에는 호출이 붙지 않는다.
+            intent = llm.classify(message, asked_field=asked,
+                                  actions=[t["id"] for t in tasks]) or {}
+            if intent.get("intent") == "cancel":
+                return _abandon(session_id, extra, snap, locale)
+
+            # 값이 아니라 물음이었다면 답해 준다. 슬롯을 채우는 중이라고
+            # 사용자의 질문을 못 들은 척하면, 취소 말고는 나갈 길이 없다.
+            if intent.get("intent") == "question":
+                answered = _answer_aside(message, snap, locale)
+                if answered:
+                    state = _graph().get_state(_cfg(session_id)).values
+                    # ui 는 question 그대로 둔다 — 프론트가 질문 카드를 다시
+                    # 그리므로 본문에서 같은 질문을 반복할 이유가 없다.
+                    return _response(state, answered, "question",
+                                     state.get("ui_payload") or {},
+                                     reply_locale=locale)
+
             state = _graph().get_state(_cfg(session_id)).values
+            # 두 번 이상 못 읽었으면 나가는 방법을 알려준다.
+            tries = int(snap.get("ask_tries") or 0) + 1
+            if tries >= 2:
+                failed += " " + _pick(_ACK, "escape", locale)
+            _graph().invoke(_patch(session_id, {"ask_tries": tries}),
+                            _cfg(session_id))
             return _response(state, failed, "question",
                              state.get("ui_payload") or {},
                              reply_locale=failed_locale)
+
+        extra["ask_tries"] = 0
 
         extra["profile"] = {asked: value}
         extra["asked_field"] = None
@@ -385,7 +426,6 @@ def send_message(session_id: str, message: str) -> dict:
 
     # ── 자유 발화 ──────────────────────────────────────────
     locale = snap.get("locale") or "en"
-    tasks = snap.get("tasks") or []
     offer = snap.get("pending_offer") or {}
 
     # 메뉴에서 고른 값은 그대로 돌아온다. 확실한 것을 LLM 에 물을 이유가 없다.
@@ -430,15 +470,67 @@ def send_message(session_id: str, message: str) -> dict:
     return _response(state)
 
 
+def _answer_aside(question: str, snap: dict, locale: str) -> str | None:
+    """슬롯 필링 중에 들어온 질문에 답한다. 상태는 건드리지 않는다.
+
+    그래프를 태우지 않는 이유 — router 는 current_action 이 있으면 무조건
+    slot_filler 로 보내므로, 그쪽으로 가면 질문이 또 삼켜진다.
+    """
+    profile = snap.get("profile") or {}
+    tasks = snap.get("tasks") or []
+    history = snap.get("messages") or []
+
+    got = None
+    if researcher.available():
+        got = researcher.answer(question, profile=profile, tasks=tasks,
+                                history=history, locale=locale)
+    if got is None and qa.available():
+        got = qa.answer(question, profile=profile, tasks=tasks,
+                        history=history, locale=locale)
+    if not got:
+        return None
+
+    reply = got["reply"]
+    if got.get("cites"):
+        reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
+                 + " / ".join(got["cites"])
+    return reply
+
+
+def _abandon(session_id: str, extra: dict, snap: dict, locale: str) -> dict:
+    """진행 중인 과제를 접는다. 아무것도 제출되지 않았음을 분명히 말한다."""
+    action = snap.get("current_action")
+    label = next((t["label"] for t in (snap.get("tasks") or [])
+                  if t["id"] == action), None)
+    extra.update({
+        "current_action": None,
+        "in_progress": [],
+        "asked_field": None,
+        "missing_fields": [],
+        "pending_offer": None,
+        "pending_approval": None,
+        "ask_tries": 0,
+    })
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    text = _pick(_ACK, "cancelled", locale)
+    if label:
+        text = text.format(label)
+    return _response(state, text, "none", {}, reply_locale=locale)
+
+
 def _menu(session_id: str, extra: dict, locale: str) -> dict:
     """지금 이 사람이 할 수 있는 일을 select 로 내린다."""
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     options = menu_options(state.get("tasks") or [], locale)
     if not options:
-        key = "nothing" if (state.get("profile") or {}).get("visa_type") \
-              else "no_profile"
-        return _response(state, _pick(_ACK, key, locale), "none", {},
-                             reply_locale=locale)
+        if not state.get("tasks"):
+            # 자격을 모르거나 미지원이면 메뉴가 아니라 그 얘기를 해야 한다.
+            out = ask_visa(state)
+            state = _graph().invoke(_patch(session_id, out), _cfg(session_id))
+            return _response(state, out["reply"], out["ui_type"],
+                             out.get("ui_payload") or {}, reply_locale=locale)
+        return _response(state, _pick(_ACK, "nothing", locale), "none", {},
+                         reply_locale=locale)
 
     state = _graph().invoke(
         _patch(session_id, {"pending_offer": {

@@ -216,6 +216,11 @@ _ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant 
 for foreign residents. The user writes casually, often in Korean internet
 shorthand, and may mix languages.
 
+- cancel   : wanting to stop, drop, or back out of what is in progress.
+             "그만할래", "만들기 싫어졌어", "안 할래", "취소", "됐어",
+             "나중에 할게", "stop", "never mind". Also when they say they
+             changed their mind. This is NOT the same as failing to answer —
+             it is an explicit wish to stop.
 - confirm  : answering yes or no to the offer the assistant just made.
              Only when an offer is pending. Set "yes" true or false.
              Korean users say yes as ㅇㅇ, ㅇㅋ, ㄱㄱ, 응, 넵, 그래, 해줘, 좋아요;
@@ -261,7 +266,7 @@ def classify(message: str, *, asked_field: str | None = None,
                 "type": "object",
                 "properties": {
                     "intent": {"type": "string",
-                               "enum": ["confirm", "menu", "action",
+                               "enum": ["cancel", "confirm", "menu", "action",
                                         "answer", "question", "other"]},
                     "yes": {"type": ["boolean", "null"],
                             "description": "if intent=confirm: true for yes, "
