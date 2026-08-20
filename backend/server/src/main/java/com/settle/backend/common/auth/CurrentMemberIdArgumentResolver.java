@@ -6,13 +6,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.UUID;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
-import org.springframework.web.server.ResponseStatusException;
 
 @Component
 public class CurrentMemberIdArgumentResolver implements HandlerMethodArgumentResolver {
@@ -50,7 +48,7 @@ public class CurrentMemberIdArgumentResolver implements HandlerMethodArgumentRes
         }
     }
 
-    private ResponseStatusException unauthorized() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid_or_missing_token");
+    private UnauthorizedException unauthorized() {
+        return new UnauthorizedException();
     }
 }

@@ -1,5 +1,6 @@
 package com.settle.backend.domain.action.service;
 
+import com.settle.backend.common.auth.SessionOwnership;
 import com.settle.backend.domain.action.client.AiActionClient;
 import com.settle.backend.domain.action.dto.AgentResponse;
 import com.settle.backend.domain.document.dto.DocumentPreviewPayload;
@@ -26,6 +27,7 @@ public class ActionPreviewService {
     }
 
     public AgentResponse preview(UUID memberId, String actionId, String sessionId) {
+        SessionOwnership.require(memberId, sessionId);
         AgentResponse aiResponse = aiActionClient.preview(actionId, sessionId);
         if (aiResponse.ui() == null || !"doc_preview".equals(aiResponse.ui().type())) {
             return withStoredDocuments(aiResponse, memberId, sessionId);
@@ -68,6 +70,7 @@ public class ActionPreviewService {
             String sessionId,
             boolean approved
     ) {
+        SessionOwnership.require(memberId, sessionId);
         AgentResponse current = aiActionClient.state(sessionId);
         Map<String, Object> pending = pendingApproval(current.state());
         if (pending == null) {
@@ -90,7 +93,8 @@ public class ActionPreviewService {
         );
     }
 
-    public List<Map<String, Object>> ledger(String sessionId) {
+    public List<Map<String, Object>> ledger(UUID memberId, String sessionId) {
+        SessionOwnership.require(memberId, sessionId);
         return aiActionClient.ledger(sessionId);
     }
 

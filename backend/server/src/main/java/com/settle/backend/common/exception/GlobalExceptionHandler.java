@@ -1,5 +1,7 @@
 package com.settle.backend.common.exception;
 
+import com.settle.backend.common.auth.SessionAccessDeniedException;
+import com.settle.backend.common.auth.UnauthorizedException;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
 import com.settle.backend.domain.auth.exception.EmailAlreadyExistsException;
 import com.settle.backend.domain.auth.exception.InvalidCredentialsException;
@@ -29,6 +31,22 @@ public class GlobalExceptionHandler {
     ) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new ErrorResponse("INVALID_CREDENTIALS", exception.getMessage()));
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<ErrorResponse> handleUnauthorized(UnauthorizedException exception) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse(UnauthorizedException.ERROR_CODE, exception.getMessage()));
+    }
+
+    @ExceptionHandler(SessionAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleSessionAccessDenied(
+            SessionAccessDeniedException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse(
+                        SessionAccessDeniedException.ERROR_CODE, exception.getMessage()
+                ));
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)

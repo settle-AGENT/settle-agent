@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.settle.backend.common.auth.SessionAccessDeniedException;
 import com.settle.backend.domain.agent.client.AiAgentClient;
 import com.settle.backend.domain.agent.dto.AgentMessageRequest;
 import com.settle.backend.domain.agent.dto.AgentSessionRequest;
@@ -64,6 +65,6 @@ class AgentServiceTest {
         AgentMessageRequest request = new AgentMessageRequest(UUID.randomUUID().toString(), "answer");
 
         assertThatThrownBy(() -> agentService.chat(MEMBER_ID, request))
-                .hasMessageContaining("403 FORBIDDEN");
+                .isInstanceOf(SessionAccessDeniedException.class);
     }
 }

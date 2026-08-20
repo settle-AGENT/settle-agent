@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.settle.backend.common.auth.SessionAccessDeniedException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.settle.backend.domain.profile.client.AiProfileClient;
 import com.settle.backend.domain.profile.dto.ProfileConfirmRequest;
@@ -76,7 +77,6 @@ class ProfileServiceTest {
         );
 
         assertThatThrownBy(() -> profileService.confirm(MEMBER_ID, request))
-                .hasMessageContaining("403 FORBIDDEN")
-                .hasMessageContaining("session_access_denied");
+                .isInstanceOf(SessionAccessDeniedException.class);
     }
 }

@@ -86,7 +86,7 @@ public class ProfileController {
             @ApiResponse(responseCode = "401", description = "Bearer token 누락 또는 무효"),
             @ApiResponse(responseCode = "403", description = "session_id가 JWT memberId와 불일치",
                     content = @Content(examples = @ExampleObject(value = """
-                            {"detail":{"error":"session_access_denied","message":"session_access_denied","details":null}}
+                            {"detail":{"error":"session_access_denied","message":"접근할 수 없는 상담 세션이에요.","details":null}}
                             """))),
             @ApiResponse(
                     responseCode = "422",

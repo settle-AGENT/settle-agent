@@ -65,7 +65,7 @@ public class ActionDocumentController {
             @Parameter(hidden = true) @CurrentMemberId UUID memberId,
             @RequestParam("session_id") String sessionId
     ) {
-        return actionPreviewService.ledger(sessionId);
+        return actionPreviewService.ledger(memberId, sessionId);
     }
 
     @GetMapping("/api/documents/{documentId}/preview")

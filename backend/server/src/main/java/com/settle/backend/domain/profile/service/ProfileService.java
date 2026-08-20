@@ -2,13 +2,13 @@ package com.settle.backend.domain.profile.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.settle.backend.common.auth.SessionOwnership;
 import com.settle.backend.domain.profile.client.AiProfileClient;
 import com.settle.backend.domain.profile.dto.ProfileConfirmRequest;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -25,11 +25,7 @@ public class ProfileService {
     public ResponseEntity<Map<String, Object>> confirm(
             UUID memberId, ProfileConfirmRequest request
     ) {
-        if (!memberId.toString().equals(request.sessionId())) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    HttpStatus.FORBIDDEN, "session_access_denied"
-            );
-        }
+        SessionOwnership.require(memberId, request.sessionId());
         validateMessage(request.message());
         return aiProfileClient.confirm(request);
     }

@@ -41,6 +41,14 @@ class ActionDocumentControllerTest {
     private JwtTokenService jwtTokenService;
 
     @Test
+    void rejectsMissingBearerTokenWithSharedErrorBody() throws Exception {
+        mockMvc.perform(get("/api/ledger").queryParam("session_id", "demo-001"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail.error").value("invalid_or_missing_token"))
+                .andExpect(jsonPath("$.detail.message").value("로그인이 만료되었어요. 다시 로그인해 주세요."));
+    }
+
+    @Test
     void returnsApprovalFromPreviewWithoutChangingContract() throws Exception {
         when(jwtTokenService.parseMemberId("token")).thenReturn(MEMBER_ID);
         when(actionPreviewService.preview(MEMBER_ID, "open_bank_account", "demo-001"))
@@ -98,7 +106,7 @@ class ActionDocumentControllerTest {
     @Test
     void returnsLedger() throws Exception {
         when(jwtTokenService.parseMemberId("token")).thenReturn(MEMBER_ID);
-        when(actionPreviewService.ledger("demo-001"))
+        when(actionPreviewService.ledger(MEMBER_ID, "demo-001"))
                 .thenReturn(List.of(Map.of("action", "open_bank_account")));
 
         mockMvc.perform(get("/api/ledger")
