@@ -190,6 +190,9 @@ SLOT_LEAD = {
     "last": {"ko": "마지막 질문입니다.", "en": "Last question."},
 }
 
+DOC_MISSING = {"ko": "서류를 작성하려면 {}이(가) 더 필요합니다.",
+               "en": "I still need {} to fill in the form."}
+
 # 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
 SUMMARY_LABEL: dict[str, dict] = {
     "agency": {"ko": "제출처", "en": "Submit to"},
@@ -346,15 +349,14 @@ def doc_builder(state: AgentState) -> dict:
             locale=state.get("locale") or "en",
         )
     except DocumentIncomplete as exc:
-        labels = {
-            "name_en": "영문 성명", "birth_date": "생년월일", "gender": "성별",
-            "nationality": "국적", "passport_no": "여권번호", "arc_no": "외국인등록번호",
-            "addr_kr": "국내 주소", "phone_kr": "국내 연락처", "org_name": "소속 기관",
-        }
-        need = ", ".join(labels.get(k, k) for k in exc.missing)
+        # 라벨 사전을 여기 또 두면 profiler.LABELS 와 어긋난다. 실제로 어긋나
+        # stay_expiry 가 사람 말 대신 키 이름 그대로 화면에 나갔다.
+        locale = state.get("locale") or "en"
+        need = ", ".join(_label_of(k, locale) for k in exc.missing)
         return {
             "missing_fields": exc.missing,
-            "reply": f"서류를 작성하려면 {need}이(가) 더 필요합니다.",
+            "reply": _text(DOC_MISSING, locale).format(need),
+            "reply_locale": locale,
             "ui_type": "none",
             "ui_payload": {},
         }
