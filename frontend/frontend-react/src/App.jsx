@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
+import { MaiteWordmark, MaiteAvatar, BankMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
   signUp, login, uploadAndExtract, confirmProfile, previewAction, approveAction, getLedger,
   fetchDocument, nationalityLabel,
@@ -18,6 +18,14 @@ const APPLICATIONS = {
   work_activity: { ko: "통합신청서 · 체류자격외활동", en: "Integrated application · Activity permit" },
   open_bank_account: { ko: "계좌개설신청서", en: "Bank account application" },
 };
+// 목표 선택(step 8). 흐름도 개선안 — 프로필 확인 직후 "무엇을 하려고 하는지"를
+// 먼저 고르게 해서, 할 일(step 5)이 "고른 목표를 이루기 위한 단계"로 읽히게 한다.
+const GOALS = [
+  { id: "alien_registration", icon: "🪪", ko: ["외국인등록증 만들기", "통합신청서 · 외국인등록"], en: ["Register as a foreign resident", "Integrated application · Registration"] },
+  { id: "open_bank_account", icon: "🏦", ko: ["은행 계좌 만들기", "계좌개설신청서"], en: ["Open a bank account", "Bank account application"] },
+  { id: "residence_change", icon: "🏠", ko: ["체류지 변경 신고하기", "통합신청서 · 체류지 변경"], en: ["Report an address change", "Integrated application · Address change"] },
+  { id: "work_activity", icon: "💼", ko: ["아르바이트 허가 받기", "통합신청서 · 체류자격외활동"], en: ["Get an activity permit", "Integrated application · Activity permit"] },
+];
 const ONBOARDING_PROGRESS_KEY = "settle_onboarding_progress_v1";
 const PROFILE_DRAFT_KEY = "settle_profile_draft_v1";
 const EMPTY_AUTH = { email: "", password: "", passwordConfirm: "" };
@@ -48,6 +56,7 @@ function readOnboardingProgress() {
         : { ...EMPTY_ANSWERS },
       updatedAt: progress.updatedAt || null,
       memberId: typeof progress.memberId === "string" ? progress.memberId : "",
+      goal: typeof progress.goal === "string" && GOALS.some((goal) => goal.id === progress.goal) ? progress.goal : "",
     };
   } catch {
     return null;
@@ -94,11 +103,11 @@ function extractionFromSession(response) {
 function passwordChecks(password, locale = "ko") {
   const en = locale === "en";
   return [
-    { label: en ? "8–64 characters" : "8~64자", met: password.length >= 8 && password.length <= 64 },
-    { label: en ? "Includes a letter" : "영문 포함", met: /[A-Za-z]/.test(password) },
-    { label: en ? "Includes a number" : "숫자 포함", met: /\d/.test(password) },
-    { label: en ? "Includes a special character" : "특수문자 포함", met: /[^A-Za-z0-9]/.test(password) },
-    { label: en ? "Letters, numbers, and symbols only" : "영문·숫자·특수문자만", met: /^[\x21-\x7E]+$/.test(password) },
+    { label: en ? "At least 8 characters" : "8자 이상", met: password.length >= 8 && password.length <= 64 },
+    {
+      label: en ? "Includes letters, numbers, and symbols" : "영문·숫자·특수문자 포함",
+      met: /[A-Za-z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && /^[\x21-\x7E]+$/.test(password),
+    },
   ];
 }
 
@@ -183,7 +192,7 @@ function savedProgressDetails(progress, locale = "ko") {
     5: ["서류 준비", "Document preparation", "진행 중인 서류 작업을 이어갈 차례예요", "Continue your document task"],
     6: ["심사 결과", "Review result", "확인하던 결과부터 이어갈 수 있어요", "Continue from your saved result"],
     7: ["서류 미리보기", "Document preview", "작성된 서류를 확인할 차례예요", "Review your prepared document"],
-    8: ["서류 완료", "Document ready", "완료된 서류를 확인할 수 있어요", "View your completed document"],
+    8: ["목표 선택", "Choose a goal", "무엇을 만들지 고를 차례예요", "Choose what you want to prepare"],
   };
   const stage = stages[targetStep];
   return stage ? { title: stage[en ? 1 : 0], stage: stage[en ? 3 : 2], targetStep } : null;
@@ -241,10 +250,14 @@ export default function App() {
   const [profileSubmitting, setProfileSubmitting] = useState(false);
 
   const [answers, setAnswers] = useState(() => savedProgress?.answers || { ...EMPTY_ANSWERS });
+  // 사용자가 고른 목표(서류). step 8에서 세팅되고 할 일·신청서 화면이 이를 따라간다.
+  const [goalId, setGoalId] = useState(() => savedProgress?.goal || "");
+  const [goalBusy, setGoalBusy] = useState("");
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [previewActionId, setPreviewActionId] = useState("open_bank_account");
+  const [previewActionId, setPreviewActionId] = useState(() =>
+    savedProgress?.goal && APPLICATIONS[savedProgress.goal] ? savedProgress.goal : "open_bank_account");
   const [previewBlobUrl, setPreviewBlobUrl] = useState("");
   const [approval, setApproval] = useState(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
@@ -403,13 +416,14 @@ export default function App() {
       currentStep: step,
       completedScans,
       answers,
+      goal: goalId,
       memberId,
       updatedAt: new Date().toISOString(),
     };
     progressRef.current = next;
     window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(next));
     setSavedProgress(next);
-  }, [answers, completedScans, isAuthenticated, lang, memberId, step]);
+  }, [answers, completedScans, goalId, isAuthenticated, lang, memberId, step]);
 
   useEffect(() => {
     if (!memberId || step !== 3) return;
@@ -442,6 +456,15 @@ export default function App() {
   };
 
   const requestOnboardingExit = () => setExitConfirmOpen(true);
+
+  // 한/영 토글. lang 을 바꾸고, 렌더에 우선하는 agentState.locale 도 함께 덮어써
+  // 화면이 즉시 바뀌게 한다. 이후 서버 호출은 이 locale 로 나간다.
+  const changeLocale = (next) => {
+    if (next !== "ko" && next !== "en") return;
+    if (next === locale) return;
+    setLang(next);
+    setAgentState((current) => (current ? { ...current, locale: next } : current));
+  };
 
   const exitOnboarding = () => {
     stopCamera();
@@ -570,6 +593,8 @@ export default function App() {
     setProfileErrors({});
     setProfileSubmitting(false);
     setAnswers({ ...EMPTY_ANSWERS });
+    setGoalId("");
+    setGoalBusy("");
     setVerdict(null);
     setChatLoading(false);
     setChatInput("");
@@ -661,9 +686,10 @@ export default function App() {
       const resumed = resumeDetails(response.state, responseUi, locale)
         || savedProgressDetails(progressRef.current, locale);
       let targetStep = resumed?.targetStep || 2;
-      if (!resumed && tasks.length > 0) targetStep = 5;
+      // 목표를 아직 고르지 않았다면 할 일(5)·상담(4) 대신 목표 선택(8)부터 보여준다.
+      if (!resumed && tasks.length > 0) targetStep = goalId ? 5 : 8;
       else if (!resumed && restoredFields.length > 0 && (allScansCompleted || !hasReusableProfile)) targetStep = 3;
-      else if (!resumed && hasReusableProfile) targetStep = 4;
+      else if (!resumed && hasReusableProfile) targetStep = goalId ? 4 : 8;
       if (targetStep === 2) {
         const nextScan = SCAN_PAGES.findIndex((page) => !completedScans.includes(page.key));
         setScan(nextScan < 0 ? 0 : nextScan);
@@ -708,54 +734,97 @@ export default function App() {
       const resumed = resumeDetails(agentState, ui, locale)
         || savedProgressDetails(savedProgress, locale);
       const hasProfile = Object.keys(agentState?.profile || {}).length > 0;
-      if (isAuthenticated && resumed) {
-        const progressByStep = { 2: 22, 3: 45, 4: 60, 5: 72, 6: 82, 7: 92, 8: 100 };
-        const progressPercent = progressByStep[resumed.targetStep] || 22;
+      // 재방문 홈: 1) 이어할 작업 있음 2) 프로필만 있음 3) 프로필 없음 — 셋 중 하나만 보여준다.
+      if (isAuthenticated) {
+        const homeState = resumed ? "resume" : hasProfile ? "profile" : "start";
+        const progressByStep = { 2: 22, 3: 45, 8: 52, 4: 60, 5: 72, 6: 82, 7: 92 };
+        const progressPercent = resumed ? progressByStep[resumed.targetStep] || 22 : 0;
         const savedDate = savedProgress?.updatedAt
           ? new Date(savedProgress.updatedAt).toLocaleDateString(locale === "en" ? "en-CA" : "ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/\. /g, ".").replace(/\.$/, "")
           : "";
+        const startNewDocument = () => {
+          if (hasProfile) go(8); // 새 서류 = 새 목표부터 고른다
+          else {
+            setScan(0);
+            setCompletedScans([]);
+            go(2);
+          }
+        };
         return (
           <Shell modal={activeModal}>
+            <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
             <div className="resume-home">
+              <div className="resume-home-center">
               <div className="resume-home-brand">
-                <BridgeMark size={78} />
-                <h1>첫계좌</h1>
-                <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>
+                <BankMark size={78} />
+                <MaiteWordmark compact />
+                <span className="resume-service-name">{t("첫계좌", "First Account")}</span>
+                <div className="return-greeting">
+                  {homeState === "start" ? t("환영해요", "Welcome") : t("다시 오셨네요", "Welcome back")}
+                  <span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span>
+                </div>
               </div>
-              <section className="resume-progress-card" aria-label={t("저장된 진행 상황", "Saved progress")}>
-                <div className="resume-progress-kicker">{t("이어하기 · 임시저장", "Continue · Saved")}</div>
-                <h2>{resumed.title}</h2>
-                <p>{resumed.stage}</p>
-                {savedDate && <time dateTime={savedProgress.updatedAt}>{t("마지막 저장", "Last saved")} · {savedDate}</time>}
-                <div className="resume-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent}><span style={{ width: `${progressPercent}%` }} /></div>
-                <button type="button" disabled={sessionLoading} onClick={resumeSession}>{sessionLoading ? t("불러오는 중…", "Loading…") : t("이어서 하기", "Continue")}</button>
-              </section>
-              <button type="button" className="resume-new-document" onClick={() => {
-                if (hasProfile) go(5);
-                else {
-                  setScan(0);
-                  setCompletedScans([]);
-                  go(2);
-                }
-              }}>{t("새 서류 발급하기", "Prepare a new document")}</button>
-              <div className="resume-reuse-note">✓ {hasProfile
-                ? t("마스터 프로필 재사용 · 촬영·프로필 생략", "Reuse master profile · Skip capture and profile")
-                : t("진행 상황이 안전하게 저장됐어요", "Your progress is saved")}</div>
-              <button type="button" onClick={openCabinetFromHome} className="resume-cabinet"><span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}</button>
-              <button type="button" onClick={resetUserUiState} className="text-action resume-logout">{t("로그아웃", "Sign out")}</button>
+
+              {homeState === "resume" && (
+                <section className="resume-card resume-card--progress" aria-label={t("저장된 진행 상황", "Saved progress")}>
+                  <div className="resume-card-kicker">{t("이어서 하기", "Continue")}</div>
+                  <h2>{resumed.title}</h2>
+                  <p>{resumed.stage}</p>
+                  {savedDate && <time dateTime={savedProgress.updatedAt}>{t("마지막 저장", "Last saved")} · {savedDate}</time>}
+                  <div className="resume-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent}><span style={{ width: `${progressPercent}%` }} /></div>
+                  <button type="button" disabled={sessionLoading} onClick={resumeSession}>{sessionLoading ? t("불러오는 중…", "Loading…") : t("이어서 하기", "Continue")}</button>
+                </section>
+              )}
+              {homeState === "profile" && (
+                <section className="resume-card resume-card--profile" aria-label={t("마스터 프로필", "Master profile")}>
+                  <div className="resume-card-kicker">✓ {t("마스터 프로필 저장됨", "Master profile saved")}</div>
+                  <h2>{t("촬영·프로필 없이 바로 서류를 만들어요", "Skip capture and profile — create a document right away")}</h2>
+                  <p>{t("이름·비자·여권 정보 재사용", "Reuses your name, visa, and passport details")}</p>
+                </section>
+              )}
+              {homeState === "start" && (
+                <section className="resume-card resume-card--start" aria-label={t("시작 전", "Not started")}>
+                  <div className="resume-card-kicker">{t("시작 전", "Not started")}</div>
+                  <h2>{t("먼저 프로필을 만들어요", "Create your profile first")}</h2>
+                  <p>{t("외국인등록증을 촬영하면 정보를 자동으로 채워드려요.", "Scan your residence card and we'll fill in your details automatically.")}</p>
+                </section>
+              )}
+
+              {homeState === "resume" && (
+                <button type="button" className="resume-btn resume-btn-secondary" onClick={startNewDocument}>
+                  {t("새 서류 발급하기", "Prepare a new document")}
+                </button>
+              )}
+              {homeState === "profile" && (
+                <>
+                  <button type="button" className="resume-btn resume-btn-primary" onClick={startNewDocument}>
+                    {t("새 서류 발급하기", "Prepare a new document")}
+                  </button>
+                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}>
+                    <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}
+                  </button>
+                </>
+              )}
+              {homeState === "start" && (
+                <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={resumeSession}>
+                  {sessionLoading ? t("진행 내용 확인 중…", "Checking your progress…") : t("프로필 만들기", "Create profile")}
+                </button>
+              )}
+
               {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
+              </div>
+              <button type="button" onClick={resetUserUiState} className="text-action resume-logout">{t("로그아웃", "Sign out")}</button>
             </div>
           </Shell>
         );
       }
       return (
       <Shell modal={activeModal}>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
-          <BridgeMark size={104} />
+        <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px var(--page-gutter)" }}>
+          <MaiteWordmark />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            <div style={{ fontFamily: "'Noto Sans KR',sans-serif", fontSize: 34, fontWeight: 700, letterSpacing: "-0.03em" }}>첫계좌</div>
-            <div style={{ ...mono, fontSize: 12.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "var(--muted)" }}>Firstaccount</div>
-            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>}
+            <div style={{ ...mono, fontSize: 12.5, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--muted)" }}>{t("외국인을 위한 생활 서류 도우미", "Your document companion in Korea")}</div>
           </div>
           <div style={{ width: 34, height: 1, background: "var(--line)" }} />
           <div style={{ fontSize: 15, lineHeight: 1.55, color: "oklch(0.45 0.012 60)", textAlign: "center", maxWidth: 250 }}>
@@ -766,53 +835,16 @@ export default function App() {
           <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
             D-2 STUDENT VISA · BETA
           </div>
-          {isAuthenticated && resumed && (
-            <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">↗</span>
-              <div><b>{resumed.title}</b><small>{resumed.stage}</small></div>
-            </div>
-          )}
-          {isAuthenticated && !sessionLoading && !resumed && !hasProfile && (
-            <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">＋</span>
-              <div><b>{t("프로필부터 만들어 볼까요?", "Let's create your profile")}</b><small>{t("서류 사진을 등록하면 필요한 절차를 안내해 드려요.", "Upload your documents to get personalized guidance.")}</small></div>
-            </div>
-          )}
           <div style={{ width: "100%" }}>
             <PrimaryButton disabled={sessionLoading} onClick={() => {
-              if (isAuthenticated && resumed) resumeSession();
-              else if (isAuthenticated) resumeSession();
-              else {
-                setAuthMode("login");
-                go(-1);
-              }
-            }}>{sessionLoading
-              ? t("진행 내용 확인 중…", "Checking your progress…")
-              : resumed
-                ? t("이어서 하기", "Continue")
-                : isAuthenticated && hasProfile
-                  ? t("새 서류 준비하기", "Prepare a new document")
-                  : isAuthenticated
-                    ? t("프로필 만들기", "Create profile")
-                    : t("로그인", "Sign in")}</PrimaryButton>
-          </div>
-          {!isAuthenticated && (
-            <button type="button" onClick={() => {
-              setAuthMode("signup");
+              setAuthMode("login");
               go(-1);
-            }} className="text-action">{t("계정이 없나요? 회원가입", "Need an account? Sign up")}</button>
-          )}
-          {isAuthenticated && resumed && (
-            <button type="button" onClick={() => go(1)} className="text-action">{t("언어 설정부터 다시 보기", "Choose language again")}</button>
-          )}
-          {isAuthenticated && (
-            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
-            </div>
-          )}
-          {isAuthenticated && (
-            <button type="button" onClick={resetUserUiState} className="text-action">{t("로그아웃", "Sign out")}</button>
-          )}
+            }}>{t("시작하기", "Get started")}</PrimaryButton>
+          </div>
+          <button type="button" onClick={() => {
+            setAuthMode("signup");
+            go(-1);
+          }} className="text-action">{t("계정이 없나요? 회원가입", "Need an account? Sign up")}</button>
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
         </div>
       </Shell>
@@ -825,13 +857,8 @@ export default function App() {
     const normalizedEmail = auth.email.trim();
     const validEmail = normalizedEmail.length <= 254 && EMAIL_PATTERN.test(normalizedEmail);
     const rules = passwordChecks(auth.password, locale);
-    const validPassword = rules.every((rule) => rule.met);
-    const loginRules = [
-      { label: t("8자 이상", "At least 8 characters"), met: auth.password.length >= 8 },
-      { label: t("영문·숫자·특수문자 포함", "Includes letters, numbers, and symbols"), met: /[A-Za-z]/.test(auth.password) && /\d/.test(auth.password) && /[^A-Za-z0-9]/.test(auth.password) },
-    ];
+    const passwordEligible = rules.every((rule) => rule.met);
     const passwordMatches = Boolean(auth.passwordConfirm) && auth.password === auth.passwordConfirm;
-    const passwordEligible = signup ? validPassword : loginRules.every((rule) => rule.met);
     const canSubmit = validEmail && passwordEligible && (signup ? passwordMatches : true);
     const clearAuthError = () => {
       if (authMessageType !== "error") return;
@@ -904,34 +931,26 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} />
+        <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} right={<LangToggle locale={locale} onChange={changeLocale} />} />
         <div style={{ padding: "18px 26px 12px" }}>
-          <BridgeMark size={56} />
-          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("첫계좌를 시작해요", "Create your First Account profile") : t("반가워요!", "Welcome!")}</h2>
+          <MaiteWordmark compact />
+          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("MAITE를 시작해요", "Create your MAITE profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
           <p style={SUB}>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
         </div>
         <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
           {authMessageType === "error" && authMessage && <div role="alert" className="auth-notice error">{authMessage}</div>}
-          <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} />
+          <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} valid={validEmail} />
           {auth.email && !validEmail && <FieldHint tone="error">{t("영문 이메일 형식으로 입력해 주세요. (예: name@example.com)", "Enter a valid email address, such as name@example.com.")}</FieldHint>}
-          <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={signup && Boolean(auth.password) && !validPassword} />
+          {validEmail && <div className="auth-inline-hint">✓ {t("@ 포함 이메일 형식", "Valid email format")}</div>}
+          <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={signup && Boolean(auth.password) && !passwordEligible} valid={!signup && Boolean(auth.password) && passwordEligible} />
           {!signup && authMessageType === "success" && authMessage && <div role="status" className="auth-notice success">{authMessage}</div>}
-          {!signup && (
-            <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
-              <div>{loginRules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
-            </div>
-          )}
-          {signup && (
-            <div className="password-guide" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
-              <strong>{t("비밀번호 조건", "Password requirements")}</strong>
-              <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "•"} {rule.label}</span>)}</div>
-            </div>
-          )}
+          <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+            <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
+          </div>
           {signup && (
             <>
-              <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} />
+              <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} valid={passwordMatches} indicator={t("일치", "Match")} />
               {auth.passwordConfirm && !passwordMatches && <FieldHint tone="error">{t("입력한 비밀번호가 서로 일치하지 않아요.", "The passwords do not match.")}</FieldHint>}
-              {passwordMatches && <FieldHint tone="success">{t("비밀번호가 일치해요.", "The passwords match.")}</FieldHint>}
               <div className="visa-choice-group" role="group" aria-label={t("체류자격", "Visa status")}>
                 <b>{t("체류자격(비자)", "Visa status")}</b>
                 <button type="button" className="visa-choice selected" aria-pressed="true">
@@ -950,7 +969,7 @@ export default function App() {
             </>
           )}
         </form>
-        <div style={{ padding: "12px 26px 34px" }}>
+        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 26, paddingRight: 26 }}>
           <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? t("처리 중…", "Processing…") : signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")}</PrimaryButton>
           <button type="button" onClick={switchAuthMode}
             style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
@@ -966,17 +985,17 @@ export default function App() {
     return (
       <Shell modal={activeModal}>
         {isAuthenticated && <TopBar title={t("설정", "Settings")} onBack={() => back(0)} right={<ExitButton onClick={() => go(0)} locale={locale} />} />}
-        <div style={{ padding: isAuthenticated ? "14px 26px 18px" : "52px 26px 18px" }}>
-          <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
-          <p style={SUB}>{t("안내와 서류 설명에 사용할 언어예요. 나중에 다시 바꿀 수 있어요.", "We will use it for guidance and document explanations. You can change it later.")}</p>
-        </div>
-        <div className="scroll" style={{ padding: "0 26px 20px" }}>
+        <div className="scroll" style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 28, padding: "0 26px" }}>
+          <div>
+            <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
+            <p style={SUB}>{t("앱을 열면 가장 먼저 나와요. 나중에 바꿀 수 있어요.", "It's the first thing you see when you open the app. You can change it later.")}</p>
+          </div>
           <div className="language-list">
-            <LanguageChoice code="KO" title="한국어" subtitle="Korean" selected={lang === "ko"} onClick={() => setLang("ko")} />
-            <LanguageChoice code="EN" title="English" subtitle="영어" selected={lang === "en"} onClick={() => setLang("en")} />
+            <LanguageChoice title="한국어" subtitle="Korean" selected={lang === "ko"} onClick={() => setLang("ko")} />
+            <LanguageChoice title="English" subtitle="영어" selected={lang === "en"} onClick={() => setLang("en")} />
           </div>
         </div>
-        <div style={{ padding: "8px 26px 34px" }}>
+        <div className="bottom-cta" style={{ paddingTop: 8, paddingLeft: 26, paddingRight: 26 }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{toast}</div>}
           <PrimaryButton disabled={sessionLoading} onClick={() => go(0)}>
             {t("계속", "Continue")}
@@ -1062,7 +1081,7 @@ export default function App() {
     const currentShot = shots[scanPages[scan].key];
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
+        <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={1} locale={locale} />
         <div style={{ padding: "4px 24px 12px" }}>
           <h2 style={H2}>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
@@ -1155,8 +1174,9 @@ export default function App() {
           agentResponse: response,
         }));
         setDirtyFields({});
-        // 다음 UI 가 질문이면 상담 화면, 그 밖이면 과제 목록으로 간다.
-        go(readUi(response).type === "question" ? 4 : 5);
+        // 다음 UI 가 질문이면 상담 화면, 그 밖이면 목표 선택(8)으로 간다.
+        // 흐름도 개선안: 할 일보다 "사용자가 어떤 서류를 원하는지"가 먼저다.
+        go(readUi(response).type === "question" ? 4 : 8);
       } catch (error) {
         if (handleAuthError(error)) return;
         if (error?.status === 422 && error?.code === "validation_failed") {
@@ -1175,7 +1195,7 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
+        <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={2} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
           <h2 style={H2}>{t("카드에서 만든 프로필", "Profile from your documents")}</h2>
@@ -1190,7 +1210,7 @@ export default function App() {
           ))}
           {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
         </div>
-        <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="bottom-cta" style={{ paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{t("수정 불가 항목은 마스킹된 값으로 전송되지 않아요.", "Read-only masked values are not submitted.")}</div>
           <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
             {profileSubmitting ? t("확인 중…", "Checking…") : t("확인하고 계속", "Confirm and continue")}
@@ -1206,7 +1226,7 @@ export default function App() {
       const editAnswers = () => setVerdict(null);
       return (
         <Shell modal={activeModal}>
-          <TopBar title={t("첫계좌 AI", "First Account AI")} onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
+          <TopBar title="MAITE AI" onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
           <Rail active={3} locale={locale} />
           <div className="scroll review-scroll">
             <section className="review-hero">
@@ -1300,7 +1320,7 @@ export default function App() {
 
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("첫계좌 AI", "First Account AI")} onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
+        <TopBar title="MAITE AI" onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
         <Rail active={3} locale={locale} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.map((message, index) => {
@@ -1354,9 +1374,89 @@ export default function App() {
     );
   }
 
+  // ── 8 목표 선택 (프로필 직후 — 흐름도 개선안) ──
+  // "시스템이 정해준 할 일"보다 "사용자가 원하는 서류"를 먼저 묻는다.
+  // 선택이 startAction 으로 이어져 current_action 을 세팅하고, 잠긴 목표는
+  // 409(prerequisite_missing)를 만들지 않도록 호출 없이 할 일 목록에서 순서를 보여준다.
+  if (step === 8) {
+    const tasks = agentState?.tasks || [];
+    const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
+    const prereqLabel = (task) => (task?.blocked_by || [])
+      .map((id) => taskById[id]?.label || GOALS.find((goal) => goal.id === id)?.[locale]?.[0] || id)
+      .join(", ");
+    const chooseGoal = async (goal) => {
+      if (goalBusy) return;
+      setGoalId(goal.id);
+      if (APPLICATIONS[goal.id]) setPreviewActionId(goal.id);
+      setToast("");
+      const task = taskById[goal.id];
+      if (task && task.status === "locked") {
+        go(5); // 선행 과제부터 — 할 일 목록이 순서를 보여준다
+        return;
+      }
+      if (task && task.status === "done") {
+        go(7); // 이미 완료된 목표는 신청서 화면으로
+        return;
+      }
+      setGoalBusy(goal.id);
+      try {
+        const response = applyAgent(await startAction(sessionId, goal.id, locale));
+        go(readUi(response).type === "question" ? 4 : 5);
+      } catch (error) {
+        if (handleAuthError(error)) return;
+        if (error?.code === "prerequisite_missing") {
+          go(5);
+          return;
+        }
+        setToast(localizedError(error, locale, "목표를 시작하지 못했어요.", "Could not start this goal."));
+      } finally {
+        setGoalBusy("");
+      }
+    };
+    return (
+      <Shell modal={activeModal}>
+        <TopBar title={t("목표 선택", "Choose a goal")} onBack={() => back(3)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
+        <Rail active={3} locale={locale} />
+        <div style={{ padding: "4px 24px 14px" }}>
+          <h2 style={H2}>{t("무엇을 하려고 하세요?", "What would you like to do?")}</h2>
+          <p style={SUB}>{t("목표를 먼저 고르면 필요한 할 일과 서류만 순서대로 안내해 드려요.", "Pick a goal first and we will guide you through only the tasks and documents it needs.")}</p>
+        </div>
+        <div className="scroll" style={{ padding: "0 24px 8px" }}>
+          <div className="goal-list">
+            {GOALS.map((goal) => {
+              const task = taskById[goal.id];
+              const locked = task?.status === "locked";
+              const busy = goalBusy === goal.id;
+              const selected = goalId === goal.id;
+              return (
+                <button key={goal.id} type="button" disabled={Boolean(goalBusy) && !busy} onClick={() => chooseGoal(goal)}
+                  aria-pressed={selected} className={`goal-choice${selected ? " selected" : ""}${locked ? " locked" : ""} tap`}>
+                  <span className="goal-icon" aria-hidden="true">{goal.icon}</span>
+                  <span className="goal-copy">
+                    <b>{goal[locale][0]}</b>
+                    <small>{goal[locale][1]}</small>
+                    {locked && <small className="goal-order">{t("먼저 필요해요", "Complete first")} · {prereqLabel(task)}</small>}
+                  </span>
+                  <span className="goal-check" aria-hidden="true">{busy ? "…" : selected ? "✓" : "›"}</span>
+                </button>
+              );
+            })}
+          </div>
+          {toast && <div role="alert" className="capture-error" style={{ margin: "12px 0 0" }}>{toast}</div>}
+        </div>
+        <div className="bottom-cta" style={{ paddingTop: 10 }}>
+          <button type="button" onClick={() => go(4)} className="tap goal-undecided">
+            {t("아직 모르겠어요 — AI 상담으로 정할래요", "Not sure yet — decide with the AI counselor")}
+          </button>
+        </div>
+      </Shell>
+    );
+  }
+
   // ── 5 할 일 / 과제 선택 ──
   if (step === 5) {
     const tasks = agentState?.tasks || [];
+    const goal = GOALS.find((entry) => entry.id === goalId);
     const startTask = async (task) => {
       if (taskBusy) return;
       setTaskBusy(task.id);
@@ -1375,13 +1475,23 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("할 일", "Tasks")} onBack={() => back(4)} />
+        <TopBar title={t("할 일", "Tasks")} onBack={() => back(8)} />
         <Rail active={3} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>{t("지금 할 수 있는 일", "What you can do now")}</h2>
+          {goal && (
+            <div className="goal-banner">
+              <span aria-hidden="true">{goal.icon}</span>
+              <div>
+                <small>{t("선택한 목표", "Your goal")}</small>
+                <b>{goal[locale][0]}</b>
+              </div>
+              <button type="button" onClick={() => go(8)} className="tap">{t("변경", "Change")}</button>
+            </div>
+          )}
+          <h2 style={{ ...H2, marginTop: goal ? 14 : 0 }}>{t("지금 할 수 있는 일", "What you can do now")}</h2>
           <p style={SUB}>{t("잠긴 항목은 먼저 끝내야 하는 과제가 있어요.", "Locked tasks require another task to be completed first.")}</p>
         </div>
-        <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="scroll task-scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
           {ui.type === "doc_preview" && ui.payload?.document_id && (
             <div style={{ ...card, display: "flex", gap: 13, borderColor: "var(--brand-2)" }}>
               <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
@@ -1404,9 +1514,8 @@ export default function App() {
             <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} locale={locale} />
           ))}
         </div>
-        <div style={{ padding: "10px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="bottom-cta task-footer" style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
-          <PrimaryButton onClick={() => go(4)}>{t("상담으로 돌아가기", "Back to chat")}</PrimaryButton>
           {/* 화면 6~9(서류·승인·이력)로 들어가는 유일한 진입로다. */}
           <button type="button" onClick={() => go(7)} className="tap"
             style={{ width: "100%", minHeight: 46, borderRadius: 12, border: "1px solid var(--line)",
@@ -1414,6 +1523,10 @@ export default function App() {
             {t("내 신청서 · 서류함", "Applications · Documents")}
           </button>
         </div>
+        <button type="button" className="maite-chat-fab tap" onClick={() => go(4)} aria-label={t("MAITE AI 상담으로 돌아가기", "Return to MAITE AI chat")}>
+          <MaiteAvatar size={36} />
+          <span><small>MAITE AI</small>{t("상담으로 돌아가기", "Back to chat")}</span>
+        </button>
       </Shell>
     );
   }
@@ -1446,7 +1559,7 @@ export default function App() {
             <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{action.note}</div>
           </div>
         </div>
-        <div style={{ padding: "16px 24px 34px" }}>
+        <div className="bottom-cta">
           <PrimaryButton onClick={() => go(7)}>{t("내 신청서", "My applications")}</PrimaryButton>
         </div>
       </Shell>
@@ -1511,7 +1624,7 @@ export default function App() {
             </div>
           ))}
         </div>
-        <div style={{ padding: "16px 24px 34px" }}>
+        <div className="bottom-cta">
           {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
           <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
             {previewLoading ? t("PDF 생성 중…", "Generating PDF…") : t(`${selectedApplication.ko} 미리보기`, `Preview ${selectedApplication.en}`)}
@@ -1577,7 +1690,7 @@ export default function App() {
         <div className="scroll" style={{ padding: "0 20px 20px" }}>
           <iframe title={preview.title} src={previewBlobUrl} style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
         </div>
-        <div style={{ padding: "16px 20px 34px", display: "flex", gap: 9 }}>
+        <div className="bottom-cta" style={{ paddingLeft: 20, paddingRight: 20, display: "flex", gap: 9 }}>
           <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>{t("PDF 다운로드", "Download PDF")}</button>
         </div>
       </Shell>
@@ -1585,7 +1698,7 @@ export default function App() {
 
   return (
     <Shell modal={activeModal}>
-      <TopBar title="첫계좌" onBack={() => back(0)} />
+      <TopBar title="MAITE" onBack={() => back(0)} />
       <div style={{ padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
         <h2 style={H2}>{t("화면을 다시 연결할게요", "Let's reconnect your screen")}</h2>
         <p style={SUB}>{t("진행 내용은 임시 저장되어 있어요. 이어하기를 눌러 안전하게 돌아가세요.", "Your progress is saved temporarily. Continue to return safely.")}</p>
@@ -1600,8 +1713,8 @@ export default function App() {
 // ── 작은 헬퍼 컴포넌트 ──
 function Shell({ children, dark, modal }) {
   return (
-    <div className="app-shell">
-      <div className="phone" style={dark ? { background: "oklch(0.22 0.012 60)" } : undefined}>{children}{modal}</div>
+    <div className="app-shell device-preview">
+      <div className="phone app-screen" style={dark ? { background: "oklch(0.22 0.012 60)" } : undefined}>{children}{modal}</div>
     </div>
   );
 }
@@ -1641,12 +1754,15 @@ function CaptureProgress({ locale = "ko" }) {
     </div>
   );
 }
-function AuthInput({ label, type = "text", value, onChange, placeholder, ...inputProps }) {
+function AuthInput({ label, type = "text", value, onChange, placeholder, valid, indicator = "✓", ...inputProps }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
       <span style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</span>
-      <input className="auth-input" type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
-        style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
+      <span style={{ position: "relative", display: "block" }}>
+        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
+          style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: valid ? "0 46px 0 15px" : "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
+        {valid && <span className="auth-input-indicator" aria-hidden="true">{indicator}</span>}
+      </span>
     </label>
   );
 }
@@ -1656,7 +1772,7 @@ function FieldHint({ children, tone = "info" }) {
 function ChatBubble({ children, mine, avatar, wide }) {
   return (
     <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}`}>
-      {avatar && <BridgeMark size={32} />}
+      {avatar && <MaiteAvatar size={34} />}
       <div className="chat-bubble">{children}</div>
     </div>
   );
@@ -1673,12 +1789,29 @@ function AccountCard({ title, subtitle, account }) {
 function ExitButton({ onClick, locale = "ko" }) {
   return <button type="button" onClick={onClick} className="exit-button">{locale === "en" ? "Exit" : "나가기"}</button>;
 }
-function LanguageChoice({ code, title, subtitle, selected, onClick }) {
+// Exit 옆 한/영 세그먼트 토글.
+function LangToggle({ locale = "ko", onChange }) {
+  return (
+    <div className="lang-toggle" role="group" aria-label={locale === "en" ? "Language" : "언어 선택"}>
+      <button type="button" className={locale === "ko" ? "on" : ""} aria-pressed={locale === "ko"} onClick={() => onChange("ko")}>한</button>
+      <button type="button" className={locale === "en" ? "on" : ""} aria-pressed={locale === "en"} onClick={() => onChange("en")}>EN</button>
+    </div>
+  );
+}
+// Exit 자리에 한/영 토글 + 나가기 버튼을 함께 올린다.
+function TopActions({ locale, onLocale, onExit }) {
+  return (
+    <div className="top-actions">
+      <LangToggle locale={locale} onChange={onLocale} />
+      <ExitButton onClick={onExit} locale={locale} />
+    </div>
+  );
+}
+function LanguageChoice({ title, subtitle, selected, onClick }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={selected} className={`language-choice${selected ? " selected" : ""}`}>
-      <span className="language-code" aria-hidden="true">{code}</span>
-      <span className="language-copy"><b>{title}</b><small>{subtitle}</small></span>
-      <span className="language-check" aria-hidden="true">{selected ? "✓" : ""}</span>
+      <b>{title}</b>
+      <span className="language-sub">{subtitle}</span>
     </button>
   );
 }
@@ -1738,7 +1871,7 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
   const en = locale === "en";
   return (
     <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"} style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
-      <div style={{ width: "100%", padding: "22px 20px 30px", borderRadius: "24px 24px 0 0", background: "#fff" }}>
+      <div style={{ width: "100%", padding: "22px 20px calc(30px + var(--safe-bottom))", borderRadius: "24px 24px 0 0", background: "#fff" }}>
         <div style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em" }}>APPROVAL · {approval.risk_level || "L2"}</div>
         <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || (en ? "Action approval" : "실행 승인")}</h3>
         {(approval.summary || []).map((item) => <div key={item} style={{ padding: "7px 0", fontSize: 12.5 }}>· {item}</div>)}

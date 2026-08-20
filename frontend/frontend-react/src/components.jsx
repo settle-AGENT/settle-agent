@@ -17,6 +17,65 @@ export function BridgeMark({ size = 60, bg = "oklch(0.97 0.01 250)" }) {
   );
 }
 
+// MAITE 표기용 워드마크. 이미지 에셋이 없어도 철자와 비율이 흔들리지 않도록
+// 한 컴포넌트에서만 렌더링한다.
+export function MaiteWordmark({ compact = false, inverse = false }) {
+  return (
+    <div className={`maite-wordmark${compact ? " compact" : ""}${inverse ? " inverse" : ""}`} aria-label="MAITE">
+      <span>MAI</span>
+      <svg viewBox="0 0 34 32" aria-hidden="true">
+        <path d="M5 7h24M17 7v18" />
+        <circle cx="5" cy="7" r="3.2" />
+        <circle cx="29" cy="7" r="3.2" />
+        <circle cx="17" cy="25" r="3.2" />
+      </svg>
+      <span>E</span>
+    </div>
+  );
+}
+
+// 상담 화면 전용 MAITE 연결 모티프 캐릭터.
+export function MaiteAvatar({ size = 36 }) {
+  return (
+    <div className="maite-avatar" style={{ width: size, height: size, borderRadius: size * 0.32 }} aria-label="MAITE AI">
+      <svg width={size * 0.72} height={size * 0.72} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M12 15h24M24 15v18" />
+        <circle cx="12" cy="15" r="5" />
+        <circle cx="36" cy="15" r="5" />
+        <circle cx="24" cy="33" r="5" />
+        <circle cx="21" cy="24" r="1.7" className="maite-eye" />
+        <circle cx="27" cy="24" r="1.7" className="maite-eye" />
+      </svg>
+    </div>
+  );
+}
+
+// 재방문 홈 화면(step 0, 로그인 상태) 전용 — 은행 건물 + 원화 배지.
+export function BankMark({ size = 60, bg = "oklch(0.97 0.01 250)" }) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: size * 0.27, background: bg,
+      display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+      <svg width={size * 0.5} height={size * 0.5} viewBox="0 0 96 96" fill="none">
+        <path d="M48 14 14 34h68z" fill="oklch(0.55 0.14 250)" />
+        <rect x="14" y="40" width="68" height="6" rx="1.5" fill="oklch(0.55 0.14 250)" />
+        <rect x="18" y="48" width="6" height="26" fill="oklch(0.55 0.14 250)" />
+        <rect x="33" y="48" width="6" height="26" fill="oklch(0.55 0.14 250)" />
+        <rect x="48" y="48" width="6" height="26" fill="oklch(0.55 0.14 250)" />
+        <rect x="63" y="48" width="6" height="26" fill="oklch(0.55 0.14 250)" />
+        <rect x="78" y="48" width="6" height="26" fill="oklch(0.55 0.14 250)" />
+        <rect x="12" y="78" width="72" height="6" rx="1.5" fill="oklch(0.55 0.14 250)" />
+      </svg>
+      <span aria-hidden="true" style={{
+        position: "absolute", top: size * 0.06, right: size * 0.06,
+        width: size * 0.34, height: size * 0.34, borderRadius: "50%",
+        background: "oklch(0.72 0.15 150)", color: "#fff", display: "flex",
+        alignItems: "center", justifyContent: "center", fontSize: size * 0.18,
+        fontWeight: 900, border: `2px solid ${bg}`,
+      }}>$</span>
+    </div>
+  );
+}
+
 export function TopBar({ title, onBack, right }) {
   return (
     <div className="top-bar">
@@ -165,8 +224,11 @@ export function TaskCard({ task, busy, onStart, locale = "ko" }) {
       {task.agency && <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Agency" : "제출처"} · {task.agency}</div>}
       {task.note && <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{task.note}</div>}
       {task.required_docs?.length > 0 && (
-        <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>
-          {en ? "Bring" : "지참"} · {task.required_docs.join(", ")}
+        <div className="task-documents" aria-label={en ? "Required documents" : "준비물"}>
+          <div className="task-documents-title"><span aria-hidden="true">📎</span>{en ? "What to bring" : "준비물"}</div>
+          <ul>
+            {task.required_docs.map((document) => <li key={document}>{document}</li>)}
+          </ul>
         </div>
       )}
 
