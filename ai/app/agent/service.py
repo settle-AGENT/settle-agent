@@ -312,6 +312,10 @@ _ACK = {
         "ko": "그만두시려면 \"취소\" 라고 말씀해주세요.",
         "en": "Say \"cancel\" if you want to stop.",
     },
+    "one_at_a_time": {
+        "ko": "한 번에 하나씩만 도와드릴 수 있습니다. 어느 것부터 하시겠어요?",
+        "en": "I can only help with one at a time. Which one first?",
+    },
     "no_profile": {"ko": "외국인등록증을 먼저 촬영해주세요. "
                          "체류자격을 알아야 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
                    "en": "Please photograph your residence card first. "
@@ -475,9 +479,21 @@ def send_message(session_id: str, message: str) -> dict:
         return _menu(session_id, extra, locale)
 
     # 3. 특정 과제를 하겠다는 요청
-    if kind == "action" and intent.get("action_id"):
-        return _guide(session_id, extra, tasks, intent["action_id"], locale,
-                      snap.get("profile") or {})
+    if kind == "action":
+        ids = [a for a in (intent.get("action_ids") or []) if _task(tasks, a)]
+
+        # 한 번에 둘 이상은 받지 않는다. current_action·pending_approval·
+        # asked_field 가 전부 단일 값이라 둘을 열면 슬롯 질문이 섞이고
+        # 어느 서류를 승인하는지 알 수 없게 된다.
+        if len(ids) > 1:
+            return _choose(session_id, extra, tasks, ids, locale)
+
+        one = ids[0] if ids else intent.get("action_id")
+        if one:
+            return _guide(session_id, extra, tasks, one, locale,
+                          snap.get("profile") or {})
+        # 어느 과제인지 특정되지 않았다. 메뉴로 고르게 한다.
+        return _menu(session_id, extra, locale)
 
     # 4. 나머지는 질의응답으로 보낸다
     extra["ask"] = message
@@ -532,6 +548,24 @@ def _abandon(session_id: str, extra: dict, snap: dict, locale: str) -> dict:
     if label:
         text = text.format(label)
     return _response(state, text, "none", {}, reply_locale=locale)
+
+
+def _choose(session_id: str, extra: dict, tasks: list[dict],
+            ids: list[str], locale: str) -> dict:
+    """둘 이상을 한꺼번에 요청했을 때. 하나만 된다고 말하고 고르게 한다."""
+    options = [{"value": t["id"], "label": t["label"]}
+               for t in tasks if t["id"] in ids]
+    extra["pending_offer"] = {"kind": "menu",
+                              "options": [o["value"] for o in options]}
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    title = _pick(_ACK, "one_at_a_time", locale)
+    return _response(state, title, "question", {
+        "field": "menu",
+        "label": title,
+        "input_type": "select",
+        "options": options,
+        "hint": None,
+    }, reply_locale=locale)
 
 
 def _menu(session_id: str, extra: dict, locale: str) -> dict:
