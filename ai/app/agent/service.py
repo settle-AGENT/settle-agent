@@ -10,11 +10,12 @@ import uuid
 from functools import lru_cache
 from typing import Any, ClassVar, Literal, Optional
 
-from app.agent.graph import CITE_LABEL, build_graph
+from app.agent.graph import CITE_LABEL, ask_visa, build_graph
 from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
 from app.nodes import qa, researcher
 from app.nodes.planner import MENU_TITLE, menu_options, summary
+from app.rules.loader import VISA_CODES
 from app.nodes.profiler import (
     HARD_KEYS,
     SOFT_KEYS,
@@ -256,8 +257,9 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
 
 # 슬롯 필링 필드의 의미와 허용값 (graph.QUESTIONS 와 짝)
 _FIELD_META = {
+    "visa_type":     ("Korean visa status code, e.g. D-2",
+                      {c: 1 for c in VISA_CODES}),
     "birth_date":    ("Date of birth (YYYY-MM-DD)", None),
-    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
     "org_name":      ("Name of the school or organization", None),
     "phone_kr":      ("Phone number in Korea", None),
@@ -521,10 +523,14 @@ def _menu(session_id: str, extra: dict, locale: str) -> dict:
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     options = menu_options(state.get("tasks") or [], locale)
     if not options:
-        key = "nothing" if (state.get("profile") or {}).get("visa_type") \
-              else "no_profile"
-        return _response(state, _pick(_ACK, key, locale), "none", {},
-                             reply_locale=locale)
+        if not state.get("tasks"):
+            # 자격을 모르거나 미지원이면 메뉴가 아니라 그 얘기를 해야 한다.
+            out = ask_visa(state)
+            state = _graph().invoke(_patch(session_id, out), _cfg(session_id))
+            return _response(state, out["reply"], out["ui_type"],
+                             out.get("ui_payload") or {}, reply_locale=locale)
+        return _response(state, _pick(_ACK, "nothing", locale), "none", {},
+                         reply_locale=locale)
 
     state = _graph().invoke(
         _patch(session_id, {"pending_offer": {

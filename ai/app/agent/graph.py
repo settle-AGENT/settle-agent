@@ -20,7 +20,7 @@ from app.nodes import qa, researcher
 from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import label_of as _label_of
-from app.rules.loader import actions_for, evidence_labels
+from app.rules.loader import VISA_CODES, actions_for, evidence_labels
 from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
@@ -40,6 +40,16 @@ def _now() -> str:
 # label / hint / options 는 {ko, en}. LLM 이 문장을 만들어 주면 label·hint 는
 # 덮이지만 options 는 LLM 을 타지 않으므로 여기 값이 그대로 화면에 나간다.
 QUESTIONS: dict[str, dict] = {
+    # 등록증이 없으면 체류자격을 알 길이 없다. 여권에는 스티커로 붙어 있지만
+    # 추출기가 그 면을 읽지 않으므로 직접 묻는다. 이걸 모르면 Task Graph 가
+    # 통째로 비어 아무 안내도 못 한다 — 정작 등록이 가장 급한 사람이다.
+    "visa_type": {
+        "label": {"ko": "체류자격이 어떻게 되시나요? 여권의 비자에 적혀 있습니다.",
+                  "en": "What is your visa status? It is printed on the visa in your passport."},
+        "input_type": "select",
+        "options": [],          # 런타임에 visa_codes.yaml 로 채운다
+        "hint": {"ko": "예: D-2 (유학)", "en": "e.g. D-2 (Student)"},
+    },
     "birth_date": {
         "label": {"ko": "생년월일이 어떻게 되시나요?",
                   "en": "What is your date of birth?"},
@@ -96,6 +106,12 @@ QUESTIONS: dict[str, dict] = {
 }
 
 
+def visa_options() -> list[dict]:
+    """체류자격 선택지. visa_codes.yaml 이 한 곳의 출처다."""
+    return [{"value": code, "label": f"{code} ({name})"}
+            for code, name in VISA_CODES.items()]
+
+
 def _text(value, locale: str) -> str | None:
     """{ko, en} 이면 locale 을 고르고, 평문이면 그대로 둔다."""
     if isinstance(value, dict):
@@ -143,6 +159,17 @@ ACTION_TITLES: dict[str, dict] = {
                       "en": "Submit Activity Permit application"},
     "open_bank_account": {"ko": "계좌개설 신청서 제출",
                           "en": "Submit account opening application"},
+}
+
+NO_ID = {"ko": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
+         "en": "Upload your ID and I will tell you what you need to do."}
+VISA_LEAD = {"ko": "체류자격만 알면 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
+             "en": "Once I know your visa status I can tell you what to do."}
+VISA_UNSUPPORTED = {
+    "ko": "{} 는 아직 안내를 준비하지 못했습니다. 지금은 D-2(유학)만 "
+          "지원합니다. 출입국·외국인종합안내센터(1345)에 문의해주세요.",
+    "en": "I do not have guidance for {} yet — only D-2 (Student) for now. "
+          "Please call the immigration center at 1345.",
 }
 
 SLOT_LEAD = {
@@ -562,8 +589,7 @@ def explainer(state: AgentState) -> dict:
         return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
 
     if not tasks:
-        return {"reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
-                "ui_type": "none"}
+        return ask_visa(state)
 
     base = summary(tasks)
 
@@ -608,6 +634,43 @@ def _implied_offer(reply: str, tasks: list[dict]) -> dict | None:
     if not nxt:
         return None
     return {"kind": "start_action", "action_id": nxt["id"], "label": nxt["label"]}
+
+
+def ask_visa(state: AgentState) -> dict:
+    """체류자격을 몰라 아무 안내도 못 하는 상태를 푼다.
+
+    무엇을 올렸느냐로 갈린다.
+      아무것도 없음        → 신분증부터 받는다
+      여권만 있음          → 체류자격을 묻는다. 등록하러 온 사람에게
+                            등록증을 가져오라고 하면 안 된다.
+      자격은 아는데 미지원  → 솔직히 말한다. 없는 안내를 지어내지 않는다.
+    """
+    locale = state.get("locale") or "en"
+    profile = state.get("profile") or {}
+
+    if not profile:
+        return {"reply": _text(NO_ID, locale), "reply_locale": locale,
+                "ui_type": "none"}
+
+    visa = profile.get("visa_type")
+    if visa and not actions_for(visa):
+        return {"reply": _text(VISA_UNSUPPORTED, locale).format(visa),
+                "reply_locale": locale, "ui_type": "none"}
+
+    q = QUESTIONS["visa_type"]
+    return {
+        "asked_field": "visa_type",
+        "reply": _text(VISA_LEAD, locale),
+        "reply_locale": locale,
+        "ui_type": "question",
+        "ui_payload": {
+            "field": "visa_type",
+            "label": _text(q["label"], locale),
+            "input_type": "select",
+            "options": visa_options(),
+            "hint": _text(q["hint"], locale),
+        },
+    }
 
 
 def _next_action(tasks: list[dict]) -> dict | None:
