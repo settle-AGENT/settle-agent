@@ -64,8 +64,12 @@ export function PrimaryButton({ children, onClick, disabled }) {
   );
 }
 
+// AI 쪽 doc_builder.CONF_THRESHOLD 와 같은 값이어야 한다. 어긋나면 서류에는
+// 확인 주석이 붙는데 화면 배지는 뜨지 않는 구간이 생긴다.
+const CONF_THRESHOLD = 0.95;
+
 export function Field({ label, value, confidence, editable = false, dirty, error, onChange, locale = "ko" }) {
-  const low = confidence != null && confidence < 0.9;
+  const low = confidence != null && confidence < CONF_THRESHOLD;
   const en = locale === "en";
   return (
     <div style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.8 0.1 80 / 0.16)" : "#fff",
@@ -73,7 +77,7 @@ export function Field({ label, value, confidence, editable = false, dirty, error
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
-          {error ? (en ? "Check required" : "확인 필요") : dirty ? (en ? "Edited" : "수정됨") : low ? (en ? "Check required" : "확인 필요") : confidence != null ? `${Math.round(confidence * 100)}%` : !editable ? (en ? "Read only" : "수정 불가") : ""}
+          {error ? (en ? "Check required" : "확인 필요") : dirty ? (en ? "Edited" : "수정됨") : low ? (en ? "Check required" : "확인 필요") : !editable ? (en ? "Read only" : "수정 불가") : ""}
         </span>
       </div>
       <input className="profile-field-input" value={value ?? ""} disabled={!editable}

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
   signUp, login, uploadAndExtract, confirmProfile, previewAction, approveAction, getLedger,
-  fetchDocument,
+  fetchDocument, nationalityLabel,
   createSession, sendChat, startAction, readUi, questionOptions, clearToken, readMemberId,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
@@ -24,8 +24,9 @@ const EMPTY_AUTH = { email: "", password: "", passwordConfirm: "" };
 const EMPTY_ANSWERS = { phone: null, cert: null, purposes: {} };
 const PROFILE_LABELS = {
   name_en: "이름", arc_no: "등록번호", nationality: "국적", visa_type: "체류자격",
-  stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", sex: "성별",
+  stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", gender: "성별",
 };
+const GENDER_LABELS = { F: ["여성", "Female"], M: ["남성", "Male"] };
 const REUSABLE_PROFILE_KEYS = ["name_en", "arc_no", "nationality", "visa_type", "stay_expiry"];
 const EMAIL_PATTERN = /^(?=.{1,64}@)[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z]{2,63})+$/;
 
@@ -150,7 +151,9 @@ export default function App() {
   const [shots, setShots] = useState({});
   const [skippedShots, setSkippedShots] = useState({});
   const [completedScans, setCompletedScans] = useState(() => savedProgress?.completedScans || []);
-  const [captureError, setCaptureError] = useState("");
+  // 문자열이 아니라 { message, code, details }. code 가 있어야 재촬영으로
+  // 풀리는 오류와 그렇지 않은 오류(validation_failed)를 가를 수 있다.
+  const [captureError, setCaptureError] = useState(null);
   const [captureLoading, setCaptureLoading] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
@@ -187,6 +190,10 @@ export default function App() {
   const progressRef = useRef(savedProgress);
   const locale = (agentState?.locale || lang) === "ko" ? "ko" : "en";
   const t = (ko, en) => locale === "en" ? en : ko;
+  // 문자열(카메라·브라우저 오류)과 AgentError(서버 계약) 양쪽을 받는다.
+  const showCaptureError = (source) => setCaptureError(typeof source === "string"
+    ? { message: source, code: "", details: {} }
+    : { message: captureMessage(source, locale), code: source?.code || "", details: source?.details || {} });
   const scanPages = SCAN_PAGES.map((page) => ({
     ...page,
     label: page[locale][0],
@@ -206,7 +213,7 @@ export default function App() {
   const startCamera = async (allowNativeFallback = true) => {
     if (cameraRequestRef.current || cameraStreamRef.current) return;
     cameraRequestRef.current = true;
-    setCaptureError("");
+    setCaptureError(null);
     setCameraStarting(true);
     let timeoutId;
     let timedOut = false;
@@ -214,7 +221,7 @@ export default function App() {
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         if (allowNativeFallback) nativeCameraInputRef.current?.click();
-        else setCaptureError(t("이 브라우저는 웹 카메라를 지원하지 않아요. 기기 카메라로 열기를 눌러 주세요.", "This browser does not support the web camera. Use the device camera instead."));
+        else showCaptureError(t("이 브라우저는 웹 카메라를 지원하지 않아요. 기기 카메라로 열기를 눌러 주세요.", "This browser does not support the web camera. Use the device camera instead."));
         return;
       }
       streamRequest = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
@@ -228,7 +235,7 @@ export default function App() {
       setCameraOpen(true);
     } catch (error) {
       if (timedOut) streamRequest?.then((stream) => stream.getTracks().forEach((track) => track.stop())).catch(() => {});
-      setCaptureError(error?.name === "NotAllowedError" ? t("카메라 권한을 허용해 주세요.", "Allow camera access to continue.") : error instanceof Error ? error.message : t("카메라를 열지 못했어요.", "Could not open the camera."));
+      showCaptureError(error?.name === "NotAllowedError" ? t("카메라 권한을 허용해 주세요.", "Allow camera access to continue.") : error instanceof Error ? error.message : t("카메라를 열지 못했어요.", "Could not open the camera."));
     } finally {
       window.clearTimeout(timeoutId);
       cameraRequestRef.current = false;
@@ -245,7 +252,7 @@ export default function App() {
   useEffect(() => {
     if (cameraOpen && videoRef.current && cameraStreamRef.current) {
       videoRef.current.srcObject = cameraStreamRef.current;
-      videoRef.current.play().catch(() => setCaptureError(t("카메라 미리보기를 시작하지 못했어요.", "Could not start the camera preview.")));
+      videoRef.current.play().catch(() => showCaptureError(t("카메라 미리보기를 시작하지 못했어요.", "Could not start the camera preview.")));
     }
   }, [cameraOpen]);
 
@@ -688,7 +695,7 @@ export default function App() {
   // ── 2 촬영 ──
   if (step === 2) {
     const uploadPng = async (png) => {
-      setCaptureError("");
+      setCaptureError(null);
       setCaptureLoading(true);
       try {
         const page = scanPages[scan];
@@ -710,7 +717,7 @@ export default function App() {
           go((data.fields || []).length > 0 ? 3 : 4);
         } else setScan(empty);
       } catch (error) {
-        if (!handleAuthError(error)) setCaptureError(captureMessage(error, locale));
+        if (!handleAuthError(error)) showCaptureError(error);
       } finally {
         setCaptureLoading(false);
       }
@@ -723,7 +730,7 @@ export default function App() {
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(captureMessage(error, locale));
+        showCaptureError(error);
       } finally {
         setCaptureLoading(false);
       }
@@ -734,7 +741,7 @@ export default function App() {
         stopCamera();
         await uploadPng(png);
       } catch (error) {
-        setCaptureError(captureMessage(error, locale));
+        showCaptureError(error);
       }
     };
     const attachFile = () => {
@@ -816,7 +823,9 @@ export default function App() {
           </div>
           <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("카드를 안내선 안에 맞춰 주세요", "Align the document inside the guide")}</div>
         </div>
-        {captureError && <div role="alert" className="capture-error">{captureError} <button type="button" onClick={() => nativeCameraInputRef.current?.click()}>{t("기기 카메라로 열기", "Open device camera")}</button></div>}
+        <CaptureAlert error={captureError} locale={locale}
+          onDeviceCamera={() => nativeCameraInputRef.current?.click()}
+          onReviewEarlier={() => { setScan(0); setCaptureError(null); }} />
         <div style={{ padding: "12px 24px 16px", display: "flex", gap: 8, alignItems: "center" }}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
@@ -1411,6 +1420,54 @@ function captureMessage(error, locale = "ko") {
   }
 }
 
+// 신원 불일치 항목의 값. 국적·성별은 코드로 오므로 사람이 읽는 말로 바꾼다.
+function mismatchValue(key, value, locale = "ko") {
+  const en = locale === "en";
+  if (!value) return en ? "none" : "없음";
+  // 한글 국가명 맵은 8개국뿐이다. 영어는 서류(MRZ)에 찍힌 코드를 그대로 쓴다.
+  if (key === "nationality") return en ? value : nationalityLabel(value);
+  if (key === "gender") return (GENDER_LABELS[value] || [value, value])[en ? 1 : 0];
+  return String(value);
+}
+
+// 촬영 화면 오류 배너.
+// validation_failed 는 앞서 올린 신분증과 신원이 다르다는 뜻이라 다시 찍어도
+// 해결되지 않는다. 재촬영 대신 앞 서류를 다시 보게 안내한다.
+function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier }) {
+  const en = locale === "en";
+  if (!error) return null;
+  if (error.code !== "validation_failed") {
+    return (
+      <div role="alert" className="capture-error">
+        {error.message}{" "}
+        <button type="button" onClick={onDeviceCamera}>{en ? "Open device camera" : "기기 카메라로 열기"}</button>
+      </div>
+    );
+  }
+  // 영어는 localizedError 가 서버 문구를 고정 문장으로 덮어써서 어느 항목이
+  // 다른지 사라진다. 항목은 아래에서 직접 그린다.
+  const mismatched = Object.entries(error.details?.mismatched || {});
+  return (
+    <div role="alert" className="capture-error">
+      {en ? "This document belongs to a different person than the ID you uploaded earlier." : error.message}
+      {mismatched.length > 0 && (
+        <div style={{ margin: "6px 0 0", display: "flex", flexDirection: "column", gap: 2 }}>
+          {mismatched.map(([key, pair]) => (
+            <div key={key} style={{ ...mono, fontSize: 11 }}>
+              · {profileFieldLabel({ key }, locale)} · {mismatchValue(key, pair?.existing, locale)} → {mismatchValue(key, pair?.incoming, locale)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 6 }}>
+        {en ? "Retaking the photo will not fix this. Please re-check the ID you uploaded earlier."
+            : "다시 촬영해도 해결되지 않아요. 앞서 올린 신분증부터 다시 확인해 주세요."}
+        <button type="button" onClick={onReviewEarlier}>{en ? "Review earlier document" : "앞 서류 다시 보기"}</button>
+      </div>
+    </div>
+  );
+}
+
 function profileFieldLabel(field, locale = "ko") {
   const labels = {
     name_en: ["이름", "Name"],
@@ -1420,7 +1477,7 @@ function profileFieldLabel(field, locale = "ko") {
     stay_expiry: ["체류기간", "Stay expiry"],
     addr_kr: ["체류지", "Address in Korea"],
     birth_date: ["생년월일", "Date of birth"],
-    sex: ["성별", "Sex"],
+    gender: ["성별", "Sex"],
   };
   const label = labels[field?.key];
   if (label) return label[locale === "en" ? 1 : 0];

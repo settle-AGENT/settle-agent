@@ -126,9 +126,9 @@ const MOCK_EXTRACT = {
     stay_expiry: "2028.02.27",
     addr_kr: "서울 성북구 안암로 145, 국제학사 B-412",
     birth_date: "2003.11.20",
-    sex: "F",
+    gender: "F",
   },
-  // confidence < 0.9 → 사용자 확인 대상 (arc.py 규약)
+  // confidence < 0.95 → 사용자 확인 대상 (doc_builder.CONF_THRESHOLD)
   confidence: {
     name_en: 0.99,
     arc_no: 0.97,
@@ -225,7 +225,7 @@ function normalizeMockExtraction(mock, locale = "ko") {
   const readonly = new Set(["arc_no"]);
   const labels = {
     name_en: "이름", arc_no: "등록번호", nationality: "국적", visa_type: "체류자격",
-    stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", sex: "성별",
+    stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", gender: "성별",
   };
   const fields = Object.entries(mock.profile).map(([key, value]) => ({
     key, label: labels[key] || key, value, confidence: mock.confidence[key] ?? 1, editable: !readonly.has(key),
