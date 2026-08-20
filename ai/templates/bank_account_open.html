@@ -5,10 +5,7 @@
   {% for row in rows if row.group == 'identity' %}
   <tr>
     <td class="label">{{ row.label_ko }}<span class="en">{{ row.label_en }}</span></td>
-    <td class="{% if row.low_conf %}warn{% endif %}">
-      <span class="val">{{ row.value or '' }}</span>
-      {% if row.note %}<span class="note">{{ row.note }}</span>{% endif %}
-    </td>
+    <td><span class="val">{{ row.value or '' }}</span></td>
   </tr>
   {% endfor %}
 </table>
@@ -18,10 +15,7 @@
   {% for row in rows if row.group == 'cdd' %}
   <tr>
     <td class="label">{{ row.label_ko }}<span class="en">{{ row.label_en }}</span></td>
-    <td>
-      <span class="val">{{ row.value or '' }}</span>
-      {% if row.evidence %}<span class="note ev">{{ row.evidence }}</span>{% endif %}
-    </td>
+    <td><span class="val">{{ row.value or '' }}</span></td>
   </tr>
   {% endfor %}
 </table>
