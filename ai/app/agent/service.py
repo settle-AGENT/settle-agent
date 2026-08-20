@@ -15,7 +15,7 @@ from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
 from app.nodes import qa, researcher
 from app.nodes.planner import MENU_TITLE, menu_options, summary
-from app.rules.loader import VISA_CODES
+from app.rules.loader import VISA_CODES, actions_for
 from app.nodes.profiler import (
     HARD_KEYS,
     SOFT_KEYS,
@@ -327,7 +327,13 @@ def _task(tasks: list[dict], action_id: str) -> dict | None:
     return next((t for t in tasks if t["id"] == action_id), None)
 
 
-def _offer_start(task: dict, locale: str) -> tuple[str, dict]:
+def _has_form(profile: dict, action_id: str) -> bool:
+    """앱이 이 과제의 서식을 만들어 주는가."""
+    spec = actions_for(profile.get("visa_type")).get(action_id) or {}
+    return bool(spec.get("form"))
+
+
+def _offer_start(profile: dict, task: dict, locale: str) -> tuple[str, dict | None]:
     """과제 하나를 권하는 문구와, 다음 턴에 'ㅇㅇ' 을 해석할 근거를 만든다."""
     bits = [f"{task['label']}부터 하셔야 합니다."
             if task["status"] == "locked" else f"{task['label']}을(를) 하실 수 있습니다."]
@@ -341,6 +347,14 @@ def _offer_start(task: dict, locale: str) -> tuple[str, dict]:
             bits.append(f"기한은 {task['deadline']}, {d}일 남았습니다.")
     if task.get("required_docs"):
         bits.append("지참 서류는 " + ", ".join(task["required_docs"]) + "입니다.")
+
+    # 앱이 만들 서식이 없는 과제는 "시작" 할 것이 없다. 물어놓고 승낙받은 뒤
+    # "서류 없이 진행됩니다" 라고 하면 앞말과 어긋난다 — 방금 지참 서류를
+    # 읊어 준 참이다. 애초에 묻지 않고 안내로 끝낸다.
+    if not _has_form(profile, task["id"]):
+        bits.append("이 절차는 앱이 대신 작성할 서류가 없어 직접 방문하셔야 합니다.")
+        return " ".join(bits), None
+
     bits.append("지금 시작할까요?")
     offer = {"kind": "start_action", "action_id": task["id"], "label": task["label"]}
     return " ".join(bits), offer
@@ -431,7 +445,8 @@ def send_message(session_id: str, message: str) -> dict:
     # 메뉴에서 고른 값은 그대로 돌아온다. 확실한 것을 LLM 에 물을 이유가 없다.
     picked = message.strip()
     if offer.get("kind") == "menu" and picked in (offer.get("options") or []):
-        return _guide(session_id, extra, tasks, picked, locale)
+        return _guide(session_id, extra, tasks, picked, locale,
+                      snap.get("profile") or {})
 
     intent = llm.classify(
         message,
@@ -461,7 +476,8 @@ def send_message(session_id: str, message: str) -> dict:
 
     # 3. 특정 과제를 하겠다는 요청
     if kind == "action" and intent.get("action_id"):
-        return _guide(session_id, extra, tasks, intent["action_id"], locale)
+        return _guide(session_id, extra, tasks, intent["action_id"], locale,
+                      snap.get("profile") or {})
 
     # 4. 나머지는 질의응답으로 보낸다
     extra["ask"] = message
@@ -547,7 +563,7 @@ def _menu(session_id: str, extra: dict, locale: str) -> dict:
 
 
 def _guide(session_id: str, extra: dict, tasks: list[dict],
-           action_id: str, locale: str) -> dict:
+           action_id: str, locale: str, profile: dict | None = None) -> dict:
     """과제 하나에 대한 안내. 상태에 따라 답이 갈린다."""
     task = _task(tasks, action_id)
     if task is None:                      # 이 체류자격에 없는 과제
@@ -565,7 +581,7 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
     # 잠겼으면 풀어 줄 선행 과제를 권한다. 사용자가 원한 것을 기억해 두지 않아도
     # 선행이 끝나면 planner 가 다시 available 로 올려 준다.
     target = _blocking(tasks, task) if task["status"] == "locked" else task
-    reply, offer = _offer_start(target, locale)
+    reply, offer = _offer_start(profile or {}, target, locale)
     if target["id"] != task["id"]:
         reply = f"{task['label']}은(는) 아직 잠겨 있습니다. " + reply
 
