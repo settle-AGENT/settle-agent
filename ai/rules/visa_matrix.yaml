@@ -11,6 +11,8 @@ visa:
         label_ko: 외국인등록
         label_en: Alien Registration
         allowed: true
+        # 외국인등록번호는 등록을 마쳐야 나온다. 프로필에 있으면 이미 한 것이다.
+        satisfied_if: arc_no
         prereq: []
         deadline: { days: 90, from: entry_date }
         form: integrated_application
@@ -24,6 +26,7 @@ visa:
         label_ko: 국내 통신 가입
         label_en: Mobile Subscription
         allowed: true
+        satisfied_if: phone_kr
         prereq: [alien_registration]
         required_docs: [arc, passport]
         agency: telecom
