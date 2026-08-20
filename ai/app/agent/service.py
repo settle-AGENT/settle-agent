@@ -874,19 +874,17 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
         reply, offer = _offer_start(profile, target, locale)
         choice_payload = {}
         if target["id"] != task["id"]:
-            missing_count = sum(1 for field in ACTION_FIELDS.get(target["id"], [])
-                                if not profile.get(field))
             if action_id == "open_bank_account" and target["id"] == "alien_registration":
+                target_form = (actions_for(profile.get("visa_type")).get(target["id"]) or {}).get("form")
                 reply = (
-                    f"아직 외국인등록이 되어 있지 않네요! {missing_count}가지만 여쭤볼게요."
+                    "외국인등록증 정보는 확인됐지만 통합신청서가 아직 발급되지 않았어요. "
+                    "아래 버튼을 누르면 통합신청서 발급 화면으로 이동해요."
                     if locale == "ko"
-                    else f"Your alien registration is not complete yet. I only need to ask {missing_count} questions."
+                    else "Your residence card information is ready, but the integrated application has not been issued yet. "
+                    "Tap below to open the application screen."
                 )
-                choice_payload = {
-                    "presentation": "chat_choice",
-                    "primary_label": "진행하기" if locale == "ko" else "Continue",
-                    "secondary_label": "대화하기" if locale == "ko" else "Keep chatting",
-                }
+                choice_payload = {"form": target_form}
+                offer["label"] = "통합신청서 발급하기" if locale == "ko" else "Issue integrated application"
             else:
                 reply = (
                     f"{task['label']} 전에 {target['label']} 완료 여부를 먼저 확인해야 해요. "

@@ -119,7 +119,6 @@ function passwordChecks(password, locale = "ko") {
     { label: en ? "Includes a letter" : "영문 포함", met: /[A-Za-z]/.test(password) },
     { label: en ? "Includes a number" : "숫자 포함", met: /\d/.test(password) },
     { label: en ? "Includes a special character" : "특수문자 포함", met: /[^A-Za-z0-9]/.test(password) },
-    { label: en ? "Letters, numbers, and symbols only" : "영문·숫자·특수문자만", met: /^[\x21-\x7E]+$/.test(password) },
   ];
 }
 
@@ -248,7 +247,6 @@ export default function App() {
 
   const [scan, setScan] = useState(0);
   const [shots, setShots] = useState({});
-  const [skippedShots, setSkippedShots] = useState({});
   const [completedScans, setCompletedScans] = useState(() => savedProgress?.completedScans || []);
   // 문자열이 아니라 { message, code, details }. code 가 있어야 재촬영으로
   // 풀리는 오류와 그렇지 않은 오류(validation_failed)를 가를 수 있다.
@@ -659,7 +657,6 @@ export default function App() {
     setSessionRestoreChecked(false);
     setScan(0);
     setShots({});
-    setSkippedShots({});
     setCompletedScans([]);
     setCaptureError(null);
     setCaptureLoading(false);
@@ -794,7 +791,6 @@ export default function App() {
       stopCamera();
       setMessages([]);
       setShots({});
-      setSkippedShots({});
       setCompletedScans([]);
       setScan(0);
       setCaptureError(null);
@@ -948,13 +944,6 @@ export default function App() {
                     <button type="button" disabled={sessionLoading} onClick={resumeSession}>{sessionLoading ? t("불러오는 중…", "Loading…") : t("이어서 하기", "Continue")}</button>
                   </section>
                 )}
-                {homeState === "profile" && (
-                  <section className="resume-card resume-card--profile" aria-label={t("마스터 프로필", "Master profile")}>
-                    <div className="resume-card-kicker">✓ {t("마스터 프로필 저장됨", "Master profile saved")}</div>
-                    <h2>{t("촬영·프로필 없이 바로 서류를 만들어요", "Skip capture and profile — create a document right away")}</h2>
-                    <p>{t("이름·비자·여권 정보 재사용", "Reuses your name, visa, and passport details")}</p>
-                  </section>
-                )}
                 {homeState === "start" && (
                   <section className="resume-card resume-card--start" aria-label={t("시작 전", "Not started")}>
                     <div className="resume-card-kicker">{t("시작 전", "Not started")}</div>
@@ -1051,7 +1040,7 @@ export default function App() {
     const normalizedEmail = auth.email.trim();
     const validEmail = normalizedEmail.length <= 254 && EMAIL_PATTERN.test(normalizedEmail);
     const rules = passwordChecks(auth.password, locale);
-    const validPassword = rules.every((rule) => rule.met);
+    const validPassword = rules.every((rule) => rule.met) && /^[\x21-\x7E]+$/.test(auth.password);
     const passwordMatches = Boolean(auth.passwordConfirm) && auth.password === auth.passwordConfirm;
     const passwordEligible = validPassword;
     const canSubmit = validEmail && passwordEligible && (signup ? passwordMatches : true);
@@ -1209,12 +1198,9 @@ export default function App() {
         const page = scanPages[scan];
         const data = await uploadAndExtract(png, page.docType, sessionId, locale);
         const next = { ...shots, [page.key]: png };
-        const nextSkipped = { ...skippedShots };
         const nextCompletedScans = [...new Set([...completedScans, page.key])];
-        delete nextSkipped[page.key];
         setShots(next);
         setCompletedScans(nextCompletedScans);
-        setSkippedShots(nextSkipped);
         const incomingFields = data.fields || [];
         const isCardDocument = page.docType === "arc_front" || page.docType === "arc_back";
         const mergedCardFields = isCardDocument
@@ -1231,8 +1217,8 @@ export default function App() {
         }
         setDirtyFields({});
         setProfileErrors({});
-        const empty = scanPages.findIndex((candidate) => !next[candidate.key] && !nextSkipped[candidate.key]);
-        if (empty === -1) go(mergedCardFields.length > 0 ? 3 : 4);
+        const empty = scanPages.findIndex((candidate) => !next[candidate.key]);
+        if (empty === -1 && nextCompletedScans.length === SCAN_PAGES.length) go(mergedCardFields.length > 0 ? 3 : 4);
         else setScan(empty);
       } catch (error) {
         if (!handleAuthError(error)) showCaptureError(error);
@@ -1270,18 +1256,7 @@ export default function App() {
       if (captureLoading || cameraStarting) return;
       stopCamera();
       setCaptureError(null);
-      const page = scanPages[scan];
-      setSkippedShots((current) => ({ ...current, [page.key]: true }));
-      setCompletedScans((current) => [...new Set([...current, page.key])]);
-      if (page.docType === "arc_front") {
-        setScan(1);
-        return;
-      }
-      if (page.docType === "arc_back") {
-        setScan(2);
-        return;
-      }
-      go(cardProfileFields.length > 0 ? 3 : 4);
+      setScan((scan + 1) % scanPages.length);
     };
     const currentShot = shots[scanPages[scan].key];
     const captureActivated = cameraStarting || captureLoading || cameraOpen || Boolean(currentShot);
@@ -1470,6 +1445,11 @@ export default function App() {
 
     const openOfferedAction = async () => {
       if (chatLoading || !actionOffer?.action_id) return;
+      if (actionOffer.form) {
+        setPreviewActionId(actionOffer.action_id);
+        go(7);
+        return;
+      }
       setChatLoading(true);
       setToast("");
       try {
@@ -2076,7 +2056,7 @@ function DocumentWritingProgress({ locale = "ko", title }) {
   const [phase, setPhase] = useState(0);
   const phases = en
     ? ["Checking your profile", "Filling the required fields", "Preparing the PDF preview"]
-    : ["마스터 프로필을 확인하고 있어요", "신청서 항목을 채우고 있어요", "PDF 미리보기를 준비하고 있어요"];
+    : ["프로필을 확인하고 있어요", "신청서 항목을 채우고 있어요", "PDF 미리보기를 준비하고 있어요"];
   useEffect(() => {
     const interval = window.setInterval(() => setPhase((current) => (current + 1) % phases.length), 1400);
     return () => window.clearInterval(interval);

@@ -1,5 +1,6 @@
 from app.agent.graph import ACTION_FIELDS, doc_builder
-from app.agent.service import _document_intent, _normalize_phone_kr
+from app.agent import service
+from app.agent.service import _document_intent, _guide, _normalize_phone_kr
 from app.nodes.planner import build_task_graph
 
 
@@ -58,6 +59,42 @@ def test_document_form_is_not_completed_by_uploaded_identity_fields():
 
     assert registration["status"] == "available"
     assert bank["status"] == "locked"
+
+
+def test_locked_bank_account_routes_to_registration_form(monkeypatch):
+    profile = {
+        "visa_type": "D-2",
+        "arc_no": "990101-2345678",
+        "passport_no": "M12345678",
+    }
+    tasks = build_task_graph(profile, completed=set(), locale="ko")
+
+    class GraphStub:
+        def invoke(self, patch, _config):
+            return {
+                "session_id": "session-1",
+                "locale": "ko",
+                "profile": profile,
+                "tasks": tasks,
+                **patch,
+            }
+
+    monkeypatch.setattr(service, "_graph", lambda: GraphStub())
+    monkeypatch.setattr(service, "_patch", lambda _session_id, extra: extra)
+    monkeypatch.setattr(service, "_cfg", lambda _session_id: {})
+
+    response = _guide("session-1", {}, tasks, "open_bank_account", "ko", profile)
+
+    assert response["ui"] == {
+        "type": "action_offer",
+        "payload": {
+            "action_id": "alien_registration",
+            "label": "통합신청서 발급하기",
+            "form": "integrated_application",
+        },
+    }
+    assert "3가지만" not in response["reply"]
+    assert "통합신청서 발급 화면" in response["reply"]
 
 
 def test_supported_document_questions_route_to_document_actions():
