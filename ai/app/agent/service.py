@@ -296,6 +296,12 @@ _ACK = {
                 "en": "You have already completed {}."},
     "nothing": {"ko": "지금 하실 수 있는 일이 없습니다.",
                 "en": "There is nothing to do right now."},
+    # 할 일이 없는 것과 아직 모르는 것은 다르다. 프로필이 비었는데 "없습니다"
+    # 라고 하면 사용자는 앱이 고장 났다고 생각한다.
+    "no_profile": {"ko": "외국인등록증을 먼저 촬영해주세요. "
+                         "체류자격을 알아야 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
+                   "en": "Please photograph your residence card first. "
+                         "I need your visa status before I can tell you what to do."},
 }
 
 
@@ -426,7 +432,9 @@ def _menu(session_id: str, extra: dict, locale: str) -> dict:
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     options = menu_options(state.get("tasks") or [], locale)
     if not options:
-        return _response(state, _pick(_ACK, "nothing", locale), "none", {})
+        key = "nothing" if (state.get("profile") or {}).get("visa_type") \
+              else "no_profile"
+        return _response(state, _pick(_ACK, key, locale), "none", {})
 
     state = _graph().invoke(
         _patch(session_id, {"pending_offer": {

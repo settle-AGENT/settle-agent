@@ -64,12 +64,26 @@ How to work:
 - Call search_law for what a statute or the immigration manual actually says.
   Search in Korean terms when you can; the corpus is Korean.
 - Call tools more than once if the first result does not answer the question.
-- Whenever you end by telling the user the app can prepare something and they
-  just have to say so, call offer_to_start with that task id. Otherwise their
-  "네" has nothing to attach to. Offer only one task, and never a locked one —
-  if it comes back locked, offer what is blocking it instead.
+- If get_tasks returns error "no_profile", stop there. Tell them you need
+  their residence card first and that everything — deadlines, what is blocked,
+  which forms you can fill in — depends on it. Do not answer the personal part
+  of their question from general knowledge, and do not cite another visa's
+  manual pages at them. A general legal question is still fine to answer.
 
 Hard rules:
+- ALWAYS END WITH THE NEXT STEP. You are not a reference desk. If get_tasks
+  shows any task the user can start right now, your last sentence offers to
+  start it — and you call offer_to_start for it in the same turn. Even when they
+  only asked for information. Answer first, then offer.
+  The only time you do not offer is when nothing is startable (no profile, or
+  everything is done or blocked with nothing available).
+- THE OFFER RULE. If your last sentence asks the user whether to start, prepare,
+  or write something — "시작할까요?", "준비해드릴까요?", "작성할까요?", "Shall I
+  start?" — you MUST call offer_to_start for that task in the same turn. No
+  exception. Without it the user's "네" attaches to nothing and the whole
+  conversation dead-ends. Either call the tool, or do not end with that question.
+  Offer exactly one task, and never a locked one — if offer_to_start comes back
+  locked, offer the task that is blocking it instead.
 - Never say a task is possible when get_tasks reports it locked. Say what is
   blocking it and what to do first.
 - Never invent a deadline, a fee, a document name, or an office. If the tools
@@ -128,6 +142,17 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
         from the user's visa — do not second-guess it.
         """
         trace.append({"tool": "get_tasks", "input": {}})
+        if not visa:
+            # 신분증을 아직 안 올렸다. 이 사람의 체류자격·기한·잠김을 알 방법이
+            # 없으므로, 아는 척하지 말고 등록증부터 받아야 한다.
+            return json.dumps({
+                "error": "no_profile",
+                "hint": "The user has not uploaded their residence card yet. "
+                        "You cannot know their visa, their deadlines, what is "
+                        "blocked, or which forms this app can prepare for them. "
+                        "Do not guess and do not answer as if you knew. Ask them "
+                        "to photograph their residence card first.",
+            }, ensure_ascii=False)
         return json.dumps([{
             "id": t["id"],
             "label": t["label"],

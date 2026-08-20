@@ -542,8 +542,9 @@ def explainer(state: AgentState) -> dict:
                    "ui_type": "none", "last_qa": last, "ask": None}
             # 모델이 "시작할까요" 로 끝냈으면 다음 턴의 "ㅇㅇ" 이 붙을 자리를
             # 남겨 둔다. 없으면 승낙이 새 질문으로 흘러간다.
-            if got.get("offer"):
-                out["pending_offer"] = got["offer"]
+            offer = got.get("offer") or _implied_offer(got["reply"], tasks)
+            if offer:
+                out["pending_offer"] = offer
             return out
         base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
                 "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
@@ -578,6 +579,24 @@ def explainer(state: AgentState) -> dict:
 
 # 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
 NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
+
+
+def _implied_offer(reply: str, tasks: list[dict]) -> dict | None:
+    """모델이 물음표로 끝냈는데 offer_to_start 를 부르지 않았을 때의 안전망.
+
+    프롬프트로 도구 호출을 강제해 봤지만 모델이 종종 빠뜨린다. 그러면 사용자의
+    "ㅇㅇ" 이 붙을 자리가 없어 대화가 막힌다. 물음표로 끝났다는 것은 무언가를
+    물었다는 뜻이므로, 지금 시작할 수 있는 과제를 붙여 둔다.
+
+    틀려도 열리는 것은 과제뿐이다 — 부작용이 없고 되돌릴 수 있다. 실행은
+    여전히 approval_gate 를 지난다.
+    """
+    if not reply.rstrip().endswith(("?", "？")):
+        return None
+    nxt = _next_action(tasks)
+    if not nxt:
+        return None
+    return {"kind": "start_action", "action_id": nxt["id"], "label": nxt["label"]}
 
 
 def _next_action(tasks: list[dict]) -> dict | None:
