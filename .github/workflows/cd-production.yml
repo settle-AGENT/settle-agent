@@ -264,7 +264,7 @@ jobs:
                 "docker compose --env-file .env -f compose.production.yml ps",
                 "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health | grep -qx ok",
                 "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/backend | jq -e \".status == \\\"ok\\\"\"",
-                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/ai | jq -e \".ok == true and .mode == \\\"agent\\\" and .persistent == true\"",
+                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/ai | jq -e \".ok == true and .mode == \\\"agent\\\" and .persistent == true and .rag.ready == true\"",
                 "docker image prune -f --filter '\''until=168h'\''"
               ]
             }' > ssm-parameters.json

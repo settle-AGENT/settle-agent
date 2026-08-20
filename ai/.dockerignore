@@ -20,3 +20,6 @@ htmlcov
 .env
 .env.*
 !.env.example
+
+# 이미지 안에서 다시 굽는다. 로컬 산출물을 컨텍스트에 실을 이유가 없다.
+rag_chunks.jsonl

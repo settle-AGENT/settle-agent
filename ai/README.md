@@ -47,17 +47,28 @@ uv run python scripts/build_manual.py corpus/manual rules/manual.json
 
 ## 색인·적재
 
-```bash
-uv run python scripts/export_rag.py
+**평소에는 손댈 일이 없다.** 서버가 기동할 때 `app/tools/rag_store.py` 가 알아서
+`rag.chunk` 를 채운다. 코퍼스·모델이 그대로면 아무것도 하지 않고, 바뀌었으면 다시 넣는다.
+진행 상태는 `/health` 의 `rag` 에 나온다.
+
+```json
+{"rag": {"state": "ready", "chunks": 1609, "expected": 1609, "ready": true}}
 ```
 
-두 코퍼스를 합쳐 임베딩하고 `../seed/rag_chunks.jsonl` 로 덤프한다(재생성 가능해서 gitignore).
+`ready` 가 false 면 벡터 검색이 죽어 있고 BM25 단독으로 돌고 있다는 뜻이다.
+프로덕션 배포는 이 값이 true 여야 통과한다(`cd-production.yml`).
+
+임베딩은 이미지 빌드 때 미리 계산해 `/app/rag_chunks.jsonl` 로 굽는다. 그래서
+컨테이너 기동은 upsert 만 하고 몇 초에 끝난다.
+
+### 손으로 돌려야 할 때
 
 ```bash
-DATABASE_URL=postgresql://settle:settle@localhost:5432/settle uv run python scripts/load_rag.py
+uv run python scripts/export_rag.py            # 임베딩 다시 굽기 (ai/rag_chunks.jsonl)
+DATABASE_URL=postgresql://... uv run python scripts/load_rag.py [--force]
 ```
 
-`rag.chunk` 테이블에 upsert 한다. 로컬 DB 는 리포 루트의 `docker compose up -d db`.
+로컬 DB 는 리포 루트의 `docker compose up -d db` (pgvector/pgvector:pg16).
 
 ## 검색
 
