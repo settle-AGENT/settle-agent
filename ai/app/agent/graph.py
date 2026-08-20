@@ -145,6 +145,12 @@ ACTION_TITLES: dict[str, dict] = {
                           "en": "Submit account opening application"},
 }
 
+SLOT_LEAD = {
+    "many": {"ko": "{}가지만 여쭤볼게요 — {}.",
+             "en": "Just {} things to ask — {}."},
+    "last": {"ko": "마지막 질문입니다.", "en": "Last question."},
+}
+
 # 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
 SUMMARY_LABEL: dict[str, dict] = {
     "agency": {"ko": "제출처", "en": "Submit to"},
@@ -233,9 +239,12 @@ def slot_filler(state: AgentState) -> dict:
     # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
     label = _text(q["label"], locale)
     hint = _text(q.get("hint"), locale)
-    # 말풍선은 진행 상황만. 한국어로 쓰고 출구에서 locale 로 옮긴다.
-    lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
-    written_locale = None
+    # 말풍선은 무엇을 물을지 미리 알려 준다. 개수만 말하면 사용자는 몇 번이나
+    # 더 답해야 하는지, 무엇을 준비해야 하는지 모른 채 하나씩 끌려간다.
+    names = ", ".join(_label_of(f, locale) for f in missing)
+    lead = (_text(SLOT_LEAD["many"], locale).format(len(missing), names)
+            if len(missing) > 1 else _text(SLOT_LEAD["last"], locale))
+    written_locale = locale        # 이미 사용자 언어다 — 번역을 태우지 않는다
 
     # LLM 은 문장 생성만. 실패해도 흐름이 끊기지 않는다.
     if llm.available():
