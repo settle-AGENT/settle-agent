@@ -17,7 +17,14 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
 from app.nodes import qa, researcher
-from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
+from app.nodes.planner import (
+    AGENCY_LABEL,
+    DOC_LABEL,
+    _field,
+    _pick,
+    build_task_graph,
+    summary,
+)
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import label_of as _label_of
 from app.rules.loader import VISA_CODES, actions_for, evidence_labels
@@ -172,6 +179,11 @@ VISA_UNSUPPORTED = {
           "Please call the immigration center at 1345.",
 }
 
+OFFLINE_LEAD = {
+    "ko": "{}은(는) 앱이 대신 작성할 서류가 없습니다. 직접 방문하셔야 합니다.",
+    "en": "There is no form for {} that the app can fill in. You go in person.",
+}
+
 SLOT_LEAD = {
     "many": {"ko": "{}가지만 여쭤볼게요 — {}.",
              "en": "Just {} things to ask — {}."},
@@ -313,11 +325,14 @@ def doc_builder(state: AgentState) -> dict:
 
     form = spec.get("form")
     if not form:
-        return {
-            "reply": "이 단계는 서류 없이 진행됩니다.",
-            "ui_type": "none",
-            "ui_payload": {},
-        }
+        # 앱이 만들 서식이 없는 과제다(통신 가입 등). 여기까지 왔다는 것은
+        # 어딘가에서 "시작할까요" 를 물었다는 뜻인데, 시작할 것이 없다.
+        #
+        # 예전에는 "이 단계는 서류 없이 진행됩니다" 한 줄만 돌려주고
+        # current_action 을 남겨 두었다. 그러면 무슨 말을 하든 router 가
+        # 다시 이 자리로 보내 같은 문장만 반복됐다 — 빠져나갈 수 없었다.
+        return {"current_action": None, "in_progress": [],
+                **_offline_guidance(state, action, spec)}
 
     try:
         result = render(
@@ -410,6 +425,27 @@ def doc_builder(state: AgentState) -> dict:
             "warnings": warnings,
         },
     }
+
+
+def _offline_guidance(state: AgentState, action: str, spec: dict) -> dict:
+    """앱이 대신 해 줄 것이 없는 과제의 안내. 무엇을 들고 어디로 갈지 말한다."""
+    locale = state.get("locale") or "en"
+    task = next((t for t in (state.get("tasks") or []) if t["id"] == action), None)
+    label = _title(action, locale) if action in ACTION_TITLES else (
+        task["label"] if task else action)
+
+    lines = [_text(OFFLINE_LEAD, locale).format(label)]
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), locale)
+    if agency:
+        lines.append(f"{_text(SUMMARY_LABEL['agency'], locale)} · {agency}")
+    docs = [_pick(DOC_LABEL, d, locale, d) for d in spec.get("required_docs", [])]
+    if docs:
+        lines.append(f"{_text(SUMMARY_LABEL['docs'], locale)} · " + ", ".join(docs))
+    if note := _field(spec, "note", locale):
+        lines.append(note)
+
+    return {"reply": "\n".join(lines), "reply_locale": locale,
+            "ui_type": "none", "ui_payload": {}}
 
 
 def approval_gate(state: AgentState) -> dict:
