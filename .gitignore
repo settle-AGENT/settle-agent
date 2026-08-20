@@ -13,3 +13,4 @@ node_modules/
 *.iml
 output/
 seed/ocr_cache/
+backend/app.jar
