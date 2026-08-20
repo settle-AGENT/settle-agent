@@ -149,16 +149,30 @@ def _fmt_date(m: re.Match) -> str:
     return f"{y}-{int(mo):02d}-{int(d):02d}"
 
 
+# 외국인등록번호·국내거소신고번호의 성별코드는 5·6·7·8 이다.
+# 주민등록번호는 1·2·3·4(1900년대) 또는 9·0(1800년대)를 쓴다.
+# 형식(\d{6}-\d{7})은 둘이 같으므로 이 자리가 유일한 구분점이다.
+_FOREIGN_SEX_CODES = {"5": ("19", "M"), "6": ("19", "F"),
+                      "7": ("20", "M"), "8": ("20", "F")}
+
+
+class WrongDocument(OcrFailed):
+    """읽히긴 했으나 요구한 종류의 증명서가 아니다. 재촬영으로는 해결되지 않는다."""
+
+
+def is_foreign_registration(arc: str | None) -> bool:
+    """외국인등록번호 형태인가. 주민등록번호를 걸러내는 유일한 관문이다."""
+    if not arc or not re.fullmatch(r"\d{6}-\d{7}", arc):
+        return False
+    return arc.split("-")[1][0] in _FOREIGN_SEX_CODES
+
+
 def derive_from_arc(arc: str | None) -> dict:
     """등록번호에서 생년월일·성별을 계산한다."""
-    if not arc or not re.fullmatch(r"\d{6}-\d{7}", arc):
+    if not is_foreign_registration(arc):
         return {}
     front, back = arc.split("-")
-    code = back[0]
-    century = {"5": "19", "6": "19", "7": "20", "8": "20"}.get(code)
-    gender = {"5": "M", "6": "F", "7": "M", "8": "F"}.get(code)
-    if not century:
-        return {}
+    century, gender = _FOREIGN_SEX_CODES[back[0]]
     return {
         "birth_date": f"{century}{front[0:2]}-{front[2:4]}-{front[4:6]}",
         "sex": gender,
@@ -332,12 +346,20 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
 
     profile, dropped = verify(profile, texts)
 
+    # 읽어낸 등록번호가 외국인등록번호가 아니면 다른 증명서다.
+    # 여기서 막지 않으면 주민등록증이 그대로 프로필이 되고, 뒤에서
+    # 여권 생년월일과 어긋나 보이지 않는 오류로 남는다.
+    arc_no = profile.get("arc_no")
+    if arc_no and not is_foreign_registration(arc_no):
+        raise WrongDocument(
+            "외국인등록증이 아닌 것 같습니다. 등록번호가 외국인등록번호 형식이 "
+            "아닙니다. 외국인등록증을 촬영해 주세요.")
+
     if doc_type == "arc_front":
-        profile.update(derive_from_arc(profile.get("arc_no")))
-        confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
-    if doc_type == "arc_front":
-        profile.update(derive_from_arc(profile.get("arc_no")))
-        confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
+        derived = derive_from_arc(arc_no)
+        profile.update(derived)
+        if derived:
+            confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
 
     if profile.get("addr_kr"):                    # LLM 폴백 경로도 한 번 거른다
         profile["addr_kr"] = _trim_addr(profile["addr_kr"])
