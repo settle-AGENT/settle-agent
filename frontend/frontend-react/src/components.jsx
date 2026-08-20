@@ -29,11 +29,15 @@ export function TopBar({ title, onBack, right }) {
   );
 }
 
-const RAIL = ["설정", "촬영", "프로필", "심사", "서류"];
-export function Rail({ active }) {
+const RAIL = {
+  ko: ["설정", "촬영", "프로필", "심사", "서류"],
+  en: ["Setup", "Capture", "Profile", "Review", "Documents"],
+};
+export function Rail({ active, locale = "ko" }) {
+  const labels = locale === "en" ? RAIL.en : RAIL.ko;
   return (
     <div style={{ padding: "2px 24px 12px", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-      {RAIL.map((label, i) => (
+      {labels.map((label, i) => (
         <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
           <div style={{ width: 10, height: 10, borderRadius: 99,
             background: i < active ? "var(--ok)" : i === active ? "var(--brand-2)" : "transparent",
@@ -60,15 +64,20 @@ export function PrimaryButton({ children, onClick, disabled }) {
   );
 }
 
-export function Field({ label, value, confidence, editable = false, dirty, error, onChange }) {
-  const low = confidence != null && confidence < 0.9;
+// AI 쪽 doc_builder.CONF_THRESHOLD 와 같은 값이어야 한다. 어긋나면 서류에는
+// 확인 주석이 붙는데 화면 배지는 뜨지 않는 구간이 생긴다.
+const CONF_THRESHOLD = 0.95;
+
+export function Field({ label, value, confidence, editable = false, dirty, error, onChange, locale = "ko" }) {
+  const low = confidence != null && confidence < CONF_THRESHOLD;
+  const en = locale === "en";
   return (
     <div style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.8 0.1 80 / 0.16)" : "#fff",
       border: error ? "1.5px solid #b64b3d" : low ? "1.5px solid var(--warn)" : "1px solid var(--line)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
-          {error ? "확인 필요" : dirty ? "수정됨" : low ? "확인 필요" : !editable ? "수정 불가" : ""}
+          {error ? (en ? "Check required" : "확인 필요") : dirty ? (en ? "Edited" : "수정됨") : low ? (en ? "Check required" : "확인 필요") : !editable ? (en ? "Read only" : "수정 불가") : ""}
         </span>
       </div>
       <input className="profile-field-input" value={value ?? ""} disabled={!editable}
@@ -80,9 +89,10 @@ export function Field({ label, value, confidence, editable = false, dirty, error
 
 // 서버가 내려준 question payload 하나를 그린다.
 // input_type: text=자유입력, select=옵션 버튼, address=후보 선택만(자유 입력 금지).
-export function QuestionCard({ payload, options, value, onChange, onSubmit, disabled }) {
+export function QuestionCard({ payload, options, value, onChange, onSubmit, disabled, locale = "ko" }) {
   const { label, input_type: inputType, hint } = payload || {};
   const choice = inputType === "select" || inputType === "address";
+  const en = locale === "en";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
@@ -101,18 +111,18 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
             </button>
           ))}
           {options.length === 0 && (
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>선택할 수 있는 항목을 받지 못했어요.</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>{en ? "No options are available." : "선택할 수 있는 항목을 받지 못했어요."}</div>
           )}
         </div>
       ) : (
         <form onSubmit={(event) => { event.preventDefault(); if (value.trim()) onSubmit(value.trim()); }}
           style={{ display: "flex", gap: 8 }}>
           <input className="profile-field-input" style={{ flex: 1 }} value={value} disabled={disabled}
-            onChange={(event) => onChange(event.target.value)} placeholder="답변을 입력하세요" />
+            onChange={(event) => onChange(event.target.value)} placeholder={en ? "Enter your answer" : "답변을 입력하세요"} />
           <button type="submit" disabled={disabled || !value.trim()} className="tap"
             style={{ minHeight: 44, padding: "0 16px", borderRadius: 11, border: 0, fontSize: 13, fontWeight: 700,
               background: disabled || !value.trim() ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)",
-              color: disabled || !value.trim() ? "oklch(0.55 0.01 60)" : "#fff" }}>보내기</button>
+              color: disabled || !value.trim() ? "oklch(0.55 0.01 60)" : "#fff" }}>{en ? "Send" : "보내기"}</button>
         </form>
       )}
     </div>
@@ -127,8 +137,11 @@ const TASK_UI = {
 };
 
 // state.tasks 한 건. d_day 가 null 이면 배지를 숨긴다(기준일 미확보).
-export function TaskCard({ task, busy, onStart }) {
-  const meta = TASK_UI[task.status] || TASK_UI.locked;
+export function TaskCard({ task, busy, onStart, locale = "ko" }) {
+  const en = locale === "en";
+  const source = TASK_UI[task.status] || TASK_UI.locked;
+  const labels = { locked: ["Locked", null], available: ["Available", "Start"], in_progress: ["In progress", "Continue"], done: ["Done", "View result"] };
+  const meta = en ? { ...source, badge: labels[task.status]?.[0] || "Locked", cta: labels[task.status]?.[1] } : source;
   const locked = task.status === "locked";
   return (
     <div style={{ padding: "14px 15px", borderRadius: 13, background: locked ? "oklch(0.96 0.006 60)" : "#fff",
@@ -146,20 +159,20 @@ export function TaskCard({ task, busy, onStart }) {
 
       {locked && task.blocked_by?.length > 0 && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>
-          먼저 완료해야 해요 · {task.blocked_by.join(", ")}
+          {en ? "Complete first" : "먼저 완료해야 해요"} · {task.blocked_by.join(", ")}
         </div>
       )}
-      {task.agency && <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>제출처 · {task.agency}</div>}
+      {task.agency && <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Agency" : "제출처"} · {task.agency}</div>}
       {task.note && <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{task.note}</div>}
       {task.required_docs?.length > 0 && (
         <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>
-          지참 · {task.required_docs.join(", ")}
+          {en ? "Bring" : "지참"} · {task.required_docs.join(", ")}
         </div>
       )}
 
       {task.evidence?.length > 0 && (
         <details style={{ marginTop: 8 }}>
-          <summary style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }}>근거 법령</summary>
+          <summary style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }}>{en ? "Legal basis" : "근거 법령"}</summary>
           {task.evidence.map((line) => (
             <div key={line} title={line} style={{ marginTop: 4, fontSize: 11, color: "var(--muted)", lineHeight: 1.45 }}>· {line}</div>
           ))}
@@ -170,7 +183,7 @@ export function TaskCard({ task, busy, onStart }) {
         <button type="button" disabled={busy} onClick={() => onStart(task)} className="tap"
           style={{ width: "100%", minHeight: 44, marginTop: 11, borderRadius: 11, border: 0, fontSize: 13, fontWeight: 700,
             background: busy ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)", color: busy ? "oklch(0.55 0.01 60)" : "#fff" }}>
-          {busy ? "여는 중…" : meta.cta}
+          {busy ? (en ? "Opening…" : "여는 중…") : meta.cta}
         </button>
       )}
     </div>

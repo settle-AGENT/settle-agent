@@ -70,7 +70,10 @@ class HttpAiAgentClientTest {
 
     private HttpAiAgentClient client() {
         RestClient restClient = new AiRestClientConfiguration().aiRestClient(
-                RestClient.builder(), "http://127.0.0.1:" + server.getAddress().getPort()
+                RestClient.builder(),
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                5,
+                120
         );
         return new HttpAiAgentClient(restClient);
     }
