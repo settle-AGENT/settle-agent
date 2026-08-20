@@ -1,22 +1,24 @@
 package com.settle.backend.domain.document.controller;
 
+import com.settle.backend.common.auth.CurrentMemberId;
 import com.settle.backend.domain.document.dto.ExtractDocumentRequest;
 import com.settle.backend.domain.document.service.DocumentService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.Map;
 import java.util.UUID;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -25,6 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
         name = "문서 OCR",
         description = "S3에 업로드한 신분증·여권을 AI 서버로 전달해 OCR 결과를 추출합니다."
 )
+@SecurityRequirement(name = "bearerAuth")
 public class DocumentController {
 
     private final DocumentService documentService;
@@ -34,7 +37,6 @@ public class DocumentController {
     }
 
     @PostMapping("/extractions")
-    @ResponseStatus(HttpStatus.CREATED)
     @Operation(
             summary = "업로드 문서 OCR 추출",
             description = """
@@ -44,7 +46,7 @@ public class DocumentController {
 
                     Spring→AI 내부 호출 계약:
                     `POST ${AI_BASE_URL}/api/profile/extract-upload` (multipart/form-data)
-                    - `session_id`: 현재는 memberId 문자열
+                    - `session_id`: JWT memberId 문자열
                     - `doc_type`: `arc_front | arc_back | passport`
                     - `file`: S3에서 다운로드한 PNG binary
 
@@ -85,7 +87,7 @@ public class DocumentController {
                                         }
                                       },
                                       "state": {
-                                        "session_id": "00000000-0000-0000-0000-000000000000",
+                                        "session_id": "8c83fcab-0f4b-4ce6-9f2d-c9df3cfe6e11",
                                         "locale": "ko",
                                         "profile": {
                                           "nationality": "VNM",
@@ -99,15 +101,29 @@ public class DocumentController {
                                     """)
                     )
             ),
-            @ApiResponse(responseCode = "404", description = "uploadId가 없거나 현재 사용자의 업로드가 아님"),
-            @ApiResponse(responseCode = "409", description = "업로드 미완료, 처리 중 또는 이미 처리된 업로드"),
-            @ApiResponse(responseCode = "415", description = "업로드 파일이 PNG가 아님"),
-            @ApiResponse(responseCode = "422", description = "OCR 추출 실패")
+            @ApiResponse(responseCode = "401", description = "Bearer token 누락 또는 무효"),
+            @ApiResponse(responseCode = "404", description = "uploadId가 없거나 현재 사용자의 업로드가 아님",
+                    content = @Content(examples = @ExampleObject(value = """
+                            {"detail":{"error":"internal","message":"internal","details":null}}
+                            """))),
+            @ApiResponse(responseCode = "409", description = "업로드 미완료, 처리 중 또는 이미 처리된 업로드",
+                    content = @Content(examples = @ExampleObject(value = """
+                            {"detail":{"error":"upload_not_completed","message":"upload_not_completed","details":null}}
+                            """))),
+            @ApiResponse(responseCode = "415", description = "S3 Content-Type 또는 파일 시그니처가 PNG가 아님",
+                    content = @Content(examples = @ExampleObject(value = """
+                            {"detail":{"error":"unsupported_media_type","message":"unsupported_media_type","details":null}}
+                            """))),
+            @ApiResponse(responseCode = "422", description = "AI OCR 추출 실패—AI error body를 그대로 전달",
+                    content = @Content(examples = @ExampleObject(value = """
+                            {"detail":{"error":"extraction_failed","message":"문서를 인식하지 못했습니다.","details":{}}}
+                            """))),
+            @ApiResponse(responseCode = "5XX", description = "AI upstream 5xx는 같은 status/body로 전달")
     })
-    public Map<String, Object> extractDocument(
+    public ResponseEntity<Map<String, Object>> extractDocument(
+            @Parameter(hidden = true) @CurrentMemberId UUID memberId,
             @Valid @RequestBody ExtractDocumentRequest request
     ) {
-        // TODO 인증 구현 후 JWT subject에서 memberId를 주입한다.
-        return documentService.extractAndSave(new UUID(0L, 0L), request);
+        return documentService.extractAndSave(memberId, request);
     }
 }

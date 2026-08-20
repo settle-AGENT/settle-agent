@@ -13,6 +13,7 @@ node_modules/
 *.iml
 output/
 seed/ocr_cache/
+backend/app.jar
 
 # 임베딩 덤프 — 재생성 가능, 클라우드팀에 별도 전달
 seed/rag_chunks.jsonl

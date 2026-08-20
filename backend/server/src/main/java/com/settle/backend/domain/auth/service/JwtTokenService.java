@@ -33,4 +33,14 @@ public class JwtTokenService {
                 .signWith(key)
                 .compact();
     }
+
+    public UUID parseMemberId(String token) {
+        String subject = Jwts.parser()
+                .verifyWith(key)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload()
+                .getSubject();
+        return UUID.fromString(subject);
+    }
 }

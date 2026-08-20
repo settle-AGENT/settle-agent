@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { BridgeMark, TopBar, Rail, PrimaryButton, Field } from "./components.jsx";
+import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
-  signUp, login, uploadAndExtract, confirmProfile, getVerdict, buildDocuments, nationalityLabel,
+  signUp, login, uploadAndExtract, confirmProfile, getVerdict, previewAction, approveAction, getLedger,
+  fetchDocument, nationalityLabel,
+  createSession, sendChat, startAction, readUi, questionOptions, clearToken,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
@@ -11,6 +13,7 @@ const SCAN_PAGES = [
   { key: "arcBack", docType: "arc_back", label: "외국인등록증 뒷면", sub: "뒷면" },
   { key: "passport", docType: "passport", label: "여권", sub: "여권 사진면" },
 ];
+const PREVIEW_ACTION_ID = "open_bank_account";
 
 const card = {
   padding: 15, borderRadius: 14, border: "1px solid var(--line)", background: "#fff",
@@ -29,6 +32,14 @@ export default function App() {
   const [lang, setLang] = useState("en");
   const [nat, setNat] = useState(null);
 
+  // ── 에이전트 단일 스토어 ──
+  // 서버 state 가 진실의 원천이다. 부분 병합하지 않고 통째로 교체한다.
+  const [agentState, setAgentState] = useState(null);
+  const [ui, setUi] = useState({ type: "none", payload: {} });
+  const [messages, setMessages] = useState([]);
+  const [toast, setToast] = useState("");
+  const [sessionLoading, setSessionLoading] = useState(false);
+
   const [scan, setScan] = useState(0);
   const [shots, setShots] = useState({});
   const [captureError, setCaptureError] = useState("");
@@ -40,11 +51,22 @@ export default function App() {
   const [dirtyFields, setDirtyFields] = useState({});
   const [profileErrors, setProfileErrors] = useState({});
   const [profileSubmitting, setProfileSubmitting] = useState(false);
-  const [profileReplies, setProfileReplies] = useState([]);
 
   const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewBlobUrl, setPreviewBlobUrl] = useState("");
+  const [approval, setApproval] = useState(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState("");
+  const [ledger, setLedger] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [taskBusy, setTaskBusy] = useState("");
   const [docs, setDocs] = useState(null);
   const [openDoc, setOpenDoc] = useState(null);
   const chatEndRef = useRef(null);
@@ -103,6 +125,27 @@ export default function App() {
 
   useEffect(() => () => cameraStreamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
+  useEffect(() => () => {
+    if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
+  }, [previewBlobUrl]);
+
+  // 세션은 POST /api/session 이 발급한 값 하나뿐이다.
+  // 임의의 폴백을 쓰면 Spring 의 소유권 검증에서 403 이 난다.
+  const sessionId = agentState?.session_id || null;
+  const documents = agentState?.documents || [];
+
+  useEffect(() => {
+    if (step !== 9) return;
+    let active = true;
+    setLedgerLoading(true);
+    setLedgerError("");
+    getLedger(sessionId)
+      .then((entries) => { if (active) setLedger(Array.isArray(entries) ? entries : []); })
+      .catch((error) => { if (active) setLedgerError(error instanceof Error ? error.message : "실행 이력을 불러오지 못했어요."); })
+      .finally(() => { if (active) setLedgerLoading(false); });
+    return () => { active = false; };
+  }, [step, sessionId]);
+
   useEffect(() => {
     if (step !== 2) return;
     startCamera(false);
@@ -132,6 +175,110 @@ export default function App() {
 
   const go = (n) => setStep(n);
 
+  const openPdfPreview = async () => {
+    if (previewLoading) return;
+    setPreviewLoading(true);
+    setPreviewError("");
+    try {
+      const response = await previewAction(PREVIEW_ACTION_ID, sessionId);
+      setAgentState(response?.state || null);
+      const pendingApproval = response?.ui?.type === "approval"
+        ? response.ui.payload
+        : response?.state?.pending_approval;
+      setApproval(pendingApproval || null);
+      if (response?.ui?.type === "approval") {
+        return;
+      }
+      if (response?.ui?.type !== "doc_preview") {
+        throw new Error(response?.reply || "PDF 미리보기 응답을 확인해 주세요.");
+      }
+      const payload = response.ui.payload;
+      const blob = await fetchDocument(payload.preview_url);
+      const nextBlobUrl = URL.createObjectURL(blob);
+      setPreviewBlobUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextBlobUrl;
+      });
+      setPreview(payload);
+      go(10);
+    } catch (error) {
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const openStoredDocument = async (document) => {
+    setPreviewError("");
+    try {
+      const blob = await fetchDocument(document.preview_url);
+      const nextBlobUrl = URL.createObjectURL(blob);
+      setPreviewBlobUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextBlobUrl;
+      });
+      setPreview({ ...document, warnings: [] });
+      go(10);
+    } catch (error) {
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+    }
+  };
+
+  const downloadPdf = async (document) => {
+    try {
+      const blob = await fetchDocument(document.pdf_url);
+      const url = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = url;
+      link.download = `${document.title || "document"}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 다운로드하지 못했어요.");
+    }
+  };
+
+  const decideApproval = async (approved) => {
+    if (approvalLoading || !approval?.action_id) return;
+    setApprovalLoading(true);
+    setApprovalError("");
+    try {
+      const response = await approveAction(approval.action_id, sessionId, approved);
+      setAgentState(response?.state || null);
+      const nextApproval = response?.ui?.type === "approval"
+        ? response.ui.payload
+        : response?.state?.pending_approval;
+      setApproval(nextApproval || null);
+    } catch (error) {
+      if (!handleAuthError(error)) setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
+  const applyAgent = (response) => {
+    if (response?.state) setAgentState(response.state);
+    setUi(readUi(response));
+    if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    return response;
+  };
+
+  // 401/403 이면 세션을 이어갈 방법이 없다. 토큰을 버리고 로그인부터 다시 받는다.
+  // 처리했으면 true — 호출부는 자기 화면 오류를 띄우지 않고 빠진다.
+  const handleAuthError = (error) => {
+    if (error?.status !== 401 && error?.status !== 403) return false;
+    clearToken();
+    setIsAuthenticated(false);
+    setAgentState(null);
+    setUi({ type: "none", payload: {} });
+    setMessages([]);
+    setAuthMode("login");
+    setAuthMessage(error.message || "로그인이 만료됐어요. 다시 로그인해 주세요.");
+    go(-1);
+    return true;
+  };
+
   // ── 0 스플래시 ──
   if (step === 0)
     return (
@@ -153,8 +300,8 @@ export default function App() {
           </div>
           <div style={{ width: "100%" }}><PrimaryButton onClick={() => { setAuthMode("login"); go(-1); }}>시작하기</PrimaryButton></div>
           {isAuthenticated && (
-            <div onClick={() => docs ? go(8) : go(-1)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> 내 서류함 열기 <span style={{ color: "var(--ok)", fontSize: 11 }}>3건 저장됨</span>
+            <div onClick={() => go(9)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> 내 서류함 열기
             </div>
           )}
         </div>
@@ -183,8 +330,7 @@ export default function App() {
           setAuthMessage("회원가입이 완료됐어요. 로그인해 주세요.");
           return;
         }
-        const response = await login(auth);
-        window.localStorage.setItem("settle_access_token", response.accessToken);
+        await login(auth);
         setIsAuthenticated(true);
         go(1);
       } catch (error) {
@@ -226,7 +372,21 @@ export default function App() {
   }
 
   // ── 1 언어 선택 ──
-  if (step === 1)
+  if (step === 1) {
+    // 언어를 고르는 순간이 세션의 시작점이다. locale 은 세션 생성 시 함께 넘긴다.
+    const beginSession = async () => {
+      if (sessionLoading) return;
+      setSessionLoading(true);
+      setToast("");
+      try {
+        applyAgent(await createSession(lang));
+        go(2);
+      } catch (error) {
+        if (!handleAuthError(error)) setToast(error?.message || "세션을 시작하지 못했어요.");
+      } finally {
+        setSessionLoading(false);
+      }
+    };
     return (
       <Shell>
         <div style={{ paddingTop: 46 }}><Rail active={0} /></div>
@@ -241,10 +401,14 @@ export default function App() {
           </div>
         </div>
         <div style={{ padding: "8px 26px 34px" }}>
-          <PrimaryButton onClick={() => go(2)}>계속</PrimaryButton>
+          {toast && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{toast}</div>}
+          <PrimaryButton disabled={sessionLoading} onClick={beginSession}>
+            {sessionLoading ? "세션을 여는 중…" : "계속"}
+          </PrimaryButton>
         </div>
       </Shell>
     );
+  }
 
   // ── 2 촬영 ──
   if (step === 2) {
@@ -262,6 +426,7 @@ export default function App() {
         const next = { ...shots, [page.key]: png };
         setShots(next);
         setExtract(data);
+        if (data.agentResponse) applyAgent(data.agentResponse);
         setProfileDraft(Object.fromEntries((data.fields || []).map((field) => [field.key, field.value])));
         setDirtyFields({});
         setProfileErrors({});
@@ -271,7 +436,7 @@ export default function App() {
           go(3);
         } else setScan(empty);
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+        if (!handleAuthError(error)) setCaptureError(captureMessage(error));
       } finally {
         setCaptureLoading(false);
       }
@@ -283,14 +448,14 @@ export default function App() {
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     pastedImageHandlerRef.current = async (source) => {
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "붙여넣은 이미지를 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     const takePhoto = async () => {
@@ -299,7 +464,7 @@ export default function App() {
         stopCamera();
         await uploadPng(png);
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "사진을 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     const currentShot = shots[SCAN_PAGES[scan].key];
@@ -376,8 +541,8 @@ export default function App() {
       setProfileSubmitting(true);
       setProfileErrors({});
       try {
-        const sessionId = extract?.state?.session_id || "demo-001";
-        const response = await confirmProfile(sessionId, dirtyFields);
+        const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields);
+        applyAgent(response);
         setExtract((current) => ({
           ...current,
           profile: response.state?.profile || {},
@@ -385,9 +550,10 @@ export default function App() {
           agentResponse: response,
         }));
         setDirtyFields({});
-        if (response.reply) setProfileReplies((current) => [...current, response.reply]);
-        if (response.ui?.type === "question") go(4);
+        // 다음 UI 가 질문이면 상담 화면, 그 밖이면 과제 목록으로 간다.
+        go(readUi(response).type === "question" ? 4 : 5);
       } catch (error) {
+        if (handleAuthError(error)) return;
         if (error?.status === 422 && error?.code === "validation_failed") {
           const details = error.details;
           const entries = Array.isArray(details)
@@ -429,7 +595,7 @@ export default function App() {
     );
   }
 
-  // ── 4 AI 상담 + 심사 ──
+  // ── 4 AI 상담 (서버가 내려주는 question 을 그린다) ──
   if (step === 4) {
     const hasPurpose = Object.values(answers.purposes).some(Boolean);
     const updatePhone = (phone) => { setAnswers((value) => ({ ...value, phone })); setVerdict(null); };
@@ -483,54 +649,105 @@ export default function App() {
       );
     }
 
+
+    const question = ui.type === "question" ? ui.payload : null;
+    const options = question ? questionOptions(question) : [];
+
+    // 답변은 항상 POST /api/chat 의 message 로 간다. 응답의 ui.type 이 다음 화면을 정한다.
+    const answer = async (value) => {
+      if (chatLoading || !value) return;
+      setChatLoading(true);
+      setToast("");
+      setMessages((current) => [...current, { from: "user", text: value }]);
+      try {
+        const response = applyAgent(await sendChat(sessionId, value));
+        setChatInput("");
+        const next = readUi(response).type;
+        if (next !== "question") go(5);      // 질문이 끝나면 과제 목록으로
+      } catch (error) {
+        if (!handleAuthError(error)) setToast(error?.message || "메시지를 보내지 못했어요.");
+      } finally {
+        setChatLoading(false);
+      }
+    };
+
     return (
       <Shell>
         <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
         <Rail active={3} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {profileReplies.map((reply, index) => <ChatBubble avatar key={`${reply}-${index}`}>{reply}</ChatBubble>)}
-          <ChatBubble avatar>
-            서류 확인이 끝났어요. 은행 방문 가능 여부를 확인할게요. 아래 질문에 순서대로 답해 주세요.
-          </ChatBubble>
+          {messages.map((message, index) => (
+            <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
+              {message.text}
+            </ChatBubble>
+          ))}
 
-          <ChatBubble avatar>
-            <b>본인 명의 국내 휴대폰이 있나요?</b>
-            <span>국내 통신사에서 본인 명의로 개통한 휴대폰이에요.</span>
-            <ChatOptions>
-              <ChatChoice selected={answers.phone === "yes"} onClick={() => updatePhone("yes")}>네, 있어요</ChatChoice>
-              <ChatChoice selected={answers.phone === "no"} onClick={() => updatePhone("no")}>아직 없어요</ChatChoice>
-            </ChatOptions>
-          </ChatBubble>
-
-          {answers.phone && (
-            <>
-              <ChatBubble mine>{answers.phone === "yes" ? "네, 본인 명의 휴대폰이 있어요." : "아직 본인 명의 휴대폰이 없어요."}</ChatBubble>
-              <ChatBubble avatar>
-                <b>재학증명서 또는 입학허가서가 있나요?</b>
-                <span>은행에는 촬영본이 아닌 종이 원본을 제출해요.</span>
-                <ChatOptions>
-                  <ChatChoice selected={answers.cert === "yes"} onClick={() => updateCert("yes")}>있어요</ChatChoice>
-                  <ChatChoice selected={answers.cert === "no"} onClick={() => updateCert("no")}>아직 없어요</ChatChoice>
-                </ChatOptions>
-              </ChatBubble>
-            </>
+          {question && (
+            <ChatBubble avatar wide>
+              <QuestionCard payload={question} options={options} value={chatInput}
+                onChange={setChatInput} onSubmit={answer} disabled={chatLoading} />
+            </ChatBubble>
           )}
 
-          {answers.cert && (
-            <>
-              <ChatBubble mine>{answers.cert === "yes" ? "학교 서류를 준비했어요." : "학교 서류는 아직 없어요."}</ChatBubble>
-              <ChatBubble avatar>
-                <b>계좌를 주로 어디에 사용할 건가요?</b>
-                <span>여러 개를 선택할 수 있어요.</span>
-                <ChatOptions wrap>
-                  {PURPOSES.map((label, index) => <ChatChoice key={label} selected={!!answers.purposes[index]} onClick={() => togglePurpose(index)}>{label}</ChatChoice>)}
-                </ChatOptions>
-                {hasPurpose && !verdict && <button type="button" disabled={chatLoading} onClick={runVerdict} className="chat-submit tap">{chatLoading ? "확인하고 있어요…" : "선택 완료 · 심사하기"}</button>}
-              </ChatBubble>
-            </>
+          {/* 모르는 ui.type 이면 reply 만 보여주고 다음 화면으로 넘어갈 길을 남긴다 */}
+          {!question && !chatLoading && (
+            <button type="button" onClick={() => go(5)} className="chat-submit tap">할 일 목록 보기</button>
           )}
+
+          {chatLoading && <ChatBubble avatar>답변을 정리하고 있어요…</ChatBubble>}
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
 
           <div ref={chatEndRef} aria-hidden="true" />
+        </div>
+      </Shell>
+    );
+  }
+
+  // ── 5 할 일 / 과제 선택 ──
+  if (step === 5) {
+    const tasks = agentState?.tasks || [];
+    const startTask = async (task) => {
+      if (taskBusy) return;
+      setTaskBusy(task.id);
+      setToast("");
+      try {
+        const response = applyAgent(await startAction(sessionId, task.id));
+        // 다음 질문이 오면 상담 화면으로 되돌아간다. 그 밖의 ui 는 담당 파트(6~9)가 그린다.
+        if (readUi(response).type === "question") go(4);
+      } catch (error) {
+        // 409 prerequisite_missing 은 상태를 바꾸지 않고 토스트만 띄운다.
+        if (!handleAuthError(error)) setToast(error?.message || "과제를 시작하지 못했어요.");
+      } finally {
+        setTaskBusy("");
+      }
+    };
+    return (
+      <Shell>
+        <TopBar title="할 일" onBack={() => go(4)} />
+        <Rail active={3} />
+        <div style={{ padding: "4px 24px 14px" }}>
+          <h2 style={H2}>지금 할 수 있는 일</h2>
+          <p style={SUB}>잠긴 항목은 먼저 끝내야 하는 과제가 있어요.</p>
+        </div>
+        <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {tasks.length === 0 && (
+            <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
+              아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.
+            </div>
+          )}
+          {tasks.map((task) => (
+            <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} />
+          ))}
+        </div>
+        <div style={{ padding: "10px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
+          <PrimaryButton onClick={() => go(4)}>상담으로 돌아가기</PrimaryButton>
+          {/* 화면 6~9(서류·승인·이력)로 들어가는 유일한 진입로다. */}
+          <button type="button" onClick={() => go(7)} className="tap"
+            style={{ width: "100%", minHeight: 46, borderRadius: 12, border: "1px solid var(--line)",
+              background: "#fff", fontSize: 13.5, fontWeight: 700, color: "oklch(0.25 0.012 60)" }}>
+            내 신청서 · 서류함
+          </button>
         </div>
       </Shell>
     );
@@ -564,111 +781,114 @@ export default function App() {
           </div>
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          <PrimaryButton onClick={async () => { setDocs(await buildDocuments("mock")); go(7); }}>내 서류함</PrimaryButton>
+          <PrimaryButton onClick={() => go(7)}>내 신청서</PrimaryButton>
         </div>
       </Shell>
     );
 
   // ── 7 신청서 ──
-  if (step === 7 && docs)
+  if (step === 7)
     return (
       <Shell>
         <TopBar title="내 신청서" onBack={() => go(6)} />
         <div style={{ padding: "4px 24px 16px" }}>
           <Rail active={4} />
-          <h2 style={H2}>채워진 신청서 {docs.documents.length}종</h2>
+          <h2 style={H2}>채워진 신청서 {documents.length}종</h2>
           <p style={SUB}>인쇄하거나 창구에서 휴대폰으로 보여주세요.</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {docs.documents.map((d) => (
+          {documents.length === 0 && (
+            <div style={{ ...card, display: "flex", gap: 13 }}>
+              <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
+              <div style={{ flex: 1 }}>
+                <b style={{ fontSize: 14.5 }}>계좌개설신청서</b>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>미리보기를 누르면 AI가 신청서를 생성합니다.</div>
+              </div>
+            </div>
+          )}
+          {documents.map((d) => (
             <div key={d.id} style={{ ...card, display: "flex", gap: 13 }}>
               <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 14.5 }}>{d.title}</b>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{d.subtitle}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                  <div style={{ flex: 1, height: 5, borderRadius: 99, background: "oklch(0.91 0.01 60)", overflow: "hidden" }}>
-                    <div style={{ width: `${(d.filled / d.total) * 100}%`, height: "100%", background: d.filled === d.total ? "var(--ok)" : "var(--warn)" }} />
-                  </div>
-                  <div style={{ ...mono, fontSize: 11, fontWeight: 600, color: d.filled === d.total ? "oklch(0.45 0.12 150)" : "oklch(0.5 0.12 80)" }}>{d.filled}/{d.total}</div>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>{d.filled === d.total ? "법에서 정한 필수 항목만 담아요. 임의로 추가하지 않아요." : "국가별 양식에만 있는 2개 항목: 본국 주소, 로마자 성명."}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{formatDate(d.created_at)}</div>
+                <button type="button" onClick={() => openStoredDocument(d)} className="tap" style={{ marginTop: 10, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>저장된 PDF 보기</button>
               </div>
             </div>
           ))}
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          <PrimaryButton onClick={() => go(8)}>PDF로 저장</PrimaryButton>
-          <div className="tap" style={{ marginTop: 10, minHeight: 50, border: "1px solid var(--line)", borderRadius: 13, display: "flex", alignItems: "center", justifyContent: "center", background: "#fff", fontSize: 13.5, fontWeight: 700 }}>PDF 미리보기</div>
+          {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
+          <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
+            {previewLoading ? "PDF 생성 중…" : "PDF 미리보기"}
+          </PrimaryButton>
+          <button type="button" onClick={() => go(9)} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>내 서류함 · 실행 이력</button>
         </div>
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
-  // ── 8 보관함 ──
-  if (step === 8 && docs)
+  // ── 9 내 서류함 / 실행 이력 ──
+  if (step === 9)
     return (
       <Shell>
-        <TopBar title="내 서류함" onBack={() => go(7)} right={<span style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />저장됨</span>} />
-        <div style={{ padding: "8px 24px 16px" }}>
-          <h2 style={H2}>서류가 준비됐어요</h2>
-          <p style={SUB}>파일을 누르면 PDF가 열려요. 모두 휴대폰에 저장되고 인터넷 없이도 열려요.</p>
-        </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {[docs.documents[1], { id: "visit_summary", title: "은행 방문 요약", subtitle: "방문 요약 · 한국어", pages: 1, filled: 6, total: 6, expiresInDays: 6 }].map((d) => (
-            <div key={d.id} onClick={() => { setOpenDoc(d); go(9); }} className="tap" style={{ ...card, display: "flex", gap: 13, alignItems: "center" }}>
-              <div style={{ width: 44, height: 56, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 2px, oklch(0.97 0.008 60) 2px 7px)", display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 5 }}>
-                <span style={{ ...mono, fontSize: 8.5, fontWeight: 700, color: "var(--brand-2)" }}>PDF</span>
-              </div>
-              <div style={{ flex: 1 }}>
-                <b style={{ fontSize: 14.5 }}>{d.title}</b>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif", marginTop: 1 }}>{d.subtitle}</div>
-              </div>
-              <span style={{ padding: "3px 8px", borderRadius: 999, fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap",
-                background: d.expiresInDays <= 7 ? "oklch(0.6 0.14 80 / 0.14)" : "oklch(0.93 0.008 60)",
-                color: d.expiresInDays <= 7 ? "oklch(0.45 0.12 80)" : "var(--muted)" }}>{d.expiresInDays}일 뒤 만료</span>
+        <TopBar title="내 서류함 · 실행 이력" onBack={() => go(7)} />
+        <div className="scroll" style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+          <section>
+            <h2 style={{ ...H2, fontSize: 20 }}>저장 문서</h2>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+              {documents.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>최근 응답에 저장된 문서가 없습니다.</div>}
+              {documents.map((document) => (
+                <div key={document.id} style={card}>
+                  <b style={{ fontSize: 14 }}>{document.title}</b>
+                  <div style={{ marginTop: 4, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(document.created_at)}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button type="button" onClick={() => openStoredDocument(document)} className="tap" style={smallActionStyle}>미리보기</button>
+                    <button type="button" onClick={() => downloadPdf(document)} className="tap" style={smallActionStyle}>PDF 다운로드</button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-          <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>은행에 가져갈 것</div>
-            {["외국인등록증 (앞·뒤)", "여권", "재학증명서", "본인 명의 휴대폰"].map((item) => <div key={item} style={{ padding: "10px 12px", marginBottom: 7, borderRadius: 10, background: "oklch(.965 .006 60)", fontSize: 12.5, fontWeight: 700 }}><span style={{ color: "var(--ok)", marginRight: 10 }}>✓</span>{item}</div>)}
-            <div style={{ padding: "10px 12px", borderRadius: 10, background: "oklch(.965 .006 60)", fontSize: 12.5, color: "var(--muted)" }}>□　계좌개설신청서</div>
-          </div>
+          </section>
+          <section>
+            <h2 style={{ ...H2, fontSize: 20 }}>실행 이력</h2>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
+              {ledgerLoading && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>불러오는 중…</div>}
+              {ledgerError && <div role="alert" className="capture-error" style={{ margin: 0 }}>{ledgerError}</div>}
+              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>아직 승인 후 실행된 작업이 없습니다.</div>}
+              {ledger.map((entry, index) => (
+                <div key={`${entry.action || "action"}-${entry.approved_at || index}`} style={card}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || "실행 작업"}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
+                  <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at)}</div>
+                  {entry.result?.receipt_no && <div style={{ marginTop: 8, fontSize: 12.5 }}>접수번호 {entry.result.receipt_no}</div>}
+                  {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>근거 · {item}</div>)}
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-        <div style={{ padding: "16px 24px 34px" }}>
-          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>최종 계좌 개설 여부는 은행이 결정합니다. 본인확인과 서명은 창구에서 직접 진행합니다.</div>
-        </div>
+        {previewError && <div role="alert" className="capture-error" style={{ margin: "0 20px 12px" }}>{previewError}</div>}
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
-  // ── 9 PDF 뷰어 ──
-  if (step === 9 && openDoc)
+  // ── PDF 뷰어 ──
+  if (step === 10 && preview && previewBlobUrl)
     return (
       <Shell dark>
-        <TopBar title={openDoc.title} onBack={() => go(8)} />
-        <div className="scroll" style={{ padding: "0 20px 20px" }}>
-          <div style={{ background: "#fff", borderRadius: 6, padding: "22px 20px", fontFamily: "'Noto Sans KR',sans-serif" }}>
-            <div style={{ borderBottom: "2px solid oklch(0.25 0.012 60)", paddingBottom: 10, marginBottom: 12 }}>
-              <b style={{ fontSize: 16 }}>{openDoc.title}</b>
-              <div style={{ ...mono, fontSize: 10, color: "var(--muted)", marginTop: 3 }}>{openDoc.filled}/{openDoc.total} FIELDS · {openDoc.pages}p</div>
-            </div>
-            {DOC_ROWS(extract?.profile, nat).map(([k, v]) => (
-              <div key={k} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid oklch(0.92 0.01 60)" }}>
-                <div style={{ width: 96, flex: "none", fontSize: 10.5, color: "var(--muted)" }}>{k}</div>
-                <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{v}</div>
-              </div>
-            ))}
-            <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-              <div style={{ width: 110, textAlign: "center" }}>
-                <div style={{ height: 26, borderBottom: "1px solid oklch(0.4 0.012 60)" }} />
-                <div style={{ fontSize: 9.5, color: "var(--muted)", marginTop: 4 }}>신청인 서명</div>
-              </div>
-            </div>
+        <TopBar title={preview.title} onBack={() => go(9)} />
+        {(preview.warnings || []).length > 0 && (
+          <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
+            {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
           </div>
+        )}
+        <div className="scroll" style={{ padding: "0 20px 20px" }}>
+          <iframe title={preview.title} src={previewBlobUrl} style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
         </div>
         <div style={{ padding: "16px 20px 34px", display: "flex", gap: 9 }}>
-          <FlatBtn>파일로 저장</FlatBtn>
-          <FlatBtn brand>공유</FlatBtn>
+          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>PDF 다운로드</button>
         </div>
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
@@ -741,8 +961,32 @@ function Pick({ children, on, ok, onClick }) {
     </div>
   );
 }
-function FlatBtn({ children, brand }) {
-  return <div className="tap" style={{ flex: 1, minHeight: 52, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 13, fontSize: 13.5, fontWeight: 700, color: "#fff", background: brand ? "var(--brand-2)" : "oklch(0.32 0.012 60)" }}>{children}</div>;
+function ApprovalModal({ approval, loading, error, onDecision }) {
+  return (
+    <div role="dialog" aria-modal="true" aria-label="실행 승인" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
+      <div style={{ width: "100%", padding: "22px 20px 30px", borderRadius: "24px 24px 0 0", background: "#fff" }}>
+        <div style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em" }}>APPROVAL · {approval.risk_level || "L2"}</div>
+        <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || "실행 승인"}</h3>
+        {(approval.summary || []).map((item) => <div key={item} style={{ padding: "7px 0", fontSize: 12.5 }}>· {item}</div>)}
+        {(approval.evidence || []).length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--muted)" }}>근거</div>}
+        {(approval.evidence || []).map((item) => <div key={item} style={{ padding: "4px 0", fontSize: 11.5, color: "var(--muted)" }}>· {item}</div>)}
+        <p style={{ margin: "12px 0", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5 }}>아직 외부 예약이나 제출은 실행되지 않았습니다.</p>
+        {error && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{error}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>취소</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? "처리 중…" : "확인"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const smallActionStyle = { flex: 1, minHeight: 38, borderRadius: 10, border: "1px solid var(--line)", background: "#fff", fontSize: 11.5, fontWeight: 700 };
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("ko-KR");
 }
 function Sheet({ children, title, onClose }) {
   return (
@@ -753,6 +997,22 @@ function Sheet({ children, title, onClose }) {
       </div>
     </div>
   );
+}
+
+// 촬영 화면 오류 문구. 계약의 error code 별로 다음 행동을 다르게 안내한다.
+function captureMessage(error) {
+  switch (error?.code) {
+    case "extraction_failed":
+      return "사진에서 정보를 읽지 못했어요. 빛 반사를 피해 카드 전체가 보이게 다시 촬영해 주세요.";
+    case "unsupported_media_type":
+      return "PNG 이미지만 올릴 수 있어요. 다시 촬영하면 자동으로 PNG로 변환돼요.";
+    case "upload_not_completed":
+      return "사진 업로드가 끝나지 않았어요. 다시 촬영해 주세요.";
+    case "network":
+      return "네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    default:
+      return error instanceof Error ? error.message : "이미지를 처리하지 못했어요.";
+  }
 }
 
 function mask(arc) {
@@ -787,17 +1047,4 @@ function nextAction(v) {
     cardTitle: "재학증명서", cardMeta: "재학증명서 또는 입학허가서 · 학교 발급",
     note: "이 서류는 읽지 않아요. 종이만 챙기면 창구에서 확인해요.",
     steps: ["학교 포털에서 인쇄하거나 국제처에 문의하세요.", "종이 원본만 가능해요. 발급 3개월 이내여야 해요.", "아직 재학 전인가요? 입학허가서로 대신할 수 있어요."] };
-}
-function DOC_ROWS(p = {}, nat) {
-  return [
-    ["성명 / Name", p.name_en || "—"],
-    ["국적", nationalityLabel(nat)],
-    ["생년월일", p.birth_date || "—"],
-    ["외국인등록번호", mask(p.arc_no)],
-    ["체류자격", `${p.visa_type || "—"} (유학)`],
-    ["체류기간 만료", p.stay_expiry || "—"],
-    ["국내 체류지", p.addr_kr || "—"],
-    ["거래 목적", "등록금 납부, 본국 송금"],
-    ["희망 계좌", "한도제한계좌 (입출금)"],
-  ];
 }

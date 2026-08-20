@@ -4,6 +4,7 @@ import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
@@ -14,6 +15,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
 @Component
 public class AwsS3FileGateway implements S3FileGateway {
     private static final String PNG_CONTENT_TYPE = "image/png";
+    private static final String PDF_CONTENT_TYPE = "application/pdf";
 
     private final S3Client s3Client;
     private final S3Presigner presigner;
@@ -43,6 +45,17 @@ public class AwsS3FileGateway implements S3FileGateway {
                         .build())
                 .url()
                 .toString();
+    }
+
+    @Override
+    public void uploadPdf(String objectKey, byte[] bytes) {
+        requireBucket();
+        PutObjectRequest put = PutObjectRequest.builder()
+                .bucket(bucket)
+                .key(objectKey)
+                .contentType(PDF_CONTENT_TYPE)
+                .build();
+        s3Client.putObject(put, RequestBody.fromBytes(bytes));
     }
 
     @Override

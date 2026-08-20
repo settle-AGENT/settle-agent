@@ -55,7 +55,11 @@ jwt_secret="$(extract_field App "$app_secret_json" JWT_SECRET)"
 dotenv_line() {
   local key="$1"
   local value="$2"
-  printf '%s=%s\n' "$key" "$(printf '%s' "$value" | jq -Rs .)"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    printf 'secret %s contains a line break and cannot be written to an env file\n' "$key" >&2
+    return 1
+  fi
+  printf '%s=%s\n' "$key" "$value"
 }
 
 runtime_env="$(mktemp "${deploy_root}/.env.secrets.XXXXXX")"
