@@ -175,7 +175,9 @@ def derive_from_arc(arc: str | None) -> dict:
     century, gender = _FOREIGN_SEX_CODES[back[0]]
     return {
         "birth_date": f"{century}{front[0:2]}-{front[2:4]}-{front[4:6]}",
-        "sex": gender,
+        # 키 이름은 gender 다. 나머지 코드가 전부 그 이름으로 읽는다 —
+        # sex 로 넣으면 서식에도 안 실리고 여권 값과 대조도 되지 않는다.
+        "gender": gender,
     }
 
 

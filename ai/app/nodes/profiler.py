@@ -81,6 +81,40 @@ def profile_to_payload(profile: dict, confidence: dict, doc_type: str,
     }
 
 
+# ──────────────────────────────────────────────────────────
+# 서류 간 동일인 대조
+# ──────────────────────────────────────────────────────────
+# 프로필은 여러 장의 서류가 합쳐져 만들어진다. 병합은 나중 값이 이기므로
+# 대조하지 않으면 다른 사람의 서류가 조용히 섞인다 — 등록증의 이름과
+# 여권의 생년월일이 한 프로필에 담기고, 그대로 계좌개설 서식에 실린다.
+#
+# 이 세 가지는 표기 흔들림이 없다. 다르면 다른 사람이다.
+HARD_KEYS = ("birth_date", "nationality", "gender")
+
+# 이름은 로마자 표기가 서류마다 갈린다 (WANG XIAO LI / WANGXIAOLI).
+# 다르다고 거부하면 오탐이 난다. 확인만 요청한다.
+SOFT_KEYS = ("name_en",)
+
+_NAME_STRIP = re.compile(r"[^A-Z0-9]")
+
+
+def _comparable(key: str, value) -> str:
+    v = str(value).strip().upper()
+    return _NAME_STRIP.sub("", v) if key in SOFT_KEYS else v
+
+
+def conflicts(existing: dict, incoming: dict, keys) -> dict[str, tuple[str, str]]:
+    """양쪽에 다 있고 값이 다른 필드. {key: (기존, 새 값)}"""
+    out: dict[str, tuple[str, str]] = {}
+    for key in keys:
+        old, new = existing.get(key), incoming.get(key)
+        if old in (None, "") or new in (None, ""):
+            continue
+        if _comparable(key, old) != _comparable(key, new):
+            out[key] = (str(old), str(new))
+    return out
+
+
 def apply_edits(state: dict, edits: dict) -> dict:
     """사용자가 확인 화면에서 고친 값을 반영.
 
