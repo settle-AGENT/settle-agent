@@ -192,7 +192,8 @@ def start_session(session_id: str | None = None, locale: str = "en") -> dict:
     # 빈 입력창 앞에서 아무 말도 못 한다. 이어받은 세션은 인사하지 않는다 —
     # 새로고침할 때마다 자기소개를 다시 하면 이상하다.
     if not state.get("messages"):
-        return _response(state, _pick(GREETING, "new", locale), "none", {})
+        return _response(state, _pick(GREETING, "new", locale), "none", {},
+                         reply_locale=locale)
     return _response(state)
 
 
@@ -407,10 +408,12 @@ def send_message(session_id: str, message: str) -> dict:
         elif intent.get("yes") is False:
             extra["pending_offer"] = None
             state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
-            return _response(state, _pick(_ACK, "no", locale), "none", {})
+            return _response(state, _pick(_ACK, "no", locale), "none", {},
+                             reply_locale=locale)
         # yes 가 None 이면 애매하다는 뜻이다. 실행하지 않고 다시 묻는다.
         state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
-        return _response(state, _pick(_ACK, "unclear", locale), "none", {})
+        return _response(state, _pick(_ACK, "unclear", locale), "none", {},
+                         reply_locale=locale)
 
     # 2. 메뉴 요청
     if kind == "menu":
@@ -434,7 +437,8 @@ def _menu(session_id: str, extra: dict, locale: str) -> dict:
     if not options:
         key = "nothing" if (state.get("profile") or {}).get("visa_type") \
               else "no_profile"
-        return _response(state, _pick(_ACK, key, locale), "none", {})
+        return _response(state, _pick(_ACK, key, locale), "none", {},
+                             reply_locale=locale)
 
     state = _graph().invoke(
         _patch(session_id, {"pending_offer": {
@@ -447,7 +451,7 @@ def _menu(session_id: str, extra: dict, locale: str) -> dict:
         "input_type": "select",
         "options": options,
         "hint": None,
-    })
+    }, reply_locale=locale)
 
 
 def _guide(session_id: str, extra: dict, tasks: list[dict],
@@ -464,7 +468,7 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
         state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
         return _response(state,
                          _pick(_ACK, "done", locale).format(task["label"]),
-                         "none", {})
+                         "none", {}, reply_locale=locale)
 
     # 잠겼으면 풀어 줄 선행 과제를 권한다. 사용자가 원한 것을 기억해 두지 않아도
     # 선행이 끝나면 planner 가 다시 available 로 올려 준다.

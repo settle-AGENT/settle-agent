@@ -282,11 +282,27 @@ def classify(message: str, *, asked_field: str | None = None,
 # ══════════════════════════════════════════════════════════
 _TR_SYSTEM = """Translate the text. Keep it literal.
 Do not add, remove, soften, or explain anything.
-Keep proper nouns, law names, numbers, and dates unchanged."""
+Keep proper nouns, law names, numbers, and dates unchanged.
+
+Your entire output is the translation and nothing else. This text goes straight
+onto a user's screen — anything you add ends up there too.
+- No notes, no alternatives, no "or, depending on context", no commentary on
+  the grammar, no separators, no quotes around it.
+- Short fragments are still just fragments. Pick one natural rendering of
+  "아래 내용을 실행할까요?" and output only that.
+- Never address the user or ask what to translate. If the text is already in the
+  target language, output it unchanged."""
+
+
+_HAS_HANGUL = re.compile(r"[가-힣]")
 
 
 def translate(text: str, locale: str) -> str:
     if not text or locale == "ko" or not available():
+        return text
+    # 이미 영어인 문장을 영어로 번역시키면 모델이 번역 요청으로 알아듣고
+    # "번역할 문장을 주세요" 라고 답한다. 그 답이 그대로 사용자에게 나갔다.
+    if locale == "en" and not _HAS_HANGUL.search(text):
         return text
     out = _call(_TR_SYSTEM, f"Target language: {LANG.get(locale, locale)}\n\n{text}",
                 max_tokens=400)
