@@ -187,6 +187,12 @@ def start_session(session_id: str | None = None, locale: str = "en") -> dict:
     """
     sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
     state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
+
+    # 첫 화면의 말문. 여기서 무엇을 할 수 있는지 알려주지 않으면 사용자는
+    # 빈 입력창 앞에서 아무 말도 못 한다. 이어받은 세션은 인사하지 않는다 —
+    # 새로고침할 때마다 자기소개를 다시 하면 이상하다.
+    if not state.get("messages"):
+        return _response(state, _pick(GREETING, "new", locale), "none", {})
     return _response(state)
 
 
@@ -268,6 +274,17 @@ _FIELD_META = {
 _OFFER_TEXT = {
     "start_action": "Start the task now?",
     "menu": "Pick one from the menu.",
+}
+
+GREETING = {
+    "new": {
+        "ko": "안녕하세요. 한국 정착에 필요한 일들을 함께 처리하는 도우미입니다.\n"
+              "체류·계좌·통신 무엇이든 물어보세요. "
+              "지금 뭘 해야 할지 모르겠으면 \"메뉴\"라고 말씀해주세요.",
+        "en": "Hello. I help you get settled in Korea.\n"
+              "Ask me anything about your visa, bank account, or phone. "
+              "If you are not sure where to start, just say \"menu\".",
+    },
 }
 
 _ACK = {

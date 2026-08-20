@@ -537,9 +537,14 @@ def explainer(state: AgentState) -> dict:
             if got["cites"]:
                 reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
                          + " / ".join(got["cites"])
-            return {"reply": reply,
-                    "reply_locale": _written_locale(got["reply"], locale),
-                    "ui_type": "none", "last_qa": last, "ask": None}
+            out = {"reply": reply,
+                   "reply_locale": _written_locale(got["reply"], locale),
+                   "ui_type": "none", "last_qa": last, "ask": None}
+            # 모델이 "시작할까요" 로 끝냈으면 다음 턴의 "ㅇㅇ" 이 붙을 자리를
+            # 남겨 둔다. 없으면 승낙이 새 질문으로 흘러간다.
+            if got.get("offer"):
+                out["pending_offer"] = got["offer"]
+            return out
         base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
                 "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
         return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}

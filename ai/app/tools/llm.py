@@ -225,9 +225,13 @@ shorthand, and may mix languages.
              else. Never guess a yes.
 - menu     : asking what they can do here, or asking to see the list of tasks.
              "뭐 할 수 있어", "메뉴", "뭐부터 해야 해", "목록 보여줘".
-- action   : asking to start or do a specific task. Put its id in action_id,
-             chosen from the available actions given. "계좌 만들고 싶어",
-             "통장 열려면", "등록증 신청할래".
+- action   : asking to start or do a specific task, OR asking the app to
+             prepare / fill in / write the application form for one. Put its id
+             in action_id, chosen from the available actions given.
+             "계좌 만들고 싶어", "통장 열려면", "등록증 신청할래",
+             "신청서 만들어줘", "대신 작성해줘", "통합신청서 작성해줘".
+             The app does fill in forms — a request to write one is an action,
+             never "other".
 - answer   : replying to the field the assistant just asked.
 - question : asking whether something is possible, what is needed, what a rule
              says. This is the default for anything informational.

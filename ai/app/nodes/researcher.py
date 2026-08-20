@@ -24,6 +24,7 @@ import os
 from anthropic import beta_tool
 
 from app.nodes import qa
+from app.nodes.doc_builder import load_mapping
 from app.rules.loader import actions_for, evidence_labels
 from app.tools import llm
 
@@ -31,7 +32,26 @@ from app.tools import llm
 MAX_ITERATIONS = int(os.getenv("RESEARCH_MAX_ITERATIONS", "6"))
 MAX_TOKENS = int(os.getenv("RESEARCH_MAX_TOKENS", "4096"))
 
-_SYSTEM = """You are a settlement assistant for foreign residents in Korea.
+_SYSTEM = """You are the assistant inside a settlement app for foreign
+residents in Korea. You are part of the app, not a separate chatbot.
+
+What this app does for the user — never deny any of it:
+- It fills in the official application forms for them. get_tasks tells you
+  which form each task produces in prepares_form. If it is not null, the app
+  writes that form from the profile it already has.
+- It tracks their tasks, deadlines and what is still blocked.
+- It looks up immigration law and the official residence manual.
+
+So when the user asks "can you do it for me", "대신 작성해줘", "신청서 만들어줘",
+or asks how to fill in a form the app produces: the answer is YES. Say the app
+will prepare it, name the form, and tell them to say so and you will start.
+Never say you cannot write documents. Never call yourself a chatbot that only
+gives information. Never send them to download a blank form when prepares_form
+shows the app makes it.
+
+What the app does NOT do: it does not submit anything to a government office or
+a bank, and it does not open the account. The user still goes in person. Be
+straight about that line.
 
 Answer the user's question using the tools. Never answer from memory —
 immigration rules change and a wrong answer can cost someone their visa.
@@ -44,6 +64,10 @@ How to work:
 - Call search_law for what a statute or the immigration manual actually says.
   Search in Korean terms when you can; the corpus is Korean.
 - Call tools more than once if the first result does not answer the question.
+- Whenever you end by telling the user the app can prepare something and they
+  just have to say so, call offer_to_start with that task id. Otherwise their
+  "네" has nothing to attach to. Offer only one task, and never a locked one —
+  if it comes back locked, offer what is blocking it instead.
 
 Hard rules:
 - Never say a task is possible when get_tasks reports it locked. Say what is
@@ -69,7 +93,24 @@ def available() -> bool:
 # ──────────────────────────────────────────────────────────
 # 도구
 # ──────────────────────────────────────────────────────────
-def _build_tools(profile: dict, tasks: list[dict], trace: list[dict]):
+def _form_title(visa: str | None, action_id: str, locale: str) -> str | None:
+    """이 과제에서 앱이 대신 작성해 주는 서식 이름. 없으면 None.
+
+    모델이 "서류는 못 만들어 드립니다" 라고 말하지 않게 하려면, 만들 수 있다는
+    사실이 프롬프트가 아니라 도구 결과로 들어와야 한다.
+    """
+    form = (actions_for(visa).get(action_id) or {}).get("form")
+    if not form:
+        return None
+    try:
+        meta = load_mapping(form)
+    except FileNotFoundError:
+        return None
+    return meta.get(f"title_{locale}") or meta.get("title_ko")
+
+
+def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
+                 offer: dict, locale: str = "en"):
     """세션 문맥을 클로저로 묶어 도구를 만든다.
 
     trace 는 모델이 무엇을 몇 번 조회했는지 기록한다 — 루프가 실제로
@@ -96,6 +137,7 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict]):
             "days_left": t.get("d_day"),
             "office": t.get("agency"),
             "documents": t.get("required_docs") or [],
+            "prepares_form": _form_title(visa, t["id"], locale),
             "note": t.get("note"),
         } for t in tasks], ensure_ascii=False)
 
@@ -119,6 +161,7 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict]):
             "documents": spec.get("required_docs") or [],
             "deadline_rule": spec.get("deadline"),
             "legal_basis": evidence_labels(spec.get("evidence") or []),
+            "prepares_form": _form_title(visa, action_id, locale),
             "note": spec.get("note_ko") or spec.get("condition_ko"),
         }, ensure_ascii=False)
 
@@ -139,7 +182,41 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict]):
             "text": h["text"][:900],
         } for h in hits]}, ensure_ascii=False)
 
-    return [get_tasks, check_requirements, search_law]
+    @beta_tool
+    def offer_to_start(action_id: str) -> str:
+        """Offer to start a task, so a plain "yes" from the user works next turn.
+
+        Call this whenever you tell the user the app can prepare something and
+        they only have to say so. Without it their "네" has nothing to attach to
+        and falls through as a new question.
+
+        This does not start or submit anything. It only records what you just
+        offered.
+
+        Args:
+            action_id: A task id from get_tasks. Must not be locked or done.
+        """
+        trace.append({"tool": "offer_to_start", "input": {"action_id": action_id}})
+        task = next((t for t in tasks if t["id"] == action_id), None)
+        if task is None:
+            return json.dumps({"ok": False, "reason": "unknown task"},
+                              ensure_ascii=False)
+        if task["status"] == "done":
+            return json.dumps({"ok": False, "reason": "already done"},
+                              ensure_ascii=False)
+        if task["status"] == "locked":
+            # 잠긴 것을 권하면 사용자가 승낙해도 409 가 난다. 막고 있는 것을 알려준다.
+            return json.dumps({
+                "ok": False, "reason": "locked",
+                "blocked_by": task.get("blocked_by") or [],
+                "hint": "Offer the blocking task instead.",
+            }, ensure_ascii=False)
+        offer["value"] = {"kind": "start_action", "action_id": action_id,
+                          "label": task["label"]}
+        return json.dumps({"ok": True, "offered": task["label"]},
+                          ensure_ascii=False)
+
+    return [get_tasks, check_requirements, search_law, offer_to_start]
 
 
 # ──────────────────────────────────────────────────────────
@@ -148,13 +225,19 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict]):
 def answer(question: str, *, profile: dict, tasks: list[dict],
            history: list[dict] | None = None,
            locale: str = "en") -> dict | None:
-    """returns {"reply": str, "cites": [str], "trace": [...]} 또는 None"""
+    """returns {"reply", "cites", "trace", "offer"} 또는 None
+
+    offer 는 모델이 offer_to_start 를 불렀을 때만 채워진다. 호출부가 이것을
+    state.pending_offer 로 넣어 두어야 다음 턴의 "ㅇㅇ" 이 해석된다.
+    """
     client = llm.client()
     if client is None:
         return None
 
     trace: list[dict] = []
-    tools = _build_tools(profile, tasks, trace)
+    texts: list[str] = []
+    offer: dict = {"value": None}
+    tools = _build_tools(profile, tasks, trace, offer, locale)
 
     situation = {
         "visa_type": profile.get("visa_type"),
@@ -182,20 +265,25 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
             tools=tools,
             messages=messages,
         )
+        # 답변 텍스트가 마지막 턴에 있으리라는 보장이 없다. 모델은 도구 호출과
+        # 같은 턴에 답을 쓰고, 다음 턴을 빈 내용으로 끝내는 일이 흔하다.
+        # 턴마다 텍스트를 모아 마지막으로 비어 있지 않은 것을 쓴다.
         final = None
         for message in runner:
             final = message
+            said = "".join(b.text for b in message.content
+                           if b.type == "text").strip()
+            if said:
+                texts.append(said)
     except Exception as exc:                                  # noqa: BLE001
         # 루프가 실패해도 대화가 끊기지 않게 한다. 호출부가 기존 RAG 로 내려간다.
         print(f"[researcher] tool loop 실패, RAG 로 폴백: {exc!r}")
         return None
 
-    if final is None:
+    if final is None or not texts:
         return None
 
-    reply = "".join(b.text for b in final.content if b.type == "text").strip()
-    if not reply:
-        return None
+    reply = texts[-1]
 
     # 인용은 모델이 아니라 실제로 조회된 결과에서 뽑는다 — 지어낸 근거를 막는다.
     cites: list[str] = []
@@ -205,4 +293,5 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
         for h in qa.search(step["input"]["query"], visa=profile.get("visa_type")):
             if h["cite"] in reply or h["cite"] not in cites:
                 cites.append(h["cite"])
-    return {"reply": reply, "cites": cites[:3], "trace": trace}
+    return {"reply": reply, "cites": cites[:3], "trace": trace,
+            "offer": offer["value"]}
