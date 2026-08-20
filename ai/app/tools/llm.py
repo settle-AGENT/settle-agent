@@ -237,6 +237,10 @@ shorthand, and may mix languages.
              "신청서 만들어줘", "대신 작성해줘", "통합신청서 작성해줘".
              The app does fill in forms — a request to write one is an action,
              never "other".
+             If they name more than one task or form, list them all in
+             action_ids. "통합신청서랑 계좌개설 신청서 둘 다" is two.
+             If they ask for forms without saying which ("신청서 두 개 다
+             준비해줘"), this is still action — leave action_ids empty.
 - answer   : replying to the field the assistant just asked.
 - question : asking whether something is possible, what is needed, what a rule
              says. This is the default for anything informational.
@@ -272,7 +276,14 @@ def classify(message: str, *, asked_field: str | None = None,
                             "description": "if intent=confirm: true for yes, "
                                            "false for no. null if unclear."},
                     "action_id": {"type": ["string", "null"],
-                                  "description": "action id if intent=action"},
+                                  "description": "action id if intent=action. "
+                                                 "The first one if several."},
+                    "action_ids": {"type": "array", "items": {"type": "string"},
+                                   "description": "every action the user asked "
+                                                  "for, in the order they said "
+                                                  "them. One entry is normal; "
+                                                  "two or more means they asked "
+                                                  "for several at once."},
                     "topic": {"type": ["string", "null"],
                               "description": "short topic if intent=question"},
                 },

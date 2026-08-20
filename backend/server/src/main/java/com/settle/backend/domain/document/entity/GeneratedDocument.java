@@ -90,6 +90,10 @@ public class GeneratedDocument {
         this.status = GeneratedDocumentStatus.FAILED;
     }
 
+    public void markIssued() {
+        this.status = GeneratedDocumentStatus.ISSUED;
+    }
+
     @PrePersist
     void initializeTimestamps() {
         Instant now = Instant.now();

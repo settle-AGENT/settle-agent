@@ -1,5 +1,6 @@
 package com.settle.backend.domain.document.service;
 
+import com.settle.backend.common.auth.SessionOwnership;
 import com.settle.backend.domain.document.client.AiDocumentClient;
 import com.settle.backend.domain.document.dto.ExtractDocumentRequest;
 import com.settle.backend.domain.file.service.FileService;
@@ -28,10 +29,11 @@ public class DocumentService {
     public ResponseEntity<Map<String, Object>> extractAndSave(
             UUID memberId, ExtractDocumentRequest request
     ) {
+        SessionOwnership.require(memberId, request.sessionId());
         FileService.PreparedUpload prepared = fileService.prepareForExtraction(memberId, request.uploadId());
         try {
             ResponseEntity<Map<String, Object>> response = aiDocumentClient.extract(
-                    memberId.toString(),
+                    request.sessionId(),
                     prepared.bytes(),
                     prepared.ticket().documentType()
             );
@@ -40,7 +42,7 @@ public class DocumentService {
                 return generatedDocumentService.withReadyReferences(
                         ResponseEntity.status(HttpStatus.CREATED).body(response.getBody()),
                         memberId,
-                        memberId.toString()
+                        request.sessionId()
                 );
             }
             fileService.markFailed(prepared.ticket());

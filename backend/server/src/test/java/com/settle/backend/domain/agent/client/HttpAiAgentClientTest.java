@@ -40,9 +40,9 @@ class HttpAiAgentClientTest {
         server.start();
         HttpAiAgentClient client = client();
 
-        ResponseEntity<Map<String, Object>> response = client.createSession("member-id", "ko");
+        ResponseEntity<Map<String, Object>> response = client.createSession("member-id", "ko", false, null);
 
-        assertThat(query.get()).isEqualTo("session_id=member-id&locale=ko");
+        assertThat(query.get()).isEqualTo("session_id=member-id&locale=ko&reset=false");
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getBody()).containsKey("state");
     }
@@ -61,7 +61,7 @@ class HttpAiAgentClientTest {
         server.start();
 
         ResponseEntity<Map<String, Object>> response = client().createSession(
-                UUID.randomUUID().toString(), "ko"
+                UUID.randomUUID().toString(), "ko", false, null
         );
 
         assertThat(response.getStatusCode().value()).isEqualTo(503);

@@ -204,9 +204,12 @@ class ActionPreviewServiceTest {
     void returnsLedgerForOwnSession() {
         when(aiActionClient.ledger(SESSION_ID))
                 .thenReturn(List.of(Map.of("action", "open_bank_account")));
+        when(documentService.listIssuedHistory(MEMBER_ID))
+                .thenReturn(List.of(Map.of("action", "open_bank_account")));
 
         assertThat(service.ledger(MEMBER_ID, SESSION_ID))
                 .containsExactly(Map.of("action", "open_bank_account"));
+        verify(documentService).issueLatest(MEMBER_ID, SESSION_ID, "open_bank_account");
     }
 
     private GeneratedDocument document() {

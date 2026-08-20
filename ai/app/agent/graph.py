@@ -17,9 +17,16 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
 from app.nodes import qa, researcher
-from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
+from app.nodes.planner import (
+    AGENCY_LABEL,
+    DOC_LABEL,
+    _field,
+    _pick,
+    build_task_graph,
+    summary,
+)
 from app.nodes.doc_builder import DocumentIncomplete, render
-from app.nodes.profiler import label_of as _label_of
+from app.nodes.profiler import display_value, label_of as _label_of
 from app.rules.loader import VISA_CODES, actions_for, evidence_labels
 from app.tools import llm
 
@@ -144,6 +151,7 @@ def _written_locale(text: str, locale: str) -> str | None:
 # 액션별 필수 필드 (D2에 mappings/*.yaml 로 이관)
 ACTION_FIELDS: dict[str, list[str]] = {
     "alien_registration": ["birth_date", "entry_date", "org_name", "phone_kr"],
+    "mobile_subscription": ["phone_kr"],
     "residence_change": ["birth_date", "phone_kr"],
     "work_activity": ["org_name"],
     "open_bank_account": ["birth_date", "org_name", "phone_kr",
@@ -151,6 +159,8 @@ ACTION_FIELDS: dict[str, list[str]] = {
 }
 
 ACTION_TITLES: dict[str, dict] = {
+    "mobile_subscription": {"ko": "\uad6d\ub0b4 \ud1b5\uc2e0 \uac00\uc785",
+                            "en": "Mobile Subscription"},
     "alien_registration": {"ko": "외국인등록 신청서 제출",
                            "en": "Submit Alien Registration application"},
     "residence_change": {"ko": "체류지 변경신고 제출",
@@ -172,11 +182,19 @@ VISA_UNSUPPORTED = {
           "Please call the immigration center at 1345.",
 }
 
+OFFLINE_LEAD = {
+    "ko": "{}은(는) 앱이 대신 작성할 서류가 없습니다. 직접 방문하셔야 합니다.",
+    "en": "There is no form for {} that the app can fill in. You go in person.",
+}
+
 SLOT_LEAD = {
     "many": {"ko": "{}가지만 여쭤볼게요 — {}.",
              "en": "Just {} things to ask — {}."},
     "last": {"ko": "마지막 질문입니다.", "en": "Last question."},
 }
+
+DOC_MISSING = {"ko": "서류를 작성하려면 {}이(가) 더 필요합니다.",
+               "en": "I still need {} to fill in the form."}
 
 # 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
 SUMMARY_LABEL: dict[str, dict] = {
@@ -224,7 +242,7 @@ def route_from_router(state: AgentState) -> Literal[
         return "approval_gate"
 
     action = state.get("current_action")
-    if not action:
+    if not action or not state.get("action_authorized"):
         return "explainer"
 
     missing = _missing_fields(state, action)
@@ -279,7 +297,10 @@ def slot_filler(state: AgentState) -> dict:
             field,
             label=_text(q["label"], "en"),      # 필드 뜻 설명용 — 프롬프트는 영어다
             locale=locale,
-            context=state.get("profile", {}),
+            context={
+                key: display_value(key, value, locale)
+                for key, value in state.get("profile", {}).items()
+            },
             remaining=len(missing),
         )
         if written and written.get("question"):
@@ -313,11 +334,36 @@ def doc_builder(state: AgentState) -> dict:
 
     form = spec.get("form")
     if not form:
-        return {
-            "reply": "이 단계는 서류 없이 진행됩니다.",
-            "ui_type": "none",
-            "ui_payload": {},
-        }
+        if action == "mobile_subscription" and profile.get("phone_kr"):
+            locale = state.get("locale") or "en"
+            title = _title(action, locale)
+            reply = (
+                "\uad6d\ub0b4 \ud1b5\uc2e0 \uac00\uc785\uc744 \uc644\ub8cc \ucc98\ub9ac\ud588\uc2b5\ub2c8\ub2e4."
+                if locale == "ko"
+                else "Your mobile subscription has been marked complete."
+            )
+            return {
+                "completed": [action],
+                "in_progress": [a for a in state.get("in_progress", []) if a != action],
+                "current_action": None,
+                "reply": reply,
+                "reply_locale": locale,
+                "ui_type": "task_complete",
+                "ui_payload": {
+                    "action_id": action,
+                    "title": title,
+                    "phone_kr": profile["phone_kr"],
+                },
+            }
+        # 앱이 만들 서식이 없는 과제다(통신 가입 등). 여기까지 왔다는 것은
+        # 어딘가에서 "시작할까요" 를 물었다는 뜻인데, 시작할 것이 없다.
+        #
+        # 예전에는 "이 단계는 서류 없이 진행됩니다" 한 줄만 돌려주고
+        # current_action 을 남겨 두었다. 그러면 무슨 말을 하든 router 가
+        # 다시 이 자리로 보내 같은 문장만 반복됐다 — 빠져나갈 수 없었다.
+        return {"current_action": None,
+                "in_progress": [a for a in state.get("in_progress", []) if a != action],
+                **_offline_guidance(state, action, spec)}
 
     try:
         result = render(
@@ -331,15 +377,14 @@ def doc_builder(state: AgentState) -> dict:
             locale=state.get("locale") or "en",
         )
     except DocumentIncomplete as exc:
-        labels = {
-            "name_en": "영문 성명", "birth_date": "생년월일", "gender": "성별",
-            "nationality": "국적", "passport_no": "여권번호", "arc_no": "외국인등록번호",
-            "addr_kr": "국내 주소", "phone_kr": "국내 연락처", "org_name": "소속 기관",
-        }
-        need = ", ".join(labels.get(k, k) for k in exc.missing)
+        # 라벨 사전을 여기 또 두면 profiler.LABELS 와 어긋난다. 실제로 어긋나
+        # stay_expiry 가 사람 말 대신 키 이름 그대로 화면에 나갔다.
+        locale = state.get("locale") or "en"
+        need = ", ".join(_label_of(k, locale) for k in exc.missing)
         return {
             "missing_fields": exc.missing,
-            "reply": f"서류를 작성하려면 {need}이(가) 더 필요합니다.",
+            "reply": _text(DOC_MISSING, locale).format(need),
+            "reply_locale": locale,
             "ui_type": "none",
             "ui_payload": {},
         }
@@ -412,6 +457,27 @@ def doc_builder(state: AgentState) -> dict:
     }
 
 
+def _offline_guidance(state: AgentState, action: str, spec: dict) -> dict:
+    """앱이 대신 해 줄 것이 없는 과제의 안내. 무엇을 들고 어디로 갈지 말한다."""
+    locale = state.get("locale") or "en"
+    task = next((t for t in (state.get("tasks") or []) if t["id"] == action), None)
+    label = _title(action, locale) if action in ACTION_TITLES else (
+        task["label"] if task else action)
+
+    lines = [_text(OFFLINE_LEAD, locale).format(label)]
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), locale)
+    if agency:
+        lines.append(f"{_text(SUMMARY_LABEL['agency'], locale)} · {agency}")
+    docs = [_pick(DOC_LABEL, d, locale, d) for d in spec.get("required_docs", [])]
+    if docs:
+        lines.append(f"{_text(SUMMARY_LABEL['docs'], locale)} · " + ", ".join(docs))
+    if note := _field(spec, "note", locale):
+        lines.append(note)
+
+    return {"reply": "\n".join(lines), "reply_locale": locale,
+            "ui_type": "none", "ui_payload": {}}
+
+
 def approval_gate(state: AgentState) -> dict:
     """risk_level 과 사용자 응답에 따라 실행 여부를 가른다.
 
@@ -453,9 +519,16 @@ def approval_gate(state: AgentState) -> dict:
     # 백엔드가 ui.type == "doc_preview" 일 때만 PDF 를 내려받아 저장하므로,
     # 여기서 approval 로 덮으면 PDF 가 영영 저장되지 않는다.
     # 승인 정보는 state.pending_approval 로 나가고, 화면은 그것도 함께 본다.
+    locale = state.get("locale") or "en"
+    pending_title = pending.get("title") or ("이 서류" if locale == "ko" else "this document")
+    approval_reply = (
+        f"{pending_title} 내용을 확인하고 발급을 진행할까요?"
+        if locale == "ko"
+        else f"Would you like to review and issue {pending_title}?"
+    )
     if pending.get("document_id"):
         return {
-            "reply": "아래 내용을 실행할까요?",
+            "reply": approval_reply,
             "ui_type": "doc_preview",
             "ui_payload": {
                 "document_id": pending["document_id"],
@@ -467,7 +540,7 @@ def approval_gate(state: AgentState) -> dict:
         }
 
     return {
-        "reply": "아래 내용을 실행할까요?",
+        "reply": approval_reply,
         "ui_type": "approval",
         "ui_payload": dict(pending),
     }
@@ -533,7 +606,7 @@ def executor(state: AgentState) -> dict:
 
     return {
         "completed": [action],
-        "in_progress": [],
+        "in_progress": [a for a in state.get("in_progress", []) if a != action],
         "pending_approval": None,
         "approval_decision": None,
         "current_action": None,
@@ -562,7 +635,8 @@ def explainer(state: AgentState) -> dict:
         got = None
         if RESEARCH_ENABLED and researcher.available():
             got = researcher.answer(last, profile=profile, tasks=tasks,
-                                    history=history, locale=locale)
+                                    history=history, locale=locale,
+                                    session_id=state.get("session_id") or "")
             if got and got.get("trace"):
                 print("[researcher] " + " → ".join(t["tool"] for t in got["trace"]))
 

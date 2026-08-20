@@ -27,6 +27,7 @@ from app.nodes import qa
 from app.nodes.doc_builder import load_mapping
 from app.rules.loader import actions_for, evidence_labels
 from app.tools import llm
+from app.tools import progress
 
 # 루프가 폭주하지 않도록 왕복 횟수를 묶는다. 조회 3~4 번이면 충분한 질문들이다.
 MAX_ITERATIONS = int(os.getenv("RESEARCH_MAX_ITERATIONS", "6"))
@@ -124,7 +125,7 @@ def _form_title(visa: str | None, action_id: str, locale: str) -> str | None:
 
 
 def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
-                 offer: dict, locale: str = "en"):
+                 offer: dict, locale: str = "en", session_id: str = ""):
     """세션 문맥을 클로저로 묶어 도구를 만든다.
 
     trace 는 모델이 무엇을 몇 번 조회했는지 기록한다 — 루프가 실제로
@@ -141,6 +142,7 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
         submit to, and the documents to bring. The status is already decided
         from the user's visa — do not second-guess it.
         """
+        progress.emit(session_id, "tool_tasks", "현재 할 일과 완료 상태를 조회하고 있어요")
         trace.append({"tool": "get_tasks", "input": {}})
         if not visa:
             # 신분증을 아직 안 올렸다. 이 사람의 체류자격·기한·잠김을 알 방법이
@@ -173,6 +175,8 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
         Args:
             action_id: A task id from get_tasks, e.g. alien_registration.
         """
+        action_label = next((t.get("label") for t in tasks if t.get("id") == action_id), action_id)
+        progress.emit(session_id, "tool_requirements", f"{action_label} 요건과 준비물을 확인하고 있어요")
         trace.append({"tool": "check_requirements",
                       "input": {"action_id": action_id}})
         spec = actions_for(visa).get(action_id)
@@ -198,6 +202,8 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
             query: What to look up. Korean terms work best, e.g.
                 체류기간 연장허가 제출서류.
         """
+        safe_query = " ".join(query.strip().split())[:32]
+        progress.emit(session_id, "tool_law", f"‘{safe_query}’ 법령·지침을 검색하고 있어요")
         trace.append({"tool": "search_law", "input": {"query": query}})
         hits = qa.search(query, visa=visa)
         if not hits:
@@ -221,6 +227,8 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
         Args:
             action_id: A task id from get_tasks. Must not be locked or done.
         """
+        action_label = next((t.get("label") for t in tasks if t.get("id") == action_id), action_id)
+        progress.emit(session_id, "tool_offer", f"{action_label} 시작 선택지를 준비하고 있어요")
         trace.append({"tool": "offer_to_start", "input": {"action_id": action_id}})
         task = next((t for t in tasks if t["id"] == action_id), None)
         if task is None:
@@ -249,7 +257,7 @@ def _build_tools(profile: dict, tasks: list[dict], trace: list[dict],
 # ──────────────────────────────────────────────────────────
 def answer(question: str, *, profile: dict, tasks: list[dict],
            history: list[dict] | None = None,
-           locale: str = "en") -> dict | None:
+           locale: str = "en", session_id: str = "") -> dict | None:
     """returns {"reply", "cites", "trace", "offer"} 또는 None
 
     offer 는 모델이 offer_to_start 를 불렀을 때만 채워진다. 호출부가 이것을
@@ -262,7 +270,7 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
     trace: list[dict] = []
     texts: list[str] = []
     offer: dict = {"value": None}
-    tools = _build_tools(profile, tasks, trace, offer, locale)
+    tools = _build_tools(profile, tasks, trace, offer, locale, session_id)
 
     situation = {
         "visa_type": profile.get("visa_type"),
@@ -271,15 +279,31 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
         "stay_expiry": profile.get("stay_expiry"),
         "organization": profile.get("org_name"),
     }
+    # 이력은 대화 턴으로 넘기지 않는다. state["messages"] 에는 사용자 발화만
+    # 쌓이므로(에이전트 답변은 저장되지 않는다) 그대로 넘기면 연속된 user
+    # 메시지가 한 덩어리로 합쳐진다. 모델은 지난 질문까지 지금 묻는 것으로
+    # 읽고, 그때 했던 거절을 관계없는 답변에 붙인다.
+    #
+    #   앞 턴: "불법체류 중인데 안 걸리는 방법 알려줘"
+    #   이 턴: "what do I need to open a bank account?"
+    #   → "불법 체류와 관련된 질문은 도와드릴 수 없으며…"  ← 묻지 않았다
+    #
+    # 맥락은 필요하므로(“그거 기한 언제야?”) 참고용으로 명시해 넘긴다.
+    prior = [m["content"] for m in (history or [])[-4:-1]
+             if m.get("content") and m["content"] != question]
+    context = ""
+    if prior:
+        context = ("Earlier questions from this user, for pronoun context only.\n"
+                   "Do NOT answer these and do NOT carry over refusals or "
+                   "warnings from them:\n"
+                   + "\n".join(f"- {q}" for q in prior) + "\n\n")
+
     opening = (f"User situation: {json.dumps(situation, ensure_ascii=False)}\n"
                f"Answer in: {llm.LANG.get(locale, locale)}\n\n"
-               f"Question: {question}")
+               f"{context}"
+               f"Answer only this question: {question}")
 
-    messages = [{"role": "user", "content": m["content"]}
-                if m.get("role") == "user" else
-                {"role": "assistant", "content": m["content"]}
-                for m in (history or [])[-4:]]
-    messages.append({"role": "user", "content": opening})
+    messages = [{"role": "user", "content": opening}]
 
     try:
         runner = client.beta.messages.tool_runner(

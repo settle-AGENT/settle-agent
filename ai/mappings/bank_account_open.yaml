@@ -1,5 +1,5 @@
 form: bank_account_open
-title_ko: 외국인 계좌개설 신청서 (표준)
+title_ko: 외국인 계좌개설 신청서
 title_en: Account Opening Application for Foreign Residents
 template: bank_account_open.html
 source_note: "금융실명법·특정금융정보법·외국환거래규정의 요구 항목을 기준으로 재구성"
@@ -39,7 +39,7 @@ fields:
     label_en: Status of stay
   stay_expiry:
     from: profile.stay_expiry
-    required: true
+    required: false
     label_ko: 체류기간 만료일
     label_en: Period of sojourn until
   addr_kr:
