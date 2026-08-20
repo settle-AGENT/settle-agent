@@ -3,7 +3,6 @@ package com.settle.backend.domain.auth.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public record LoginRequest(
@@ -18,10 +17,6 @@ public record LoginRequest(
         @Schema(minLength = 8, maxLength = 64, format = "password")
         @NotBlank(message = "비밀번호를 입력해 주세요.")
         @Size(min = 8, max = 64, message = "비밀번호는 8~64자여야 합니다.")
-        String password,
-        @Schema(description = "숫자 4자리 전역 passcode", example = "1234", pattern = "\\d{4}")
-        @NotBlank(message = "패스코드를 입력해 주세요.")
-        @Pattern(regexp = "\\d{4}", message = "패스코드는 숫자 4자리여야 합니다.")
-        String passcode
+        String password
 ) {
 }

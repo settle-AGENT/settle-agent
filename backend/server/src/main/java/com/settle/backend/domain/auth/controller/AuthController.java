@@ -45,14 +45,14 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    @Operation(summary = "로그인", description = "이메일·비밀번호·4자리 passcode를 검증하고 JWT를 발급합니다.")
+    @Operation(summary = "로그인", description = "이메일과 비밀번호를 검증하고 JWT를 발급합니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "로그인 및 JWT 발급 성공"),
             @ApiResponse(responseCode = "401", description = "인증 정보 불일치",
                     content = @Content(examples = @ExampleObject(value = """
-                            {"detail":{"error":"INVALID_CREDENTIALS","message":"이메일, 비밀번호 또는 패스코드를 확인해 주세요.","details":null}}
+                            {"detail":{"error":"INVALID_CREDENTIALS","message":"이메일 또는 비밀번호를 확인해 주세요.","details":null}}
                             """))),
-            @ApiResponse(responseCode = "422", description = "이메일, 비밀번호 또는 4자리 passcode 검증 실패")
+            @ApiResponse(responseCode = "422", description = "이메일 또는 비밀번호 검증 실패")
     })
     public AuthResponse login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request);
