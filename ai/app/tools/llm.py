@@ -38,6 +38,12 @@ def available() -> bool:
     return _client() is not None
 
 
+def client():
+    """도구 루프처럼 _call 로 감쌀 수 없는 호출을 위해 원본 클라이언트를 준다."""
+    return _client()
+
+
+
 def _call(system: str, user: str, *, tool: dict | None = None,
           max_tokens: int = MAX_TOKENS) -> Any:
     """tool 을 주면 구조화 출력(dict), 없으면 텍스트(str)."""

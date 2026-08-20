@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -15,7 +16,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
-from app.nodes import qa
+from app.nodes import qa, researcher
 from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import label_of as _label_of
@@ -23,6 +24,10 @@ from app.rules.loader import actions_for, evidence_labels
 from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
+
+# 도구 루프를 끌 수 있게 둔다. 데모에서 응답이 느리거나 API 가 불안정하면
+# 이 값만 내려 기존 단발 RAG 로 돌아간다.
+RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "1") not in ("0", "false", "False")
 
 
 def _now() -> str:
@@ -510,9 +515,23 @@ def explainer(state: AgentState) -> dict:
     last = state.get("ask")
 
     if last and last != state.get("last_qa") and qa.available():
-        got = qa.answer(last, profile=state.get("profile", {}),
-                        tasks=tasks, history=state.get("messages") or [],
-                        locale=locale)
+        profile = state.get("profile", {})
+        history = state.get("messages") or []
+
+        # 도구 루프를 먼저 태운다. 모델이 무엇을 몇 번 조회할지 스스로 정하므로
+        # 과제 상태와 법령을 함께 봐야 하는 질문에 강하다. 실패하면 아래
+        # 단발 RAG 로 내려간다 — 대화가 끊기지 않는 게 우선이다.
+        got = None
+        if RESEARCH_ENABLED and researcher.available():
+            got = researcher.answer(last, profile=profile, tasks=tasks,
+                                    history=history, locale=locale)
+            if got and got.get("trace"):
+                print("[researcher] " + " → ".join(t["tool"] for t in got["trace"]))
+
+        if got is None:
+            got = qa.answer(last, profile=profile,
+                            tasks=tasks, history=history,
+                            locale=locale)
         if got:
             reply = got["reply"]
             if got["cites"]:
