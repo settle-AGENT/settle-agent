@@ -13,16 +13,97 @@ async function post(path, body) {
   return res.json();
 }
 
+// ── AgentResponse 공통 계층 ─────────────────────────────────────────
+// 모든 에이전트 엔드포인트는 { schema_version, reply, ui, state } 봉투로 답한다.
+// 오류는 { detail: { error, message, details } } 다.
+export const SCHEMA_VERSION = "1";
+
+// ── 액세스 토큰 ──────────────────────────────────────────────────────
+// Spring 의 모든 보호 엔드포인트가 Bearer 토큰에서 memberId 를 꺼낸다.
+// S3 presigned PUT 에는 절대 붙이지 않는다 — 서명이 깨진다.
+const TOKEN_KEY = "settle_access_token";
+
+export function readToken() {
+  return window.localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function saveToken(token) {
+  if (token) window.localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(extra) {
+  const token = readToken();
+  return { ...extra, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+export class AgentError extends Error {
+  constructor(message, { status, code, details } = {}) {
+    super(message);
+    this.name = "AgentError";
+    this.status = status;
+    this.code = code;
+    this.details = details || {};
+  }
+}
+
+const ERROR_MESSAGE = {
+  invalid_or_missing_token: "로그인이 만료됐어요. 다시 로그인해 주세요.",
+  session_access_denied: "다른 계정의 세션이에요. 다시 로그인해 주세요.",
+  prerequisite_missing: "먼저 완료해야 하는 과제가 있어요.",
+  extraction_failed: "사진에서 정보를 읽지 못했어요. 다시 촬영해 주세요.",
+  validation_failed: "입력값을 다시 확인해 주세요.",
+  blocked_by_law: "법적으로 지금은 진행할 수 없는 단계예요.",
+};
+
+// Spring({code,message,details})과 AI({detail:{error,message,details}}) 양쪽을 받는다.
+export function toAgentError(status, body, fallback) {
+  const payload = body?.detail && typeof body.detail === "object" ? body.detail : body || {};
+  const code = payload.error || payload.code;
+  const message = payload.message || ERROR_MESSAGE[code] || fallback || `요청을 처리하지 못했어요. (${status})`;
+  return new AgentError(message, { status, code, details: payload.details });
+}
+
+async function agentFetch(path, { method = "POST", body, label } = {}) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method,
+      headers: authHeaders(body === undefined ? undefined : { "Content-Type": "application/json" }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new AgentError("네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", { code: "network" });
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw toAgentError(response.status, payload, label && `${label}에 실패했어요.`);
+  return payload;
+}
+
+// ui.payload 를 화면이 바로 쓸 수 있는 모양으로 고른다.
+// 모르는 ui.type 은 reply 만 표시하도록 payload 를 비운다.
+const KNOWN_UI = new Set(["profile_confirm", "question", "comparison", "doc_preview", "approval"]);
+
+export function readUi(response) {
+  const type = response?.ui?.type || "none";
+  if (!KNOWN_UI.has(type)) return { type: "none", payload: {} };
+  return { type, payload: response.ui.payload || {} };
+}
+
+// AI 는 options 를 [{value,label}] 로 준다. 문자열 배열도 받아 같은 모양으로 맞춘다.
+export function questionOptions(payload) {
+  return (payload?.options || []).map((option) =>
+    typeof option === "string" ? { value: option, label: option } : option);
+}
+
 async function requireOk(res, label) {
   if (res.ok) return res;
-  let message = `${label}에 실패했어요. (${res.status})`;
-  try {
-    const error = await res.json();
-    message = error?.detail?.message || error?.detail || error?.message || message;
-  } catch {
-    // 응답 본문이 JSON이 아니면 상태 코드 메시지를 사용한다.
-  }
-  throw new Error(message);
+  // S3 PUT 처럼 JSON 이 아닌 응답도 있다. 그 경우 상태 코드 메시지를 쓴다.
+  const body = await res.json().catch(() => ({}));
+  throw toAgentError(res.status, body, `${label}에 실패했어요.`);
 }
 
 // ── 목데이터: seed/ocr_cache 의 실제 인물(NGUYEN VAN A) 기준 ──────────
@@ -64,8 +145,11 @@ export async function signUp({ email, password, passwordConfirm }) {
 }
 
 export async function login({ email, password, passcode }) {
-  if (MOCK) return delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" });
-  return authPost("/api/v1/auth/login", { email, password, passcode });
+  const payload = MOCK
+    ? await delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" })
+    : await authPost("/api/v1/auth/login", { email, password, passcode });
+  saveToken(payload.accessToken);
+  return payload;
 }
 
 async function authPost(path, body) {
@@ -90,11 +174,12 @@ export async function uploadAndExtract(file, documentType) {
 
   const createUpload = await requireOk(await fetch("/api/v1/uploads", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ documentType }),
   }), "업로드 준비");
   const { uploadId, uploadUrl } = await createUpload.json();
 
+  // presigned URL. Authorization 을 붙이면 S3 가 서명 불일치로 403 을 준다.
   await requireOk(await fetch(uploadUrl, {
     method: "PUT",
     headers: { "Content-Type": "image/png" },
@@ -103,7 +188,7 @@ export async function uploadAndExtract(file, documentType) {
 
   const extraction = await requireOk(await fetch("/api/v1/documents/extractions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ uploadId }),
   }), "서류 인식");
   return normalizeExtraction(await extraction.json());
@@ -144,21 +229,45 @@ export async function confirmProfile(sessionId, dirtyFields) {
     state: { session_id: sessionId, profile: { ...MOCK_EXTRACT.profile, ...dirtyFields } },
   });
 
-  const response = await fetch("/api/profile/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, message: JSON.stringify(dirtyFields) }),
+  return agentFetch("/api/profile/confirm", {
+    body: { session_id: sessionId, message: JSON.stringify(dirtyFields) },
+    label: "프로필 확인",
   });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const payload = body.detail || body;
-    const error = new Error(payload.message || `프로필 확인에 실패했어요. (${response.status})`);
-    error.status = response.status;
-    error.code = payload.error || payload.code;
-    error.details = payload.details || {};
-    throw error;
-  }
-  return body;
+}
+
+// ── 화면 1. 세션 생성 ────────────────────────────────────────────────
+// AI 는 { session_id } 가 아니라 AgentResponse 전체를 준다. session_id 는 state 에 있다.
+export async function createSession(locale = "ko") {
+  if (MOCK) return delay(mockAgentResponse({ session_id: "demo-001", locale }));
+  return agentFetch(`/api/session?locale=${encodeURIComponent(locale)}`, { label: "세션 생성" });
+}
+
+// ── 화면 4. 상담 답변 제출 ───────────────────────────────────────────
+export async function sendChat(sessionId, message) {
+  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId }, "알겠습니다."));
+  return agentFetch("/api/chat", {
+    body: { session_id: sessionId, message },
+    label: "메시지 전송",
+  });
+}
+
+// ── 화면 5. 과제 시작 ────────────────────────────────────────────────
+// locked 과제면 409 prerequisite_missing 이 AgentError 로 올라온다.
+export async function startAction(sessionId, actionId) {
+  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId }, "과제를 시작할게요."));
+  return agentFetch(`/api/actions/${encodeURIComponent(actionId)}/start`, {
+    body: { session_id: sessionId },
+    label: "과제 시작",
+  });
+}
+
+function mockAgentResponse(state, reply = "안녕하세요. 신분증부터 확인할게요.") {
+  return {
+    schema_version: SCHEMA_VERSION,
+    reply,
+    ui: { type: "none", payload: {} },
+    state: { locale: "ko", profile: {}, tasks: [], documents: [], pending_approval: null, ...state },
+  };
 }
 
 // 3) 룰 엔진 판정
@@ -170,7 +279,7 @@ export async function getVerdict(profileId, answers) {
 export async function previewAction(actionId, sessionId) {
   const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/preview`, {
     method: "POST",
-    headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ session_id: sessionId }),
   });
   await requireOk(response, "PDF 미리보기");
@@ -180,7 +289,7 @@ export async function previewAction(actionId, sessionId) {
 export async function approveAction(actionId, sessionId, approved) {
   const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/approve`, {
     method: "POST",
-    headers: authenticatedHeaders({ "Content-Type": "application/json" }),
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ session_id: sessionId, approved }),
   });
   await requireOk(response, approved ? "실행 승인" : "실행 취소");
@@ -189,21 +298,16 @@ export async function approveAction(actionId, sessionId, approved) {
 
 export async function getLedger(sessionId) {
   const response = await fetch(`/api/ledger?session_id=${encodeURIComponent(sessionId)}`, {
-    headers: authenticatedHeaders(),
+    headers: authHeaders(),
   });
   await requireOk(response, "실행 이력 불러오기");
   return response.json();
 }
 
 export async function fetchDocument(url) {
-  const response = await fetch(url, { headers: authenticatedHeaders() });
+  const response = await fetch(url, { headers: authHeaders() });
   await requireOk(response, "PDF 불러오기");
   return response.blob();
-}
-
-function authenticatedHeaders(headers = {}) {
-  const token = window.localStorage.getItem("settle_access_token");
-  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
 }
 
 export function nationalityLabel(code) {

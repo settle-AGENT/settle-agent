@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { BridgeMark, TopBar, Rail, PrimaryButton, Field } from "./components.jsx";
+import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
   signUp, login, uploadAndExtract, confirmProfile, getVerdict, previewAction, approveAction, getLedger,
   fetchDocument, nationalityLabel,
+  createSession, sendChat, startAction, readUi, questionOptions, clearToken,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
@@ -31,6 +32,14 @@ export default function App() {
   const [lang, setLang] = useState("en");
   const [nat, setNat] = useState(null);
 
+  // ── 에이전트 단일 스토어 ──
+  // 서버 state 가 진실의 원천이다. 부분 병합하지 않고 통째로 교체한다.
+  const [agentState, setAgentState] = useState(null);
+  const [ui, setUi] = useState({ type: "none", payload: {} });
+  const [messages, setMessages] = useState([]);
+  const [toast, setToast] = useState("");
+  const [sessionLoading, setSessionLoading] = useState(false);
+
   const [scan, setScan] = useState(0);
   const [shots, setShots] = useState({});
   const [captureError, setCaptureError] = useState("");
@@ -42,12 +51,10 @@ export default function App() {
   const [dirtyFields, setDirtyFields] = useState({});
   const [profileErrors, setProfileErrors] = useState({});
   const [profileSubmitting, setProfileSubmitting] = useState(false);
-  const [profileReplies, setProfileReplies] = useState([]);
 
   const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
-  const [agentState, setAgentState] = useState(null);
   const [preview, setPreview] = useState(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState("");
   const [approval, setApproval] = useState(null);
@@ -58,6 +65,10 @@ export default function App() {
   const [ledgerError, setLedgerError] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [taskBusy, setTaskBusy] = useState("");
+  const [docs, setDocs] = useState(null);
+  const [openDoc, setOpenDoc] = useState(null);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
@@ -118,7 +129,9 @@ export default function App() {
     if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
   }, [previewBlobUrl]);
 
-  const sessionId = agentState?.session_id || extract?.state?.session_id || "demo-001";
+  // 세션은 POST /api/session 이 발급한 값 하나뿐이다.
+  // 임의의 폴백을 쓰면 Spring 의 소유권 검증에서 403 이 난다.
+  const sessionId = agentState?.session_id || null;
   const documents = agentState?.documents || [];
 
   useEffect(() => {
@@ -189,7 +202,7 @@ export default function App() {
       setPreview(payload);
       go(10);
     } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
     } finally {
       setPreviewLoading(false);
     }
@@ -207,7 +220,7 @@ export default function App() {
       setPreview({ ...document, warnings: [] });
       go(10);
     } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
     }
   };
 
@@ -221,7 +234,7 @@ export default function App() {
       link.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : "PDF를 다운로드하지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 다운로드하지 못했어요.");
     }
   };
 
@@ -237,10 +250,33 @@ export default function App() {
         : response?.state?.pending_approval;
       setApproval(nextApproval || null);
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
+      if (!handleAuthError(error)) setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
     } finally {
       setApprovalLoading(false);
     }
+  };
+
+  // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
+  const applyAgent = (response) => {
+    if (response?.state) setAgentState(response.state);
+    setUi(readUi(response));
+    if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    return response;
+  };
+
+  // 401/403 이면 세션을 이어갈 방법이 없다. 토큰을 버리고 로그인부터 다시 받는다.
+  // 처리했으면 true — 호출부는 자기 화면 오류를 띄우지 않고 빠진다.
+  const handleAuthError = (error) => {
+    if (error?.status !== 401 && error?.status !== 403) return false;
+    clearToken();
+    setIsAuthenticated(false);
+    setAgentState(null);
+    setUi({ type: "none", payload: {} });
+    setMessages([]);
+    setAuthMode("login");
+    setAuthMessage(error.message || "로그인이 만료됐어요. 다시 로그인해 주세요.");
+    go(-1);
+    return true;
   };
 
   // ── 0 스플래시 ──
@@ -294,8 +330,7 @@ export default function App() {
           setAuthMessage("회원가입이 완료됐어요. 로그인해 주세요.");
           return;
         }
-        const response = await login(auth);
-        window.localStorage.setItem("settle_access_token", response.accessToken);
+        await login(auth);
         setIsAuthenticated(true);
         go(1);
       } catch (error) {
@@ -337,7 +372,21 @@ export default function App() {
   }
 
   // ── 1 언어 선택 ──
-  if (step === 1)
+  if (step === 1) {
+    // 언어를 고르는 순간이 세션의 시작점이다. locale 은 세션 생성 시 함께 넘긴다.
+    const beginSession = async () => {
+      if (sessionLoading) return;
+      setSessionLoading(true);
+      setToast("");
+      try {
+        applyAgent(await createSession(lang));
+        go(2);
+      } catch (error) {
+        if (!handleAuthError(error)) setToast(error?.message || "세션을 시작하지 못했어요.");
+      } finally {
+        setSessionLoading(false);
+      }
+    };
     return (
       <Shell>
         <div style={{ paddingTop: 46 }}><Rail active={0} /></div>
@@ -352,10 +401,14 @@ export default function App() {
           </div>
         </div>
         <div style={{ padding: "8px 26px 34px" }}>
-          <PrimaryButton onClick={() => go(2)}>계속</PrimaryButton>
+          {toast && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{toast}</div>}
+          <PrimaryButton disabled={sessionLoading} onClick={beginSession}>
+            {sessionLoading ? "세션을 여는 중…" : "계속"}
+          </PrimaryButton>
         </div>
       </Shell>
     );
+  }
 
   // ── 2 촬영 ──
   if (step === 2) {
@@ -373,6 +426,7 @@ export default function App() {
         const next = { ...shots, [page.key]: png };
         setShots(next);
         setExtract(data);
+        if (data.agentResponse) applyAgent(data.agentResponse);
         setProfileDraft(Object.fromEntries((data.fields || []).map((field) => [field.key, field.value])));
         setDirtyFields({});
         setProfileErrors({});
@@ -382,7 +436,7 @@ export default function App() {
           go(3);
         } else setScan(empty);
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+        if (!handleAuthError(error)) setCaptureError(captureMessage(error));
       } finally {
         setCaptureLoading(false);
       }
@@ -394,14 +448,14 @@ export default function App() {
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "이미지를 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     pastedImageHandlerRef.current = async (source) => {
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "붙여넣은 이미지를 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     const takePhoto = async () => {
@@ -410,7 +464,7 @@ export default function App() {
         stopCamera();
         await uploadPng(png);
       } catch (error) {
-        setCaptureError(error instanceof Error ? error.message : "사진을 처리하지 못했어요.");
+        setCaptureError(captureMessage(error));
       }
     };
     const currentShot = shots[SCAN_PAGES[scan].key];
@@ -487,8 +541,8 @@ export default function App() {
       setProfileSubmitting(true);
       setProfileErrors({});
       try {
-        const sessionId = extract?.state?.session_id || "demo-001";
-        const response = await confirmProfile(sessionId, dirtyFields);
+        const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields);
+        applyAgent(response);
         setExtract((current) => ({
           ...current,
           profile: response.state?.profile || {},
@@ -496,9 +550,10 @@ export default function App() {
           agentResponse: response,
         }));
         setDirtyFields({});
-        if (response.reply) setProfileReplies((current) => [...current, response.reply]);
-        if (response.ui?.type === "question") go(4);
+        // 다음 UI 가 질문이면 상담 화면, 그 밖이면 과제 목록으로 간다.
+        go(readUi(response).type === "question" ? 4 : 5);
       } catch (error) {
+        if (handleAuthError(error)) return;
         if (error?.status === 422 && error?.code === "validation_failed") {
           const details = error.details;
           const entries = Array.isArray(details)
@@ -540,7 +595,7 @@ export default function App() {
     );
   }
 
-  // ── 4 AI 상담 + 심사 ──
+  // ── 4 AI 상담 (서버가 내려주는 question 을 그린다) ──
   if (step === 4) {
     const hasPurpose = Object.values(answers.purposes).some(Boolean);
     const updatePhone = (phone) => { setAnswers((value) => ({ ...value, phone })); setVerdict(null); };
@@ -594,54 +649,105 @@ export default function App() {
       );
     }
 
+
+    const question = ui.type === "question" ? ui.payload : null;
+    const options = question ? questionOptions(question) : [];
+
+    // 답변은 항상 POST /api/chat 의 message 로 간다. 응답의 ui.type 이 다음 화면을 정한다.
+    const answer = async (value) => {
+      if (chatLoading || !value) return;
+      setChatLoading(true);
+      setToast("");
+      setMessages((current) => [...current, { from: "user", text: value }]);
+      try {
+        const response = applyAgent(await sendChat(sessionId, value));
+        setChatInput("");
+        const next = readUi(response).type;
+        if (next !== "question") go(5);      // 질문이 끝나면 과제 목록으로
+      } catch (error) {
+        if (!handleAuthError(error)) setToast(error?.message || "메시지를 보내지 못했어요.");
+      } finally {
+        setChatLoading(false);
+      }
+    };
+
     return (
       <Shell>
         <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
         <Rail active={3} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {profileReplies.map((reply, index) => <ChatBubble avatar key={`${reply}-${index}`}>{reply}</ChatBubble>)}
-          <ChatBubble avatar>
-            서류 확인이 끝났어요. 은행 방문 가능 여부를 확인할게요. 아래 질문에 순서대로 답해 주세요.
-          </ChatBubble>
+          {messages.map((message, index) => (
+            <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
+              {message.text}
+            </ChatBubble>
+          ))}
 
-          <ChatBubble avatar>
-            <b>본인 명의 국내 휴대폰이 있나요?</b>
-            <span>국내 통신사에서 본인 명의로 개통한 휴대폰이에요.</span>
-            <ChatOptions>
-              <ChatChoice selected={answers.phone === "yes"} onClick={() => updatePhone("yes")}>네, 있어요</ChatChoice>
-              <ChatChoice selected={answers.phone === "no"} onClick={() => updatePhone("no")}>아직 없어요</ChatChoice>
-            </ChatOptions>
-          </ChatBubble>
-
-          {answers.phone && (
-            <>
-              <ChatBubble mine>{answers.phone === "yes" ? "네, 본인 명의 휴대폰이 있어요." : "아직 본인 명의 휴대폰이 없어요."}</ChatBubble>
-              <ChatBubble avatar>
-                <b>재학증명서 또는 입학허가서가 있나요?</b>
-                <span>은행에는 촬영본이 아닌 종이 원본을 제출해요.</span>
-                <ChatOptions>
-                  <ChatChoice selected={answers.cert === "yes"} onClick={() => updateCert("yes")}>있어요</ChatChoice>
-                  <ChatChoice selected={answers.cert === "no"} onClick={() => updateCert("no")}>아직 없어요</ChatChoice>
-                </ChatOptions>
-              </ChatBubble>
-            </>
+          {question && (
+            <ChatBubble avatar wide>
+              <QuestionCard payload={question} options={options} value={chatInput}
+                onChange={setChatInput} onSubmit={answer} disabled={chatLoading} />
+            </ChatBubble>
           )}
 
-          {answers.cert && (
-            <>
-              <ChatBubble mine>{answers.cert === "yes" ? "학교 서류를 준비했어요." : "학교 서류는 아직 없어요."}</ChatBubble>
-              <ChatBubble avatar>
-                <b>계좌를 주로 어디에 사용할 건가요?</b>
-                <span>여러 개를 선택할 수 있어요.</span>
-                <ChatOptions wrap>
-                  {PURPOSES.map((label, index) => <ChatChoice key={label} selected={!!answers.purposes[index]} onClick={() => togglePurpose(index)}>{label}</ChatChoice>)}
-                </ChatOptions>
-                {hasPurpose && !verdict && <button type="button" disabled={chatLoading} onClick={runVerdict} className="chat-submit tap">{chatLoading ? "확인하고 있어요…" : "선택 완료 · 심사하기"}</button>}
-              </ChatBubble>
-            </>
+          {/* 모르는 ui.type 이면 reply 만 보여주고 다음 화면으로 넘어갈 길을 남긴다 */}
+          {!question && !chatLoading && (
+            <button type="button" onClick={() => go(5)} className="chat-submit tap">할 일 목록 보기</button>
           )}
+
+          {chatLoading && <ChatBubble avatar>답변을 정리하고 있어요…</ChatBubble>}
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
 
           <div ref={chatEndRef} aria-hidden="true" />
+        </div>
+      </Shell>
+    );
+  }
+
+  // ── 5 할 일 / 과제 선택 ──
+  if (step === 5) {
+    const tasks = agentState?.tasks || [];
+    const startTask = async (task) => {
+      if (taskBusy) return;
+      setTaskBusy(task.id);
+      setToast("");
+      try {
+        const response = applyAgent(await startAction(sessionId, task.id));
+        // 다음 질문이 오면 상담 화면으로 되돌아간다. 그 밖의 ui 는 담당 파트(6~9)가 그린다.
+        if (readUi(response).type === "question") go(4);
+      } catch (error) {
+        // 409 prerequisite_missing 은 상태를 바꾸지 않고 토스트만 띄운다.
+        if (!handleAuthError(error)) setToast(error?.message || "과제를 시작하지 못했어요.");
+      } finally {
+        setTaskBusy("");
+      }
+    };
+    return (
+      <Shell>
+        <TopBar title="할 일" onBack={() => go(4)} />
+        <Rail active={3} />
+        <div style={{ padding: "4px 24px 14px" }}>
+          <h2 style={H2}>지금 할 수 있는 일</h2>
+          <p style={SUB}>잠긴 항목은 먼저 끝내야 하는 과제가 있어요.</p>
+        </div>
+        <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {tasks.length === 0 && (
+            <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
+              아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.
+            </div>
+          )}
+          {tasks.map((task) => (
+            <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} />
+          ))}
+        </div>
+        <div style={{ padding: "10px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
+          <PrimaryButton onClick={() => go(4)}>상담으로 돌아가기</PrimaryButton>
+          {/* 화면 6~9(서류·승인·이력)로 들어가는 유일한 진입로다. */}
+          <button type="button" onClick={() => go(7)} className="tap"
+            style={{ width: "100%", minHeight: 46, borderRadius: 12, border: "1px solid var(--line)",
+              background: "#fff", fontSize: 13.5, fontWeight: 700, color: "oklch(0.25 0.012 60)" }}>
+            내 신청서 · 서류함
+          </button>
         </div>
       </Shell>
     );
@@ -891,6 +997,22 @@ function Sheet({ children, title, onClose }) {
       </div>
     </div>
   );
+}
+
+// 촬영 화면 오류 문구. 계약의 error code 별로 다음 행동을 다르게 안내한다.
+function captureMessage(error) {
+  switch (error?.code) {
+    case "extraction_failed":
+      return "사진에서 정보를 읽지 못했어요. 빛 반사를 피해 카드 전체가 보이게 다시 촬영해 주세요.";
+    case "unsupported_media_type":
+      return "PNG 이미지만 올릴 수 있어요. 다시 촬영하면 자동으로 PNG로 변환돼요.";
+    case "upload_not_completed":
+      return "사진 업로드가 끝나지 않았어요. 다시 촬영해 주세요.";
+    case "network":
+      return "네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    default:
+      return error instanceof Error ? error.message : "이미지를 처리하지 못했어요.";
+  }
 }
 
 function mask(arc) {
