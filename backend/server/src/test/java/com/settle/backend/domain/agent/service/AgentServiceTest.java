@@ -77,7 +77,7 @@ class AgentServiceTest {
                 "id", "spring-document-id",
                 "preview_url", "/api/documents/spring-document-id/preview"
         ));
-        when(aiAgentClient.createSession(MEMBER_ID.toString(), "ko")).thenReturn(upstream);
+        when(aiAgentClient.createSession(MEMBER_ID.toString(), "ko", false, null)).thenReturn(upstream);
         when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
                 .thenReturn(ResponseEntity.ok(Map.of(
                         "state", Map.of(
@@ -86,10 +86,10 @@ class AgentServiceTest {
                         )
                 )));
 
-        assertThat(agentService.createSession(MEMBER_ID, "ko").getBody())
+        assertThat(agentService.createSession(MEMBER_ID, "ko", false, false, null, null).getBody())
                 .extracting(body -> ((Map<?, ?>) body.get("state")).get("documents"))
                 .isEqualTo(storedDocuments);
-        verify(aiAgentClient).createSession(MEMBER_ID.toString(), "ko");
+        verify(aiAgentClient).createSession(MEMBER_ID.toString(), "ko", false, null);
     }
 
     @Test

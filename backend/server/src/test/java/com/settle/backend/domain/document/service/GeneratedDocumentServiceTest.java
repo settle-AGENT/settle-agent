@@ -128,10 +128,9 @@ class GeneratedDocumentServiceTest {
                 "members/member/generated-documents/document.pdf"
         );
         document.markReady(List.of());
-        when(documentRepository.findAllByMember_IdAndSessionIdAndStatusOrderByCreatedAtDesc(
+        when(documentRepository.findAllByMember_IdAndStatusInOrderByCreatedAtDesc(
                 MEMBER_ID,
-                MEMBER_ID.toString(),
-                GeneratedDocumentStatus.READY
+                List.of(GeneratedDocumentStatus.READY, GeneratedDocumentStatus.ISSUED)
         )).thenReturn(List.of(document));
         ResponseEntity<Map<String, Object>> upstream = ResponseEntity.ok(Map.of(
                 "state", Map.of("documents", List.of(Map.of("id", "ai-document-id")))

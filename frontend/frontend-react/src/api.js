@@ -95,7 +95,7 @@ async function agentFetch(path, { method = "POST", body, label } = {}) {
 
 // ui.payload 를 화면이 바로 쓸 수 있는 모양으로 고른다.
 // 모르는 ui.type 은 reply 만 표시하도록 payload 를 비운다.
-const KNOWN_UI = new Set(["profile_confirm", "question", "comparison", "doc_preview", "approval"]);
+const KNOWN_UI = new Set(["profile_confirm", "question", "comparison", "doc_preview", "approval", "task_complete", "document_route", "action_offer"]);
 
 export function readUi(response) {
   const type = response?.ui?.type || "none";
@@ -184,7 +184,7 @@ export async function extractDocs({ arcFront, arcBack, passport }) {
   return post("/api/ocr/extract", { arcFront, arcBack, passport });
 }
 
-export async function uploadAndExtract(file, documentType, locale = "ko") {
+export async function uploadAndExtract(file, documentType, sessionId, locale = "ko") {
   if (file.type !== "image/png") throw new Error("PNG 이미지만 업로드할 수 있어요.");
   if (MOCK) return delay(normalizeMockExtraction(MOCK_EXTRACT, locale));
 
@@ -205,7 +205,7 @@ export async function uploadAndExtract(file, documentType, locale = "ko") {
   const extraction = await requireOk(await fetch("/api/v1/documents/extractions", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ uploadId }),
+    body: JSON.stringify({ uploadId, session_id: sessionId }),
   }), "서류 인식");
   return normalizeExtraction(await extraction.json());
 }
@@ -255,9 +255,13 @@ export async function confirmProfile(sessionId, dirtyFields, locale = "ko") {
 
 // ── 화면 1. 세션 생성 ────────────────────────────────────────────────
 // AI 는 { session_id } 가 아니라 AgentResponse 전체를 준다. session_id 는 state 에 있다.
-export async function createSession(locale = "ko") {
+export async function createSession(locale = "ko", reset = false, options = {}) {
   if (MOCK) return delay(mockAgentResponse({ session_id: "demo-001", locale }));
-  return agentFetch(`/api/session?locale=${encodeURIComponent(locale)}`, { label: "세션 생성" });
+  const params = new URLSearchParams({ locale, reset: String(reset) });
+  if (options.fresh) params.set("fresh", "true");
+  if (options.sessionId) params.set("session_id", options.sessionId);
+  if (options.sourceSessionId) params.set("source_session_id", options.sourceSessionId);
+  return agentFetch(`/api/session?${params.toString()}`, { label: "세션 생성" });
 }
 
 // ── 화면 4. 상담 답변 제출 ───────────────────────────────────────────
@@ -267,6 +271,43 @@ export async function sendChat(sessionId, message, locale = "ko") {
     body: { session_id: sessionId, message },
     label: "메시지 전송",
   });
+}
+
+export async function sendChatStream(sessionId, message, onProgress, locale = "ko") {
+  if (MOCK) {
+    onProgress?.(locale === "en" ? "Preparing a response" : "답변을 준비하고 있어요");
+    return delay(mockAgentResponse({ session_id: sessionId, locale }, locale === "en" ? "Got it." : "알겠습니다."));
+  }
+  const response = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
+    body: JSON.stringify({ session_id: sessionId, message }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw toAgentError(response.status, body, "메시지 전송에 실패했어요.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() || "";
+    for (const block of blocks) {
+      const raw = block.split("\n").find((line) => line.startsWith("data:"));
+      if (!raw) continue;
+      const event = JSON.parse(raw.slice(5).trim());
+      if (event.type === "progress" && event.label) onProgress?.(event.label, event.step);
+      if (event.type === "result") result = event.data;
+      if (event.type === "error") throw new AgentError(event.message || "AI 응답을 만들지 못했어요.");
+    }
+    if (done) break;
+  }
+  if (!result) throw new AgentError("AI 최종 응답을 받지 못했어요.");
+  return result;
 }
 
 // ── 화면 5. 과제 시작 ────────────────────────────────────────────────

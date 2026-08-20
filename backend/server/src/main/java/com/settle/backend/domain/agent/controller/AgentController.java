@@ -17,6 +17,8 @@ import jakarta.validation.constraints.NotBlank;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,7 +42,7 @@ public class AgentController {
     @PostMapping("/session")
     @Operation(
             summary = "AI 세션 생성 또는 재개",
-            description = "JWT memberId를 AI session_id query parameter로 전달합니다. 같은 회원은 항상 같은 session_id를 사용하며 AI status/body를 그대로 반환합니다."
+            description = "기본 세션을 재개하거나 fresh=true로 기존 작업과 분리된 새 상담 세션을 생성합니다."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "AgentResponse 세션 상태",
@@ -53,9 +55,15 @@ public class AgentController {
     public ResponseEntity<Map<String, Object>> createSession(
             @Parameter(hidden = true) @CurrentMemberId UUID memberId,
             @Parameter(description = "AI 응답 locale", example = "ko")
-            @RequestParam(defaultValue = "ko") String locale
+            @RequestParam(defaultValue = "ko") String locale,
+            @RequestParam(defaultValue = "false") boolean reset,
+            @RequestParam(defaultValue = "false") boolean fresh,
+            @RequestParam(name = "session_id", required = false) String sessionId,
+            @RequestParam(name = "source_session_id", required = false) String sourceSessionId
     ) {
-        return agentService.createSession(memberId, locale);
+        return agentService.createSession(
+                memberId, locale, reset, fresh, sessionId, sourceSessionId
+        );
     }
 
     @PostMapping("/chat")
@@ -86,6 +94,14 @@ public class AgentController {
             @Valid @RequestBody AgentMessageRequest request
     ) {
         return agentService.chat(memberId, request);
+    }
+
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStream(
+            @Parameter(hidden = true) @CurrentMemberId UUID memberId,
+            @Valid @RequestBody AgentMessageRequest request
+    ) {
+        return agentService.chatStream(memberId, request);
     }
 
     @PostMapping("/actions/{id}/start")

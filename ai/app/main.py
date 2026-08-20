@@ -12,9 +12,11 @@ import os
 
 from dotenv import load_dotenv
 import traceback
+import queue
+import threading
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
@@ -69,9 +71,12 @@ def health():
 
 
 @app.post("/api/session", response_model=AgentResponse, tags=["session"])
-def create_session(locale: str = "en", session_id: str | None = None):
+def create_session(locale: str = "en", session_id: str | None = None,
+                   reset: bool = False, source_session_id: str | None = None):
     """session_id 를 주면 그 세션을 이어받고, 없으면 새로 만든다."""
-    return agent.start_session(session_id, locale)
+    if reset and session_id:
+        return agent.reset_session(session_id, locale)
+    return agent.start_session(session_id, locale, source_session_id)
 
 
 @app.post("/api/uploads/presign", response_model=PresignResponse, tags=["upload"])
@@ -138,6 +143,39 @@ def confirm_profile(req: ChatRequest):
 @app.post("/api/chat", response_model=AgentResponse, tags=["agent"])
 def chat(req: ChatRequest):
     return agent.send_message(req.session_id, req.message)
+
+
+@app.post("/api/chat/stream", tags=["agent"])
+def chat_stream(req: ChatRequest):
+    """Stream actual agent execution stages, followed by the final AgentResponse."""
+    events: queue.Queue = queue.Queue()
+
+    def emit(step: str, label: str) -> None:
+        events.put({"type": "progress", "step": step, "label": label})
+
+    def run() -> None:
+        try:
+            excerpt = " ".join(req.message.strip().split())[:24]
+            events.put({"type": "progress", "step": "start", "label": f"‘{excerpt}’ 질문을 받았어요"})
+            result = agent.send_message(req.session_id, req.message, emit=emit)
+            events.put({"type": "result", "data": result})
+        except Exception as exc:  # noqa: BLE001
+            events.put({"type": "error", "message": str(exc)})
+        finally:
+            from app.tools import progress as progress_events
+            progress_events.set_emitter(req.session_id, None)
+            events.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @app.post("/api/actions/{action_id}/start", response_model=AgentResponse, tags=["agent"])
