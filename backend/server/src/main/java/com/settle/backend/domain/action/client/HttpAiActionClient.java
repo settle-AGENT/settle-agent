@@ -5,6 +5,7 @@ import com.settle.backend.domain.action.dto.ActionPreviewRequest;
 import com.settle.backend.domain.action.dto.AgentResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
@@ -12,6 +13,9 @@ import org.springframework.web.client.RestClient;
 
 @Component
 public class HttpAiActionClient implements AiActionClient {
+    private static final Pattern PDF_PATH = Pattern.compile(
+            "^/api/documents/[A-Za-z0-9_-]+\\.pdf$"
+    );
     private final RestClient restClient;
 
     public HttpAiActionClient(@Qualifier("aiRestClient") RestClient restClient) {
@@ -60,12 +64,16 @@ public class HttpAiActionClient implements AiActionClient {
 
     @Override
     public byte[] downloadPdf(String pdfUrl) {
-        if (pdfUrl == null || !pdfUrl.startsWith("/") || pdfUrl.startsWith("//")) {
-            throw new IllegalArgumentException("invalid_ai_pdf_url");
-        }
         return restClient.get()
-                .uri(pdfUrl)
+                .uri(requirePdfPath(pdfUrl))
                 .retrieve()
                 .body(byte[].class);
+    }
+
+    static String requirePdfPath(String pdfUrl) {
+        if (pdfUrl == null || !PDF_PATH.matcher(pdfUrl).matches()) {
+            throw new IllegalArgumentException("invalid_ai_pdf_url");
+        }
+        return pdfUrl;
     }
 }

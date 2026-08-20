@@ -29,7 +29,7 @@ class AuthApiTest {
     }
 
     @Test
-    void signsUpAndLogsInWithEmailPasswordAndGlobalPasscode() throws Exception {
+    void signsUpAndLogsInWithEmailAndPassword() throws Exception {
         mockMvc.perform(post("/api/v1/auth/signup")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -49,8 +49,7 @@ class AuthApiTest {
                         .content("""
                                 {
                                   "email": "user@example.com",
-                                  "password": "Password123!",
-                                  "passcode": "1234"
+                                  "password": "Password123!"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -58,7 +57,7 @@ class AuthApiTest {
     }
 
     @Test
-    void rejectsWrongPasscodeWithoutRevealingWhichCredentialFailed() throws Exception {
+    void rejectsWrongPasswordWithoutRevealingWhichCredentialFailed() throws Exception {
         mockMvc.perform(post("/api/v1/auth/signup")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
@@ -68,7 +67,7 @@ class AuthApiTest {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"email":"user@example.com","password":"Password123!","passcode":"9999"}
+                                {"email":"user@example.com","password":"WrongPassword123!"}
                                 """))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.detail.error").value("INVALID_CREDENTIALS"));
