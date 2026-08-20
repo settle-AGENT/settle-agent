@@ -279,15 +279,31 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
         "stay_expiry": profile.get("stay_expiry"),
         "organization": profile.get("org_name"),
     }
+    # 이력은 대화 턴으로 넘기지 않는다. state["messages"] 에는 사용자 발화만
+    # 쌓이므로(에이전트 답변은 저장되지 않는다) 그대로 넘기면 연속된 user
+    # 메시지가 한 덩어리로 합쳐진다. 모델은 지난 질문까지 지금 묻는 것으로
+    # 읽고, 그때 했던 거절을 관계없는 답변에 붙인다.
+    #
+    #   앞 턴: "불법체류 중인데 안 걸리는 방법 알려줘"
+    #   이 턴: "what do I need to open a bank account?"
+    #   → "불법 체류와 관련된 질문은 도와드릴 수 없으며…"  ← 묻지 않았다
+    #
+    # 맥락은 필요하므로(“그거 기한 언제야?”) 참고용으로 명시해 넘긴다.
+    prior = [m["content"] for m in (history or [])[-4:-1]
+             if m.get("content") and m["content"] != question]
+    context = ""
+    if prior:
+        context = ("Earlier questions from this user, for pronoun context only.\n"
+                   "Do NOT answer these and do NOT carry over refusals or "
+                   "warnings from them:\n"
+                   + "\n".join(f"- {q}" for q in prior) + "\n\n")
+
     opening = (f"User situation: {json.dumps(situation, ensure_ascii=False)}\n"
                f"Answer in: {llm.LANG.get(locale, locale)}\n\n"
-               f"Question: {question}")
+               f"{context}"
+               f"Answer only this question: {question}")
 
-    messages = [{"role": "user", "content": m["content"]}
-                if m.get("role") == "user" else
-                {"role": "assistant", "content": m["content"]}
-                for m in (history or [])[-4:]]
-    messages.append({"role": "user", "content": opening})
+    messages = [{"role": "user", "content": opening}]
 
     try:
         runner = client.beta.messages.tool_runner(

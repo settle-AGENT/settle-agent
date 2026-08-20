@@ -17,10 +17,17 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
 from app.nodes import qa, researcher
-from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
+from app.nodes.planner import (
+    AGENCY_LABEL,
+    DOC_LABEL,
+    _field,
+    _pick,
+    build_task_graph,
+    summary,
+)
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import label_of as _label_of
-from app.rules.loader import actions_for, evidence_labels
+from app.rules.loader import VISA_CODES, actions_for, evidence_labels
 from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
@@ -40,6 +47,16 @@ def _now() -> str:
 # label / hint / options 는 {ko, en}. LLM 이 문장을 만들어 주면 label·hint 는
 # 덮이지만 options 는 LLM 을 타지 않으므로 여기 값이 그대로 화면에 나간다.
 QUESTIONS: dict[str, dict] = {
+    # 등록증이 없으면 체류자격을 알 길이 없다. 여권에는 스티커로 붙어 있지만
+    # 추출기가 그 면을 읽지 않으므로 직접 묻는다. 이걸 모르면 Task Graph 가
+    # 통째로 비어 아무 안내도 못 한다 — 정작 등록이 가장 급한 사람이다.
+    "visa_type": {
+        "label": {"ko": "체류자격이 어떻게 되시나요? 여권의 비자에 적혀 있습니다.",
+                  "en": "What is your visa status? It is printed on the visa in your passport."},
+        "input_type": "select",
+        "options": [],          # 런타임에 visa_codes.yaml 로 채운다
+        "hint": {"ko": "예: D-2 (유학)", "en": "e.g. D-2 (Student)"},
+    },
     "birth_date": {
         "label": {"ko": "생년월일이 어떻게 되시나요?",
                   "en": "What is your date of birth?"},
@@ -96,6 +113,12 @@ QUESTIONS: dict[str, dict] = {
 }
 
 
+def visa_options() -> list[dict]:
+    """체류자격 선택지. visa_codes.yaml 이 한 곳의 출처다."""
+    return [{"value": code, "label": f"{code} ({name})"}
+            for code, name in VISA_CODES.items()]
+
+
 def _text(value, locale: str) -> str | None:
     """{ko, en} 이면 locale 을 고르고, 평문이면 그대로 둔다."""
     if isinstance(value, dict):
@@ -146,6 +169,28 @@ ACTION_TITLES: dict[str, dict] = {
                       "en": "Submit Activity Permit application"},
     "open_bank_account": {"ko": "계좌개설 신청서 제출",
                           "en": "Submit account opening application"},
+}
+
+NO_ID = {"ko": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
+         "en": "Upload your ID and I will tell you what you need to do."}
+VISA_LEAD = {"ko": "체류자격만 알면 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
+             "en": "Once I know your visa status I can tell you what to do."}
+VISA_UNSUPPORTED = {
+    "ko": "{} 는 아직 안내를 준비하지 못했습니다. 지금은 D-2(유학)만 "
+          "지원합니다. 출입국·외국인종합안내센터(1345)에 문의해주세요.",
+    "en": "I do not have guidance for {} yet — only D-2 (Student) for now. "
+          "Please call the immigration center at 1345.",
+}
+
+OFFLINE_LEAD = {
+    "ko": "{}은(는) 앱이 대신 작성할 서류가 없습니다. 직접 방문하셔야 합니다.",
+    "en": "There is no form for {} that the app can fill in. You go in person.",
+}
+
+SLOT_LEAD = {
+    "many": {"ko": "{}가지만 여쭤볼게요 — {}.",
+             "en": "Just {} things to ask — {}."},
+    "last": {"ko": "마지막 질문입니다.", "en": "Last question."},
 }
 
 # 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
@@ -236,8 +281,12 @@ def slot_filler(state: AgentState) -> dict:
     # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
     label = _text(q["label"], locale)
     hint = _text(q.get("hint"), locale)
-    lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
-    written_locale = None
+    # 말풍선은 무엇을 물을지 미리 알려 준다. 개수만 말하면 사용자는 몇 번이나
+    # 더 답해야 하는지, 무엇을 준비해야 하는지 모른 채 하나씩 끌려간다.
+    names = ", ".join(_label_of(f, locale) for f in missing)
+    lead = (_text(SLOT_LEAD["many"], locale).format(len(missing), names)
+            if len(missing) > 1 else _text(SLOT_LEAD["last"], locale))
+    written_locale = locale        # 이미 사용자 언어다 — 번역을 태우지 않는다
 
     # LLM 은 문장 생성만. 실패해도 흐름이 끊기지 않는다.
     if llm.available():
@@ -251,9 +300,10 @@ def slot_filler(state: AgentState) -> dict:
         if written and written.get("question"):
             label = written["question"]
             hint = written.get("hint") or hint
-            lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
-            written_locale = _written_locale(label, locale)
 
+    # reply 에는 질문을 넣지 않는다. 질문은 ui.payload.label 이 들고 있고
+    # 프론트가 그것으로 질문 카드를 그리므로, 여기에 또 쓰면 같은 문장이
+    # 말풍선과 카드에 두 번 보인다. 말풍선은 진행 상황만 알린다.
     return {
         "missing_fields": missing,
         "asked_field": field,
@@ -299,11 +349,15 @@ def doc_builder(state: AgentState) -> dict:
                     "phone_kr": profile["phone_kr"],
                 },
             }
-        return {
-            "reply": "이 단계는 서류 없이 진행됩니다.",
-            "ui_type": "none",
-            "ui_payload": {},
-        }
+        # 앱이 만들 서식이 없는 과제다(통신 가입 등). 여기까지 왔다는 것은
+        # 어딘가에서 "시작할까요" 를 물었다는 뜻인데, 시작할 것이 없다.
+        #
+        # 예전에는 "이 단계는 서류 없이 진행됩니다" 한 줄만 돌려주고
+        # current_action 을 남겨 두었다. 그러면 무슨 말을 하든 router 가
+        # 다시 이 자리로 보내 같은 문장만 반복됐다 — 빠져나갈 수 없었다.
+        return {"current_action": None,
+                "in_progress": [a for a in state.get("in_progress", []) if a != action],
+                **_offline_guidance(state, action, spec)}
 
     try:
         result = render(
@@ -396,6 +450,27 @@ def doc_builder(state: AgentState) -> dict:
             "warnings": warnings,
         },
     }
+
+
+def _offline_guidance(state: AgentState, action: str, spec: dict) -> dict:
+    """앱이 대신 해 줄 것이 없는 과제의 안내. 무엇을 들고 어디로 갈지 말한다."""
+    locale = state.get("locale") or "en"
+    task = next((t for t in (state.get("tasks") or []) if t["id"] == action), None)
+    label = _title(action, locale) if action in ACTION_TITLES else (
+        task["label"] if task else action)
+
+    lines = [_text(OFFLINE_LEAD, locale).format(label)]
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), locale)
+    if agency:
+        lines.append(f"{_text(SUMMARY_LABEL['agency'], locale)} · {agency}")
+    docs = [_pick(DOC_LABEL, d, locale, d) for d in spec.get("required_docs", [])]
+    if docs:
+        lines.append(f"{_text(SUMMARY_LABEL['docs'], locale)} · " + ", ".join(docs))
+    if note := _field(spec, "note", locale):
+        lines.append(note)
+
+    return {"reply": "\n".join(lines), "reply_locale": locale,
+            "ui_type": "none", "ui_payload": {}}
 
 
 def approval_gate(state: AgentState) -> dict:
@@ -576,8 +651,7 @@ def explainer(state: AgentState) -> dict:
         return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
 
     if not tasks:
-        return {"reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
-                "ui_type": "none"}
+        return ask_visa(state)
 
     base = summary(tasks)
 
@@ -622,6 +696,43 @@ def _implied_offer(reply: str, tasks: list[dict]) -> dict | None:
     if not nxt:
         return None
     return {"kind": "start_action", "action_id": nxt["id"], "label": nxt["label"]}
+
+
+def ask_visa(state: AgentState) -> dict:
+    """체류자격을 몰라 아무 안내도 못 하는 상태를 푼다.
+
+    무엇을 올렸느냐로 갈린다.
+      아무것도 없음        → 신분증부터 받는다
+      여권만 있음          → 체류자격을 묻는다. 등록하러 온 사람에게
+                            등록증을 가져오라고 하면 안 된다.
+      자격은 아는데 미지원  → 솔직히 말한다. 없는 안내를 지어내지 않는다.
+    """
+    locale = state.get("locale") or "en"
+    profile = state.get("profile") or {}
+
+    if not profile:
+        return {"reply": _text(NO_ID, locale), "reply_locale": locale,
+                "ui_type": "none"}
+
+    visa = profile.get("visa_type")
+    if visa and not actions_for(visa):
+        return {"reply": _text(VISA_UNSUPPORTED, locale).format(visa),
+                "reply_locale": locale, "ui_type": "none"}
+
+    q = QUESTIONS["visa_type"]
+    return {
+        "asked_field": "visa_type",
+        "reply": _text(VISA_LEAD, locale),
+        "reply_locale": locale,
+        "ui_type": "question",
+        "ui_payload": {
+            "field": "visa_type",
+            "label": _text(q["label"], locale),
+            "input_type": "select",
+            "options": visa_options(),
+            "hint": _text(q["hint"], locale),
+        },
+    }
 
 
 def _next_action(tasks: list[dict]) -> dict | None:

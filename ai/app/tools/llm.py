@@ -216,6 +216,11 @@ _ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant 
 for foreign residents. The user writes casually, often in Korean internet
 shorthand, and may mix languages.
 
+- cancel   : wanting to stop, drop, or back out of what is in progress.
+             "그만할래", "만들기 싫어졌어", "안 할래", "취소", "됐어",
+             "나중에 할게", "stop", "never mind". Also when they say they
+             changed their mind. This is NOT the same as failing to answer —
+             it is an explicit wish to stop.
 - confirm  : answering yes or no to the offer the assistant just made.
              Only when an offer is pending. Set "yes" true or false.
              Korean users say yes as ㅇㅇ, ㅇㅋ, ㄱㄱ, 응, 넵, 그래, 해줘, 좋아요;
@@ -232,6 +237,10 @@ shorthand, and may mix languages.
              "신청서 만들어줘", "대신 작성해줘", "통합신청서 작성해줘".
              The app does fill in forms — a request to write one is an action,
              never "other".
+             If they name more than one task or form, list them all in
+             action_ids. "통합신청서랑 계좌개설 신청서 둘 다" is two.
+             If they ask for forms without saying which ("신청서 두 개 다
+             준비해줘"), this is still action — leave action_ids empty.
 - answer   : replying to the field the assistant just asked.
 - question : asking whether something is possible, what is needed, what a rule
              says. This is the default for anything informational.
@@ -261,13 +270,20 @@ def classify(message: str, *, asked_field: str | None = None,
                 "type": "object",
                 "properties": {
                     "intent": {"type": "string",
-                               "enum": ["confirm", "menu", "action",
+                               "enum": ["cancel", "confirm", "menu", "action",
                                         "answer", "question", "other"]},
                     "yes": {"type": ["boolean", "null"],
                             "description": "if intent=confirm: true for yes, "
                                            "false for no. null if unclear."},
                     "action_id": {"type": ["string", "null"],
-                                  "description": "action id if intent=action"},
+                                  "description": "action id if intent=action. "
+                                                 "The first one if several."},
+                    "action_ids": {"type": "array", "items": {"type": "string"},
+                                   "description": "every action the user asked "
+                                                  "for, in the order they said "
+                                                  "them. One entry is normal; "
+                                                  "two or more means they asked "
+                                                  "for several at once."},
                     "topic": {"type": ["string", "null"],
                               "description": "short topic if intent=question"},
                 },
