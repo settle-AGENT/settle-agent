@@ -49,7 +49,6 @@ ORDER = [
     "work_activity",
     "open_bank_account",
 ]
-LOCKED_APPLICATIONS = {"residence_change", "work_activity"}
 def _as_date(v) -> date | None:
     if not v:
         return None
@@ -106,10 +105,8 @@ def build_task_graph(
     if not actions:
         return []                              # 미지원 체류자격
 
-    # 프로필에 값이 있으면 이미 끝낸 것으로 보는 과제가 있다. 다만 신청서를
-    # 생성하는 과제(form)는 OCR 값이 있다는 이유만으로 완료하면 안 된다.
-    # 신분증 업로드는 작성 준비일 뿐이고, 명시적 승인 후 executor가 completed에
-    # 넣었을 때만 완료다.
+    # 프로필에 값이 있으면 이미 끝낸 것으로 본다. 등록증 번호를 들고 있는데
+    # 외국인등록을 하라고 시키면 사용자는 앱을 믿지 않는다.
     #
     # completed 에 합쳐 넣는 것이 핵심이다. 상태만 done 으로 바꾸면 그것을
     # 선행조건으로 삼는 과제들이 계속 잠겨 있다 — 등록은 끝났는데 계좌는
@@ -117,7 +114,7 @@ def build_task_graph(
     completed = set(completed)
     for aid, spec in actions.items():
         key = spec.get("satisfied_if")
-        if key and profile.get(key) and not spec.get("form"):
+        if key and profile.get(key):
             completed.add(aid)
 
     labels = {aid: _field(s, "label", locale) or aid
@@ -132,8 +129,6 @@ def build_task_graph(
             continue                           # 이 자격으로는 불가한 액션
 
         status = _status(aid, spec, completed, in_progress)
-        if aid in LOCKED_APPLICATIONS and status != "done":
-            status = "locked"
         prereq = spec.get("prereq", [])
         deadline, d_day = _deadline(spec, profile, today)
 

@@ -30,24 +30,6 @@ LABELS = {
     "passport_expiry": {"ko": "여권 만료일",    "en": "Passport expiry"},
 }
 
-# 내부 상태와 서식 매핑은 안정적인 enum 값을 사용하지만, 이 값이 프로필
-# 응답이나 LLM 문맥으로 새면 living_expense 같은 개발자용 문자열이 사용자에게
-# 그대로 보인다. 사용자 경계에서는 이 닫힌 표를 통해서만 표시한다.
-VALUE_LABELS = {
-    "purpose": {
-        "living_expense": {"ko": "생활비", "en": "Living expenses"},
-        "tuition": {"ko": "학비", "en": "Tuition"},
-        "salary": {"ko": "급여", "en": "Salary"},
-        "remittance": {"ko": "송금", "en": "Remittance"},
-    },
-    "income_source": {
-        "scholarship": {"ko": "장학금", "en": "Scholarship"},
-        "family_support": {"ko": "가족 지원", "en": "Family support"},
-        "part_time": {"ko": "아르바이트", "en": "Part-time job"},
-        "savings": {"ko": "예금·저축", "en": "Savings"},
-    },
-}
-
 
 def label_of(key: str, locale: str = "en") -> str:
     """LABELS 는 {ko, en} 이다. 모르는 locale 은 영어로 떨어뜨린다."""
@@ -72,18 +54,10 @@ def mask(key: str, value) -> str:
     return str(value)
 
 
-def display_value(key: str, value, locale: str = "en") -> str:
-    """사용자에게 보여 줄 필드 값. 내부 enum은 표시명으로, 민감값은 마스킹한다."""
-    entry = VALUE_LABELS.get(key, {}).get(str(value))
-    if entry:
-        return entry.get(locale) or entry["en"]
-    return mask(key, value)
-
-
-def public_profile(profile: dict, locale: str = "en") -> dict:
+def public_profile(profile: dict) -> dict:
     """응답용 프로필 — 민감값 마스킹, 내부 필드 제외. 새 dict를 반환한다."""
     return {
-        k: display_value(k, v, locale)
+        k: mask(k, v)
         for k, v in profile.items()
         if k in LABELS and v is not None
     }
@@ -98,7 +72,7 @@ def profile_to_payload(profile: dict, confidence: dict, doc_type: str,
             {
                 "key": k,
                 "label": label_of(k, locale),
-                "value": display_value(k, v, locale),
+                "value": mask(k, v),
                 "confidence": round(float(confidence.get(k, 1.0)), 2),
                 "editable": k not in READONLY_FIELDS,
             }

@@ -26,7 +26,7 @@ from app.nodes.planner import (
     summary,
 )
 from app.nodes.doc_builder import DocumentIncomplete, render
-from app.nodes.profiler import display_value, label_of as _label_of
+from app.nodes.profiler import label_of as _label_of
 from app.rules.loader import VISA_CODES, actions_for, evidence_labels
 from app.tools import llm
 
@@ -297,10 +297,7 @@ def slot_filler(state: AgentState) -> dict:
             field,
             label=_text(q["label"], "en"),      # 필드 뜻 설명용 — 프롬프트는 영어다
             locale=locale,
-            context={
-                key: display_value(key, value, locale)
-                for key, value in state.get("profile", {}).items()
-            },
+            context=state.get("profile", {}),
             remaining=len(missing),
         )
         if written and written.get("question"):
@@ -519,16 +516,9 @@ def approval_gate(state: AgentState) -> dict:
     # 백엔드가 ui.type == "doc_preview" 일 때만 PDF 를 내려받아 저장하므로,
     # 여기서 approval 로 덮으면 PDF 가 영영 저장되지 않는다.
     # 승인 정보는 state.pending_approval 로 나가고, 화면은 그것도 함께 본다.
-    locale = state.get("locale") or "en"
-    pending_title = pending.get("title") or ("이 서류" if locale == "ko" else "this document")
-    approval_reply = (
-        f"{pending_title} 내용을 확인하고 발급을 진행할까요?"
-        if locale == "ko"
-        else f"Would you like to review and issue {pending_title}?"
-    )
     if pending.get("document_id"):
         return {
-            "reply": approval_reply,
+            "reply": "아래 내용을 실행할까요?",
             "ui_type": "doc_preview",
             "ui_payload": {
                 "document_id": pending["document_id"],
@@ -540,7 +530,7 @@ def approval_gate(state: AgentState) -> dict:
         }
 
     return {
-        "reply": approval_reply,
+        "reply": "아래 내용을 실행할까요?",
         "ui_type": "approval",
         "ui_payload": dict(pending),
     }

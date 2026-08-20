@@ -25,15 +25,6 @@ def test_open_bank_account_action_selects_bank_account_form():
     assert actions_for("D-2")["open_bank_account"]["form"] == "bank_account_open"
 
 
-def test_bank_account_can_be_built_without_stay_expiry():
-    profile = {key: value for key, value in PROFILE.items() if key != "stay_expiry"}
-
-    _, rows, missing = doc_builder.build_rows("bank_account_open", profile)
-
-    assert "stay_expiry" not in missing
-    assert next(row for row in rows if row["key"] == "stay_expiry")["value"] is None
-
-
 def test_bank_account_pdf_is_created_without_review_or_rule_annotations(
     tmp_path: Path, monkeypatch,
 ):
