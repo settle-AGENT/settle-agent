@@ -22,6 +22,7 @@ export const SCHEMA_VERSION = "1";
 // Spring 의 모든 보호 엔드포인트가 Bearer 토큰에서 memberId 를 꺼낸다.
 // S3 presigned PUT 에는 절대 붙이지 않는다 — 서명이 깨진다.
 const TOKEN_KEY = "settle_access_token";
+const MEMBER_KEY = "settle_member_id";
 
 export function readToken() {
   return window.localStorage.getItem(TOKEN_KEY) || "";
@@ -31,8 +32,13 @@ export function saveToken(token) {
   if (token) window.localStorage.setItem(TOKEN_KEY, token);
 }
 
+export function readMemberId() {
+  return window.localStorage.getItem(MEMBER_KEY) || "";
+}
+
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(MEMBER_KEY);
 }
 
 function authHeaders(extra) {
@@ -51,6 +57,8 @@ export class AgentError extends Error {
 }
 
 const ERROR_MESSAGE = {
+  EMAIL_ALREADY_EXISTS: "이미 가입된 이메일이에요. 로그인하거나 다른 이메일을 사용해 주세요.",
+  INVALID_CREDENTIALS: "이메일, 비밀번호 또는 패스코드를 확인해 주세요.",
   invalid_or_missing_token: "로그인이 만료됐어요. 다시 로그인해 주세요.",
   session_access_denied: "다른 계정의 세션이에요. 다시 로그인해 주세요.",
   prerequisite_missing: "먼저 완료해야 하는 과제가 있어요.",
@@ -141,25 +149,31 @@ const NATIONALITY_LABEL = {
 // 1) 외국인등록증/여권 OCR 추출
 export async function signUp({ email, password, passwordConfirm }) {
   if (MOCK) return delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" });
-  return authPost("/api/v1/auth/signup", { email, password, passwordConfirm });
+  return authPost("/api/v1/auth/signup", { email: email.trim(), password, passwordConfirm });
 }
 
 export async function login({ email, password, passcode }) {
   const payload = MOCK
     ? await delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" })
-    : await authPost("/api/v1/auth/login", { email, password, passcode });
+    : await authPost("/api/v1/auth/login", { email: email.trim(), password, passcode });
   saveToken(payload.accessToken);
+  if (payload.memberId) window.localStorage.setItem(MEMBER_KEY, payload.memberId);
   return payload;
 }
 
 async function authPost(path, body) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new AgentError("네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", { code: "network" });
+  }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || "인증 요청을 처리하지 못했어요.");
+  if (!response.ok) throw toAgentError(response.status, payload, "인증 요청을 처리하지 못했어요.");
   return payload;
 }
 

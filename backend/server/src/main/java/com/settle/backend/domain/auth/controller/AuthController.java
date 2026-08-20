@@ -31,12 +31,12 @@ public class AuthController {
 
     @PostMapping("/signup")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "회원가입", description = "이메일과 8~128자 비밀번호로 가입하고 JWT를 발급합니다.")
+    @Operation(summary = "회원가입", description = "이메일과 영문·숫자·특수문자를 포함한 8~64자 비밀번호로 가입하고 JWT를 발급합니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "회원가입 및 JWT 발급 성공"),
             @ApiResponse(responseCode = "409", description = "이미 가입된 이메일",
                     content = @Content(examples = @ExampleObject(value = """
-                            {"detail":{"error":"EMAIL_ALREADY_EXISTS","message":"이미 가입된 이메일입니다.","details":null}}
+                            {"detail":{"error":"EMAIL_ALREADY_EXISTS","message":"이미 가입된 이메일이에요. 로그인하거나 다른 이메일을 사용해 주세요.","details":null}}
                             """))),
             @ApiResponse(responseCode = "422", description = "이메일, 비밀번호 또는 비밀번호 확인 검증 실패")
     })
