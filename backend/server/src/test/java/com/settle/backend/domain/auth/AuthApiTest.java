@@ -70,6 +70,6 @@ class AuthApiTest {
                                 {"email":"user@example.com","password":"password123","passcode":"9999"}
                                 """))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+                .andExpect(jsonPath("$.detail.error").value("INVALID_CREDENTIALS"));
     }
 }

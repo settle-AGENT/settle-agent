@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -20,7 +21,9 @@ public class HttpAiDocumentClient implements AiDocumentClient {
     }
 
     @Override
-    public Map<String, Object> extract(String sessionId, byte[] image, DocumentType documentType) {
+    public ResponseEntity<Map<String, Object>> extract(
+            String sessionId, byte[] image, DocumentType documentType
+    ) {
         ByteArrayResource file = new ByteArrayResource(image) {
             @Override
             public String getFilename() {
@@ -36,8 +39,9 @@ public class HttpAiDocumentClient implements AiDocumentClient {
                 .uri("/api/profile/extract-upload")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(body)
-                .retrieve()
-                .body(new ParameterizedTypeReference<>() {
-                });
+                .exchange((request, response) -> ResponseEntity
+                        .status(response.getStatusCode())
+                        .body(response.bodyTo(new ParameterizedTypeReference<>() {
+                        })));
     }
 }

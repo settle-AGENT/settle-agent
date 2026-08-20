@@ -7,6 +7,8 @@ import com.settle.backend.domain.profile.dto.ProfileConfirmRequest;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -20,7 +22,14 @@ public class ProfileService {
         this.objectMapper = objectMapper;
     }
 
-    public ResponseEntity<Map<String, Object>> confirm(ProfileConfirmRequest request) {
+    public ResponseEntity<Map<String, Object>> confirm(
+            UUID memberId, ProfileConfirmRequest request
+    ) {
+        if (!memberId.toString().equals(request.sessionId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "session_access_denied"
+            );
+        }
         validateMessage(request.message());
         return aiProfileClient.confirm(request);
     }

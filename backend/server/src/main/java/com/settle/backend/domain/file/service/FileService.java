@@ -65,6 +65,8 @@ public class FileService {
         } catch (RuntimeException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "upload_not_completed", exception);
         }
+        upload = upload.withStatus(UploadStatus.UPLOADED);
+        uploadRepository.save(upload);
 
         if (!PNG_CONTENT_TYPE.equalsIgnoreCase(stored.contentType()) || !isPng(stored.bytes())) {
             uploadRepository.save(upload.withStatus(UploadStatus.FAILED));
