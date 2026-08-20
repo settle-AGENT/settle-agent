@@ -26,26 +26,14 @@ env:
   ECR_AI_REPOSITORY: ${{ vars.ECR_AI_REPOSITORY }}
 
 jobs:
-  build-and-push:
-    name: Build and push images
+  build-frontend:
+    name: Build and push frontend
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
-
-      - name: Validate Docker build files
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f frontend/Dockerfile
-          test -f backend/Dockerfile
-          test -f ai/Dockerfile
-          test -f compose.production.yml
-          test -f deploy/Caddyfile
-          test -f deploy/prepare-runtime-env.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
@@ -53,7 +41,81 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: github-${{ github.run_id }}-${{ github.run_attempt }}
+          role-session-name: frontend-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VITE_API_BASE_URL=/api
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  build-ai:
+    name: Build and push AI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: ai-${{ github.run_id }}-${{ github.run_attempt }}
+          mask-aws-account-id: true
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build and push AI
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./ai
+          file: ./ai/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_AI_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha,scope=ai
+          cache-to: type=gha,mode=max,scope=ai
+
+  build-backend:
+    name: Build and push backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: backend-${{ github.run_id }}-${{ github.run_attempt }}
           mask-aws-account-id: true
 
       - name: Log in to Amazon ECR
@@ -83,32 +145,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.2.0
 
-      - name: Build and push frontend
-        uses: docker/build-push-action@v7.2.0
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            VITE_API_BASE_URL=/api
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
-
-      - name: Build and push AI
-        uses: docker/build-push-action@v7.2.0
-        with:
-          context: ./ai
-          file: ./ai/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_AI_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha,scope=ai
-          cache-to: type=gha,mode=max,scope=ai
-
       - name: Build and push backend
         uses: docker/build-push-action@v7.2.0
         with:
@@ -124,7 +160,9 @@ jobs:
   deploy:
     name: Deploy to EC2 with SSM
     needs:
-      - build-and-push
+      - build-frontend
+      - build-ai
+      - build-backend
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -132,6 +170,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f compose.production.yml
+          test -f deploy/Caddyfile
+          test -f deploy/prepare-runtime-env.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
