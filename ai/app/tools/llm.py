@@ -206,20 +206,43 @@ def explain(verdict: dict, *, locale: str = "en") -> str | None:
 # ══════════════════════════════════════════════════════════
 # 4. 의도 분류 — 라우팅
 # ══════════════════════════════════════════════════════════
-_ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant app.
+_ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant app
+for foreign residents. The user writes casually, often in Korean internet
+shorthand, and may mix languages.
 
-- answer   : replying to the field the assistant just asked
-- question : asking whether something is possible / what is needed
-- action   : asking to start or do a task
-- other    : greeting, thanks, unrelated"""
+- confirm  : answering yes or no to the offer the assistant just made.
+             Only when an offer is pending. Set "yes" true or false.
+             Korean users say yes as ㅇㅇ, ㅇㅋ, ㄱㄱ, 응, 넵, 그래, 해줘, 좋아요;
+             and no as ㄴㄴ, 아니, 됐어, 나중에, 안 할래.
+             If the message is not a clear yes or no — hedging, a new question,
+             a question back — this is NOT confirm. Classify it as something
+             else. Never guess a yes.
+- menu     : asking what they can do here, or asking to see the list of tasks.
+             "뭐 할 수 있어", "메뉴", "뭐부터 해야 해", "목록 보여줘".
+- action   : asking to start or do a specific task. Put its id in action_id,
+             chosen from the available actions given. "계좌 만들고 싶어",
+             "통장 열려면", "등록증 신청할래".
+- answer   : replying to the field the assistant just asked.
+- question : asking whether something is possible, what is needed, what a rule
+             says. This is the default for anything informational.
+- other    : greeting, thanks, unrelated.
+
+Prefer question over action when the user is asking *about* a task rather than
+asking to start it. "계좌 어떻게 만들어요?" is a question; "계좌 만들어줘" is an action."""
 
 
 def classify(message: str, *, asked_field: str | None = None,
-             actions: list[str] | None = None) -> dict | None:
-    """returns {"intent": str, "action_id": str|None, "topic": str|None}"""
+             actions: list[str] | None = None,
+             offer: str | None = None) -> dict | None:
+    """returns {"intent": str, "action_id": str|None, "yes": bool|None, ...}
+
+    offer 는 직전 턴에 사용자에게 물어둔 제안의 설명이다. 이게 있어야만
+    confirm 이 성립한다 — 물어본 적 없는데 "ㅇㅇ" 을 긍정으로 읽으면 안 된다.
+    """
     return _call(
         _ROUTE_SYSTEM,
         f"Assistant just asked for: {asked_field or '(nothing)'}\n"
+        f"Pending offer awaiting yes/no: {offer or '(none)'}\n"
         f"Available actions: {actions or []}\n\nUser message: {message}",
         tool={
             "name": "classify_intent",
@@ -228,7 +251,11 @@ def classify(message: str, *, asked_field: str | None = None,
                 "type": "object",
                 "properties": {
                     "intent": {"type": "string",
-                               "enum": ["answer", "question", "action", "other"]},
+                               "enum": ["confirm", "menu", "action",
+                                        "answer", "question", "other"]},
+                    "yes": {"type": ["boolean", "null"],
+                            "description": "if intent=confirm: true for yes, "
+                                           "false for no. null if unclear."},
                     "action_id": {"type": ["string", "null"],
                                   "description": "action id if intent=action"},
                     "topic": {"type": ["string", "null"],
