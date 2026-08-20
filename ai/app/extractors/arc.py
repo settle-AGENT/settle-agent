@@ -181,6 +181,28 @@ def derive_from_arc(arc: str | None) -> dict:
     }
 
 
+# ──────────────────────────────────────────────── 서류 식별
+# parse_rules 의 규칙은 전부 위치·문맥과 무관한 패턴 매칭이다. 텍스트가 많은
+# 사진이면 영수증 번호가 등록번호로, 어딘가의 국가명이 국적으로, 대문자 두
+# 낱말이 성명으로 걸린다. 값이 원문에 있는지 보는 verify() 로는 못 막는다 —
+# 원문에서 뽑았으니 당연히 통과한다.
+#
+# 그래서 뽑기 전에 "이 서류가 등록증인가" 를 먼저 묻는다. 아래는 카드에 크게
+# 인쇄돼 OCR 이 안정적으로 읽는 표제어들이고, 다른 서류에는 나오지 않는다.
+_SIGNATURE = {
+    "arc_front": ("외국인등록증", "외국인등록번호", "RESIDENCECARD",
+                  "ALIENREGISTRATION", "REGISTRATIONNO"),
+    "arc_back":  ("체류기간", "SOJOURN", "CHANGEOFRESIDENCE",
+                  "일련번호", "SERIALNO", "안전칩", "발행국"),
+}
+
+
+def signature_hits(texts: list[str], doc_type: DocType) -> list[str]:
+    """읽힌 텍스트에서 발견된 등록증 표제어."""
+    blob = _squash(" ".join(texts))
+    return [w for w in _SIGNATURE.get(doc_type, ()) if _squash(w) in blob]
+
+
 def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
     """정규식 기반 1차 추출. LLM 없이 대부분 여기서 끝난다."""
     blob = re.sub(r"\s+", " ", " ".join(texts))
@@ -334,6 +356,14 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
         raw_texts   OCR 원문 (디버깅·감사용)
     """
     texts = clean_texts(extract_texts(call_clova(image_bytes, ext)))
+
+    # 값을 뽑기 전에 서류부터 확인한다. 여기서 막지 않으면 무관한 사진의
+    # 숫자·낱말이 그대로 프로필이 된다.
+    if not signature_hits(texts, doc_type):
+        side = "앞면" if doc_type == "arc_front" else "뒷면"
+        raise WrongDocument(
+            f"외국인등록증 {side}으로 보이지 않습니다. 등록증이 맞는지 "
+            f"확인하시고, 카드 전체가 화면에 들어오도록 다시 촬영해 주세요.")
 
     profile, confidence = parse_rules(texts, doc_type)
 
