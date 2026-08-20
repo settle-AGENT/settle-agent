@@ -19,7 +19,9 @@ TEMPLATE_DIR = BACKEND_DIR / "templates"
 OUTPUT_DIR = BACKEND_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-CONF_THRESHOLD = 0.90
+# 화면의 '확인요망' 기준과 같아야 한다 — 두 곳이 어긋나면
+# 서류에는 경고가 붙는데 화면에는 안 뜨는 일이 생긴다.
+CONF_THRESHOLD = 0.95
 
 _env = Environment(
     loader=FileSystemLoader(str(TEMPLATE_DIR)),

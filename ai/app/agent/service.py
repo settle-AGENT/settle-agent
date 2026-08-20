@@ -12,6 +12,7 @@ from typing import Any, Literal, Optional
 
 from app.agent.graph import build_graph
 from app.agent.state import new_state
+from app.nodes.doc_builder import CONF_THRESHOLD
 from app.nodes.planner import summary
 from app.nodes.profiler import profile_to_payload, public_profile
 from app.nodes.profiler import run as profiler_run
@@ -201,7 +202,8 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
                                  state.get("confidence", {}), doc_type,
                                  locale=state.get("locale") or "en")
 
-    low = [f["key"] for f in payload["fields"] if f["confidence"] < 0.90]
+    low = [f["key"] for f in payload["fields"]
+           if f["confidence"] < CONF_THRESHOLD]
     head = ("신분증을 확인했습니다." if not low else
             f"신분증을 확인했습니다. {len(low)}개 항목은 확인이 필요합니다.")
     tasks = state.get("tasks") or []
