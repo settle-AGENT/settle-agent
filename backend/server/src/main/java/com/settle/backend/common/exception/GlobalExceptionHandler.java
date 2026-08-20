@@ -1,9 +1,10 @@
 package com.settle.backend.common.exception;
 
+import com.settle.backend.common.auth.SessionAccessDeniedException;
+import com.settle.backend.common.auth.UnauthorizedException;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
 import com.settle.backend.domain.auth.exception.EmailAlreadyExistsException;
 import com.settle.backend.domain.auth.exception.InvalidCredentialsException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -29,6 +31,22 @@ public class GlobalExceptionHandler {
     ) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new ErrorResponse("INVALID_CREDENTIALS", exception.getMessage()));
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<ErrorResponse> handleUnauthorized(UnauthorizedException exception) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse(UnauthorizedException.ERROR_CODE, exception.getMessage()));
+    }
+
+    @ExceptionHandler(SessionAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleSessionAccessDenied(
+            SessionAccessDeniedException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse(
+                        SessionAccessDeniedException.ERROR_CODE, exception.getMessage()
+                ));
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
@@ -56,7 +74,7 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handleRequestValidation(
+    public ResponseEntity<ErrorResponse> handleRequestValidation(
             MethodArgumentNotValidException exception
     ) {
         List<Map<String, String>> details = exception.getBindingResult().getFieldErrors().stream()
@@ -68,22 +86,18 @@ public class GlobalExceptionHandler {
                 ))
                 .toList();
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("code", "validation_failed");
-        body.put("message", "요청 값을 확인해 주세요.");
-        body.put("details", details);
-        return ResponseEntity.unprocessableEntity().body(body);
+        return ResponseEntity.unprocessableEntity()
+                .body(new ErrorResponse("validation_failed", "요청 값을 확인해 주세요.", details));
     }
 
     @ExceptionHandler(ProfileValidationException.class)
-    public ResponseEntity<Map<String, Object>> handleProfileValidation(
+    public ResponseEntity<ErrorResponse> handleProfileValidation(
             ProfileValidationException exception
     ) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("code", "validation_failed");
-        body.put("message", exception.getMessage());
-        body.put("details", exception.getDetails());
-        return ResponseEntity.unprocessableEntity().body(body);
+        return ResponseEntity.unprocessableEntity()
+                .body(new ErrorResponse(
+                        "validation_failed", exception.getMessage(), exception.getDetails()
+                ));
     }
 
     @ExceptionHandler(FeatureNotConfiguredException.class)
@@ -92,5 +106,12 @@ public class GlobalExceptionHandler {
     ) {
         return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
                 .body(new ErrorResponse("FEATURE_NOT_CONFIGURED", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException exception) {
+        String error = exception.getReason() == null ? "internal" : exception.getReason();
+        return ResponseEntity.status(exception.getStatusCode())
+                .body(new ErrorResponse(error, error));
     }
 }

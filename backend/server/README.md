@@ -26,9 +26,23 @@ src/main/java/com/settle/backend
 
 ## 문서 처리 흐름
 
-1. `POST /api/v1/files/presigned-uploads`로 S3 업로드 URL을 발급받습니다.
-2. 클라이언트가 외국인등록증 또는 여권 사진을 S3에 직접 업로드합니다.
-3. `POST /api/v1/documents/extractions`에 object key와 문서 종류를 전달합니다.
-4. 백엔드가 AI 서버에 추출을 요청하고 반환 JSON과 원본 object key를 저장합니다.
+1. Bearer 토큰으로 `POST /api/v1/uploads`를 호출해 `uploadId`와 presigned PUT URL을 발급받습니다.
+2. 클라이언트가 URL에 `Content-Type: image/png`으로 PNG를 PUT합니다.
+3. `POST /api/v1/documents/extractions`에 `uploadId`만 전달합니다.
+4. 백엔드가 S3 Content-Type과 PNG 시그니처를 검증하고 AI OCR 응답을 중계합니다.
+
+S3 버킷 CORS에는 프론트엔드 Origin, `PUT` method, `Content-Type` header를 허용해야 합니다. 예:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-frontend.example.com"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
 
 회원 인증은 PostgreSQL과 연결되며 JWT를 발급합니다. S3·AI 서버 연동은 환경 설정이 필요합니다.

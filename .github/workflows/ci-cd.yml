@@ -39,10 +39,11 @@ jobs:
 
           echo "Branch policy passed."
 
-  ci:
-    name: CI
+  compose-check:
+    name: Compose validate
+    needs: branch-policy
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -50,18 +51,63 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate Docker Compose
+      - name: Validate local compose
         run: docker compose config --quiet
 
-      - name: Build Docker images
-        run: docker compose build
-        
+      - name: Validate production compose
+        shell: bash
+        env:
+          ECR_REGISTRY: 000000000000.dkr.ecr.ap-northeast-2.amazonaws.com
+          IMAGE_TAG: ci
+          PUBLIC_DOMAIN: ci.example.invalid
+        run: |
+          set -euo pipefail
+
+          # env_file 참조 때문에 파일이 존재해야 검증이 통과한다
+          touch .env.secrets
+
+          docker compose --file compose.production.yml config --quiet
+
+  frontend:
+    name: Frontend
+    needs: branch-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Build frontend Docker image
         run: |
           docker build \
             --file frontend/Dockerfile \
             --tag settle-frontend:ci \
             frontend
+
+  backend:
+    name: Backend
+    needs: branch-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            backend/server/*.gradle*
+            backend/server/gradle/wrapper/gradle-wrapper.properties
 
       - name: Test Spring backend
         working-directory: backend/server
@@ -74,12 +120,31 @@ jobs:
             --tag settle-backend:ci \
             backend
 
+  ai:
+    name: AI
+    needs: branch-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Disk space before build
+        run: df -h /
+
       - name: Build AI Docker image
         run: |
           docker build \
             --file ai/Dockerfile \
             --tag settle-ai:ci \
             ai
+
+      - name: Disk space after build
+        if: always()
+        run: df -h /
 
       - name: Smoke test AI Docker image
         shell: bash
@@ -97,11 +162,3 @@ jobs:
           done
 
           exit 1
-
-      # 실제 테스트 명령이 정해지면 아래에 추가
-      # 예시 구조:
-      # - name: Backend test
-      #   run: docker compose run --rm backend <백엔드 테스트 명령>
-      #
-      # - name: Frontend test
-      #   run: docker compose run --rm frontend <프론트엔드 테스트 명령>

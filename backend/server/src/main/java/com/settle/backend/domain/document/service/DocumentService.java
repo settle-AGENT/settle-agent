@@ -5,6 +5,8 @@ import com.settle.backend.domain.document.dto.ExtractDocumentRequest;
 import com.settle.backend.domain.file.service.FileService;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -17,15 +19,21 @@ public class DocumentService {
         this.aiDocumentClient = aiDocumentClient;
     }
 
-    public Map<String, Object> extractAndSave(UUID memberId, ExtractDocumentRequest request) {
+    public ResponseEntity<Map<String, Object>> extractAndSave(
+            UUID memberId, ExtractDocumentRequest request
+    ) {
         FileService.PreparedUpload prepared = fileService.prepareForExtraction(memberId, request.uploadId());
         try {
-            Map<String, Object> response = aiDocumentClient.extract(
+            ResponseEntity<Map<String, Object>> response = aiDocumentClient.extract(
                     memberId.toString(),
                     prepared.bytes(),
                     prepared.ticket().documentType()
             );
-            fileService.markDone(prepared.ticket());
+            if (response.getStatusCode().is2xxSuccessful()) {
+                fileService.markDone(prepared.ticket());
+                return ResponseEntity.status(HttpStatus.CREATED).body(response.getBody());
+            }
+            fileService.markFailed(prepared.ticket());
             return response;
         } catch (RuntimeException exception) {
             fileService.markFailed(prepared.ticket());

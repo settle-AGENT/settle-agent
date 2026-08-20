@@ -48,6 +48,19 @@ class FileServiceTest {
                 .hasMessageContaining("415 UNSUPPORTED_MEDIA_TYPE");
     }
 
+    @Test
+    void rejectsAnotherMembersUploadAsNotFound() {
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.arc_back)
+        );
+
+        assertThatThrownBy(() -> service.prepareForExtraction(UUID.randomUUID(), upload.uploadId()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+    }
+
     private static final class FakeS3 implements S3FileGateway {
         private final StoredFile storedFile;
 
@@ -58,6 +71,10 @@ class FileServiceTest {
         @Override
         public String createPngUploadUrl(String objectKey, Duration duration) {
             return "https://s3.example.test/upload";
+        }
+
+        @Override
+        public void uploadPdf(String objectKey, byte[] bytes) {
         }
 
         @Override
