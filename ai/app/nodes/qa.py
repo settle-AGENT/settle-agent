@@ -1,7 +1,12 @@
-"""법령 질의응답 — 하이브리드 검색 후 LLM이 검색된 조문 안에서만 답한다.
+"""법령·안내매뉴얼 질의응답 — 하이브리드 검색 후 LLM이 검색된 근거 안에서만 답한다.
+
+코퍼스는 둘이다.
+  rules/corpus.json  법령 조문 — 무엇이 규정인지
+  rules/manual.json  출입국 안내매뉴얼 — 체류자격별로 무엇을 어떻게 내는지
 
 벡터(pgvector)가 의미를, BM25가 조문 번호·고유 표현을 잡는다.
-두 순위를 RRF로 합친다. DB나 모델이 없으면 BM25 단독으로 동작한다.
+두 순위를 RRF로 합친 뒤, 사용자의 체류자격에 맞는 매뉴얼 조각을 끌어올린다.
+DB나 모델이 없으면 BM25 단독으로 동작한다.
 """
 from __future__ import annotations
 
@@ -15,7 +20,9 @@ from pathlib import Path
 
 from app.tools import embed, llm
 
-CORPUS = Path(__file__).resolve().parents[2] / "rules" / "corpus.json"
+_RULES = Path(__file__).resolve().parents[2] / "rules"
+CORPUS = _RULES / "corpus.json"
+MANUAL = _RULES / "manual.json"
 
 ALIAS = {
     "이사": "체류지 변경신고", "전입": "체류지 변경신고",
@@ -24,12 +31,20 @@ ALIAS = {
     "통장": "금융거래 실명 예금", "등록증": "외국인등록증", "비자": "체류자격",
     "연장": "체류기간 연장허가", "송금": "외국환 지급", "과태료": "과태료 벌칙",
     "신분증": "실지명의 실명확인", "유학생": "외국인유학생",
+    "서류": "제출서류", "준비물": "제출서류", "수수료": "심사수수료",
+    "학교": "학교 변경 재학증명서", "휴학": "체류기간 연장 학업 중단",
+    "졸업": "유학활동 종료 체류기간", "이직": "근무처의 변경 추가",
+    "재입국": "재입국허가", "결핵": "결핵진단서",
 }
 
 _STRIP = re.compile(r"[^가-힣A-Za-z0-9]")
+_HANGUL = re.compile(r"[가-힣]")
 _RRF_K = 60          # Reciprocal Rank Fusion 상수
-_POOL = 8            # 각 검색기가 내놓는 후보 수
-_TOP = 4             # LLM에 넘길 조문 수
+_POOL = 12           # 각 검색기가 내놓는 후보 수
+_TOP = 5             # LLM에 넘길 근거 수
+
+_MATCH_VISA = 1.6    # 사용자 자격의 매뉴얼 조각을 끌어올린다
+_OTHER_VISA = 0.45   # 다른 자격 전용 조각은 눌러둔다 — 오답의 주된 원인
 
 
 # ────────────────────────────────────────────── 코퍼스 · BM25
@@ -40,9 +55,12 @@ def _grams(s: str) -> list[str]:
 
 @lru_cache(maxsize=1)
 def _index():
-    if not CORPUS.exists():
+    docs: list[dict] = []
+    for path in (CORPUS, MANUAL):
+        if path.exists():
+            docs.extend(json.loads(path.read_text(encoding="utf-8")))
+    if not docs:
         return [], [], [], 1.0, Counter(), 0
-    docs = json.loads(CORPUS.read_text(encoding="utf-8"))
     toks = [Counter(_grams(d["heading"] * 3 + d["text"])) for d in docs]
     lens = [sum(c.values()) for c in toks]
     avg = (sum(lens) / len(lens)) if lens else 1.0
@@ -56,15 +74,32 @@ def available() -> bool:
     return _index()[5] > 0
 
 
-def _expand(q: str) -> str:
-    return q + " " + " ".join(v for k, v in ALIAS.items() if k in q)
+def _korean(q: str) -> str:
+    """영문 질문은 한국어 검색어로 옮긴 뒤 검색한다.
+
+    코퍼스가 전부 한국어라 그냥 두면 양쪽 다 무너진다 — BM25는 한글 음절
+    바이그램이라 영문에서 신호를 못 내고, 벡터도 한국어 조문과는 거리가 멀다.
+    번역이 안 되면(LLM 미설정 등) 원문으로 검색한다. 다국어 임베딩이라
+    아주 못 찾지는 않는다.
+    """
+    if _HANGUL.search(q) or not llm.available():
+        return q
+    return llm.translate_query(q) or q
+
+
+def _expand(q: str, visa: str | None = None) -> str:
+    """줄임말을 법령 용어로 펴고, 아는 체류자격은 질의에 실어 보낸다."""
+    out = q + " " + " ".join(v for k, v in ALIAS.items() if k in q)
+    if visa:
+        out += " " + visa + " " + visa.replace("-", "")
+    return out
 
 
 def _bm25(query: str, k: int, k1: float = 1.4, b: float = 0.75) -> list[str]:
     docs, toks, lens, avg, df, n = _index()
     if not n:
         return []
-    qg = Counter(_grams(_expand(query)))
+    qg = Counter(_grams(query))
     scored = []
     for i, c in enumerate(toks):
         s = 0.0
@@ -98,14 +133,27 @@ def _vector(query: str, k: int) -> list[str]:
         return []
 
 # ────────────────────────────────────────────── 융합
-def search(query: str, k: int = _TOP) -> list[dict]:
+def _visa_weight(doc: dict, visa: str | None) -> float:
+    """매뉴얼은 체류자격별로 쓰여 있다. 남의 자격 설명은 그 사람에겐 오답이다."""
+    tags = doc.get("visa") or []
+    if not visa or not tags:                       # 법령·공통사항은 누구에게나 해당
+        return 1.0
+    base = visa.split("-")[:2]                     # D-2-1 소지자에게 D-2 장은 맞는 설명
+    for t in tags:
+        if t == visa or t.split("-")[:2] == base:
+            return _MATCH_VISA
+    return _OTHER_VISA
+
+
+def search(query: str, k: int = _TOP, *, visa: str | None = None) -> list[dict]:
     docs = _index()[0]
     if not docs:
         return []
     by_id = {d["id"]: d for d in docs}
 
+    expanded = _expand(_korean(query), visa)
     ranks = defaultdict(float)
-    used = {"vector": _vector(query, _POOL), "bm25": _bm25(query, _POOL)}
+    used = {"vector": _vector(expanded, _POOL), "bm25": _bm25(expanded, _POOL)}
     for names in used.values():
         for pos, doc_id in enumerate(names):
             ranks[doc_id] += 1.0 / (_RRF_K + pos + 1)
@@ -113,7 +161,8 @@ def search(query: str, k: int = _TOP) -> list[dict]:
     if not ranks:
         return []
 
-    top = sorted(ranks.items(), key=lambda kv: kv[1], reverse=True)[:k]
+    scored = {i: s * _visa_weight(by_id[i], visa) for i, s in ranks.items()}
+    top = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)[:k]
     out = []
     for doc_id, score in top:
         d = dict(by_id[doc_id])
@@ -145,7 +194,8 @@ def answer(question: str, *, profile: dict, tasks: list[dict],
     if not llm.available():
         return None
 
-    hits = search(_retrieval_query(question, history))
+    hits = search(_retrieval_query(question, history),
+                  visa=profile.get("visa_type"))
 
     situation = {
         "visa_type": profile.get("visa_type"),

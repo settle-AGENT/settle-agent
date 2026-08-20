@@ -18,7 +18,7 @@ from typing import Any
 MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 MAX_TOKENS = 512
 
-LANG = {"ko": "Korean", "en": "English", "vi": "Vietnamese"}
+LANG = {"ko": "Korean", "en": "English"}
 
 
 @lru_cache(maxsize=1)
@@ -255,16 +255,50 @@ def translate(text: str, locale: str) -> str:
                 max_tokens=400)
     return out or text
 
+
+# 검색어 번역은 방향이 반대다 — 사용자 말을 코퍼스의 말로 옮긴다.
+# 코퍼스는 전부 한국어 행정 용어라, 직역("part-time job"→"시간제 일자리")으로는
+# 안 걸린다. 문서에 실제로 쓰인 낱말("시간제취업")로 갈아끼워야 검색이 된다.
+_QUERY_SYSTEM = """You rewrite a foreign resident's question into a Korean search
+query for Korean immigration and banking documents.
+
+- Output Korean only. One line. No quotes, no explanation, no answer.
+- Use the official wording that appears in 출입국관리법 and the 외국인체류 안내매뉴얼,
+  not a literal translation:
+    part-time job, work while studying  → 시간제취업 체류자격 외 활동
+    extend my visa / stay              → 체류기간 연장허가
+    move house, change address         → 체류지 변경신고
+    change employer, change jobs       → 근무처의 변경 추가
+    leave and come back                → 재입국허가
+    ARC, residence card                → 외국인등록증
+    change my visa type                → 체류자격 변경허가
+    documents I need, what to bring    → 제출서류
+- Keep visa codes, exam names and numbers exactly as written (D-2, E-9, TOPIK).
+- Add the one or two Korean terms a clerk would use for the same thing, nothing more."""
+
+
+@lru_cache(maxsize=256)
+def translate_query(question: str) -> str:
+    """영문 질문 → 한국어 검색어. 실패하면 빈 문자열(호출부가 원문을 쓴다)."""
+    out = _call(_QUERY_SYSTEM, question, max_tokens=120)
+    return (out or "").strip()
+
 # ══════════════════════════════════════════════════════════
 # 6. 법령 질의응답 — 주어진 조문 안에서만 답한다
 # ══════════════════════════════════════════════════════════
 _QA_SYSTEM = """You help foreign residents in Korea with immigration and banking
 procedures. You are mid-conversation with one specific person.
 
-Two kinds of input, with different authority:
-1. STATUTE EXCERPTS — the only source for what the law says. Never state a legal
-   rule, article number, deadline or penalty that is not in them. If they do not
-   cover the question, set covered=false and write nothing.
+Three kinds of input, with different authority:
+1. SOURCE EXCERPTS — the only source for what the rules are. Two kinds appear:
+   - statutes (출입국관리법 etc.): what the law requires.
+   - the Ministry of Justice residence manual (외국인체류 안내매뉴얼), which lists,
+     per visa type, who qualifies, which documents to submit, fees and time limits.
+     It is the right source for "what do I need to bring / am I eligible" questions.
+   Never state a rule, article number, document list, deadline or penalty that is
+   not in them. If they do not cover the question, set covered=false and write
+   nothing. A manual excerpt written for a different visa type does not apply to
+   this person — do not answer from it.
 2. THIS USER'S CASE — visa type, deadlines, which office, which documents to bring.
    This comes from our own rule engine and is authoritative. Use it. Answer for
    THIS person, not in general. "It depends on your visa" is a failure when their
@@ -302,7 +336,7 @@ def answer_question(question: str, *, passages: list[dict], situation: dict,
     return _call(
         _QA_SYSTEM,
         f"Conversation so far:\n{turns}\n\n"
-        f"Statute excerpts:\n{body}\n\n"
+        f"Source excerpts:\n{body}\n\n"
         f"This user's case: {json.dumps(situation, ensure_ascii=False)}\n"
         f"Language: {locale}\n\n"
         f"Their question: {question}",

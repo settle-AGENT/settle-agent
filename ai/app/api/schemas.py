@@ -60,7 +60,7 @@ class PendingApproval(BaseModel):
 
 class SessionState(BaseModel):
     session_id: str
-    locale: str = "ko"              # ko | en | vi
+    locale: str = "ko"              # ko | en
     profile: dict[str, Any] = {}
     tasks: list[Task] = []
     documents: list[DocRef] = []

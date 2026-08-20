@@ -71,7 +71,7 @@ class LedgerEntry(TypedDict, total=False):
 class AgentState(TypedDict, total=False):
     # ── 식별 ──────────────────────────────────────────────
     session_id: str
-    locale: str                                   # ko | en | vi
+    locale: str                                   # ko | en
 
     # ── 사용자 (본체 1) ───────────────────────────────────
     profile: Annotated[dict[str, Any], merge_dict]        # 평문 저장
