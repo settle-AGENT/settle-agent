@@ -1,5 +1,5 @@
 from app.agent.graph import ACTION_FIELDS, doc_builder
-from app.agent.service import _document_intent
+from app.agent.service import _document_intent, _normalize_phone_kr
 from app.nodes.planner import build_task_graph
 
 
@@ -32,6 +32,32 @@ def test_mobile_subscription_completes_after_phone_is_saved():
     )
     task = next(task for task in tasks if task["id"] == "mobile_subscription")
     assert task["status"] == "done"
+
+
+def test_korean_mobile_number_requires_010_and_eleven_digits():
+    assert _normalize_phone_kr("01012345678") == "010-1234-5678"
+    assert _normalize_phone_kr("010-1234-5678") == "010-1234-5678"
+    assert _normalize_phone_kr("053-945-345") is None
+    assert _normalize_phone_kr("011-1234-5678") is None
+    assert _normalize_phone_kr("010-123-5678") is None
+
+
+def test_document_form_is_not_completed_by_uploaded_identity_fields():
+    tasks = build_task_graph(
+        {
+            "visa_type": "D-2",
+            "arc_no": "990101-2345678",
+            "passport_no": "M12345678",
+        },
+        completed=set(),
+        locale="ko",
+    )
+
+    registration = next(task for task in tasks if task["id"] == "alien_registration")
+    bank = next(task for task in tasks if task["id"] == "open_bank_account")
+
+    assert registration["status"] == "available"
+    assert bank["status"] == "locked"
 
 
 def test_supported_document_questions_route_to_document_actions():
