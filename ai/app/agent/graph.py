@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -15,9 +16,9 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
 from app.nodes import qa
-from app.nodes.planner import build_task_graph, summary
+from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
 from app.nodes.doc_builder import DocumentIncomplete, render
-from app.nodes.profiler import profile_to_payload
+from app.nodes.profiler import label_of as _label_of
 from app.rules.loader import actions_for, evidence_labels
 from app.tools import llm
 
@@ -31,51 +32,93 @@ def _now() -> str:
 # ──────────────────────────────────────────────────────────
 # 슬롯 필링 질문 정의 (mappings 완성 전까지 여기서 관리)
 # ──────────────────────────────────────────────────────────
+# label / hint / options 는 {ko, en}. LLM 이 문장을 만들어 주면 label·hint 는
+# 덮이지만 options 는 LLM 을 타지 않으므로 여기 값이 그대로 화면에 나간다.
 QUESTIONS: dict[str, dict] = {
     "birth_date": {
-        "label": "What is your date of birth?",
+        "label": {"ko": "생년월일이 어떻게 되시나요?",
+                  "en": "What is your date of birth?"},
         "input_type": "text",
         "options": [],
-        "hint": "YYYY-MM-DD",
+        "hint": {"ko": "YYYY-MM-DD", "en": "YYYY-MM-DD"},
     },
     "entry_date": {
-        "label": "When did you enter Korea?",
+        "label": {"ko": "한국에 언제 입국하셨나요?",
+                  "en": "When did you enter Korea?"},
         "input_type": "text",
         "options": [],
-        "hint": "YYYY-MM-DD — 여권 입국심사인에 찍혀 있습니다",
+        "hint": {"ko": "YYYY-MM-DD — 여권 입국심사인에 찍혀 있습니다",
+                 "en": "YYYY-MM-DD — stamped in your passport at entry"},
     },
     "org_name": {
-        "label": "Which school are you enrolled in?",
+        "label": {"ko": "어느 학교에 재학 중이신가요?",
+                  "en": "Which school are you enrolled in?"},
         "input_type": "text",
         "options": [],
-        "hint": "As written on your enrollment certificate",
+        "hint": {"ko": "재학증명서에 적힌 이름 그대로 적어주세요",
+                 "en": "As written on your enrollment certificate"},
     },
     "phone_kr": {
-        "label": "What is your phone number in Korea?",
+        "label": {"ko": "한국에서 쓰시는 전화번호를 알려주세요.",
+                  "en": "What is your phone number in Korea?"},
         "input_type": "text",
         "options": [],
     },
     "purpose": {
-        "label": "What will you use this account for?",
+        "label": {"ko": "이 계좌를 어떤 용도로 쓰실 건가요?",
+                  "en": "What will you use this account for?"},
         "input_type": "select",
         "options": [
-            {"value": "living_expense", "label": "Living expenses"},
-            {"value": "tuition", "label": "Tuition"},
-            {"value": "salary", "label": "Salary"},
-            {"value": "remittance", "label": "Remittance"},
+            {"value": "living_expense",
+             "label": {"ko": "생활비", "en": "Living expenses"}},
+            {"value": "tuition", "label": {"ko": "학비", "en": "Tuition"}},
+            {"value": "salary", "label": {"ko": "급여", "en": "Salary"}},
+            {"value": "remittance", "label": {"ko": "송금", "en": "Remittance"}},
         ],
     },
     "income_source": {
-        "label": "Where does your money come from?",
+        "label": {"ko": "자금은 어디에서 나오나요?",
+                  "en": "Where does your money come from?"},
         "input_type": "select",
         "options": [
-            {"value": "scholarship", "label": "Scholarship"},
-            {"value": "family_support", "label": "Family support"},
-            {"value": "part_time", "label": "Part-time job"},
-            {"value": "savings", "label": "Savings"},
+            {"value": "scholarship", "label": {"ko": "장학금", "en": "Scholarship"}},
+            {"value": "family_support",
+             "label": {"ko": "가족 지원", "en": "Family support"}},
+            {"value": "part_time", "label": {"ko": "아르바이트", "en": "Part-time job"}},
+            {"value": "savings", "label": {"ko": "예금·저축", "en": "Savings"}},
         ],
     },
 }
+
+
+def _text(value, locale: str) -> str | None:
+    """{ko, en} 이면 locale 을 고르고, 평문이면 그대로 둔다."""
+    if isinstance(value, dict):
+        return value.get(locale) or value.get("en")
+    return value
+
+
+def _options(opts: list[dict], locale: str) -> list[dict]:
+    """value 는 기계가 읽으므로 그대로, label 만 고른다."""
+    return [{"value": o["value"], "label": _text(o["label"], locale)} for o in opts]
+
+
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _written_locale(text: str, locale: str) -> str | None:
+    """LLM 이 실제로 어느 언어로 썼는지. reply_locale 에 그대로 넣는다.
+
+    LLM 은 요청한 언어가 아니라 **질문의 언어**를 따라가는 일이 있다.
+    locale=en 인데 한국어로 답한 것을 en 이라고 찍으면 service._localized 가
+    번역을 건너뛰어 영어 사용자에게 한국어가 그대로 나간다. 실제 언어를 보고
+    어긋나면 None 을 돌려 출구 번역이 살아나게 한다.
+    """
+    if not text:
+        return None
+    if locale == "en" and _HANGUL.search(text):
+        return None                       # 한국어로 썼다 → 출구에서 번역한다
+    return locale
 
 # 액션별 필수 필드 (D2에 mappings/*.yaml 로 이관)
 ACTION_FIELDS: dict[str, list[str]] = {
@@ -86,19 +129,26 @@ ACTION_FIELDS: dict[str, list[str]] = {
                           "purpose", "income_source"],
 }
 
-ACTION_TITLES: dict[str, str] = {
-    "alien_registration": "외국인등록 신청서 제출",
-    "residence_change": "체류지 변경신고 제출",
-    "work_activity": "체류자격외활동허가 신청서 제출",
-    "open_bank_account": "계좌개설 신청서 제출",
+ACTION_TITLES: dict[str, dict] = {
+    "alien_registration": {"ko": "외국인등록 신청서 제출",
+                           "en": "Submit Alien Registration application"},
+    "residence_change": {"ko": "체류지 변경신고 제출",
+                         "en": "Submit Change of Residence report"},
+    "work_activity": {"ko": "체류자격외활동허가 신청서 제출",
+                      "en": "Submit Activity Permit application"},
+    "open_bank_account": {"ko": "계좌개설 신청서 제출",
+                          "en": "Submit account opening application"},
 }
 
-AGENCY_LABEL: dict[str, str] = {
-    "immigration": "출입국·외국인청",
-    "bank": "은행 영업점",
-    "telecom": "통신사 대리점",
-    "immigration_or_community_center": "출입국·외국인청 또는 주민센터",
+# 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
+SUMMARY_LABEL: dict[str, dict] = {
+    "agency": {"ko": "제출처", "en": "Submit to"},
+    "docs": {"ko": "지참 서류", "en": "Bring with you"},
 }
+
+
+def _title(action: str, locale: str) -> str:
+    return _text(ACTION_TITLES.get(action), locale) or action
 
 # 답변 뒤에 붙는 근거 표시. 답변 본문은 이미 사용자 언어라 통째로 번역하지 않는다.
 CITE_LABEL: dict[str, str] = {"ko": "근거", "en": "Source"}
@@ -119,6 +169,7 @@ def planner(state: AgentState) -> dict:
         profile,
         completed=set(state.get("completed", [])),
         in_progress=set(state.get("in_progress", [])),
+        locale=state.get("locale") or "en",
     )
     return {"tasks": tasks, "reply_locale": None}
 
@@ -174,7 +225,9 @@ def slot_filler(state: AgentState) -> dict:
     q = QUESTIONS.get(field, {"label": field, "input_type": "text", "options": []})
     locale = state.get("locale", "en")
 
-    label, hint = q["label"], q.get("hint")
+    # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
+    label = _text(q["label"], locale)
+    hint = _text(q.get("hint"), locale)
     lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
     written_locale = None
 
@@ -182,7 +235,7 @@ def slot_filler(state: AgentState) -> dict:
     if llm.available():
         written = llm.ask_field(
             field,
-            label=q["label"],
+            label=_text(q["label"], "en"),      # 필드 뜻 설명용 — 프롬프트는 영어다
             locale=locale,
             context=state.get("profile", {}),
             remaining=len(missing),
@@ -191,7 +244,7 @@ def slot_filler(state: AgentState) -> dict:
             label = written["question"]
             hint = written.get("hint") or hint
             lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
-            written_locale = locale       # 이미 사용자 언어다 — 다시 번역하지 않는다
+            written_locale = _written_locale(label, locale)
 
     return {
         "missing_fields": missing,
@@ -203,7 +256,7 @@ def slot_filler(state: AgentState) -> dict:
             "field": field,
             "label": label,
             "input_type": q["input_type"],
-            "options": q.get("options", []),
+            "options": _options(q.get("options", []), locale),
             "hint": hint,
         },
     }
@@ -232,6 +285,7 @@ def doc_builder(state: AgentState) -> dict:
             required_docs=spec.get("required_docs", []),
             account_type=spec.get("account_type", "limited"),
             doc_id=f"{state['session_id']}-{action}",
+            locale=state.get("locale") or "en",
         )
     except DocumentIncomplete as exc:
         labels = {
@@ -247,6 +301,17 @@ def doc_builder(state: AgentState) -> dict:
             "ui_payload": {},
         }
 
+    # PDF 가 안 만들어졌는데 pdf_url 을 내보내면 백엔드는 404 를 받는다.
+    # render() 는 실패를 삼키고 pdf_path=None 으로 돌려주므로 여기서 걸러낸다.
+    # 원인은 대개 배포 환경에 WeasyPrint 의 네이티브 의존성이 없는 것이다.
+    if not result.get("pdf_path"):
+        return {
+            "reply": "서류 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            "ui_type": "none",
+            "ui_payload": {},
+            "pending_approval": None,
+        }
+
     doc = {
         "id": result["document_id"],
         "title": result["title"],
@@ -256,23 +321,29 @@ def doc_builder(state: AgentState) -> dict:
         "created_at": _now(),
     }
 
-    warnings = [f"{k} 값을 한 번 확인해주세요" for k in result["low_confidence"]]
+    locale = state.get("locale") or "en"
+    warn_tpl = ("{} 값을 한 번 확인해주세요" if locale == "ko"
+                else "Please double-check {}")
+    warnings = [warn_tpl.format(_label_of(k, locale))
+                for k in result["low_confidence"]]
 
-    from app.nodes.doc_builder import DOC_LABELS
-    docs = [DOC_LABELS.get(d, d) for d in spec.get("required_docs", [])]
-    agency = AGENCY_LABEL.get(spec.get("agency", ""), spec.get("agency", ""))
+    docs = [_pick(DOC_LABEL, d, locale, d) for d in spec.get("required_docs", [])]
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), locale,
+                   spec.get("agency", ""))
 
-    summary_lines = [f"{ACTION_TITLES.get(action, action)}"]
+    summary_lines = [_title(action, locale)]
     if agency:
-        summary_lines.append(f"제출처 · {agency}")
+        summary_lines.append(f"{_text(SUMMARY_LABEL['agency'], locale)} · {agency}")
     if docs:
-        summary_lines.append("지참 서류 · " + ", ".join(docs))
+        summary_lines.append(f"{_text(SUMMARY_LABEL['docs'], locale)} · "
+                             + ", ".join(docs))
 
     pending = {
         "action_id": action,
-        "title": ACTION_TITLES.get(action, action),
+        "title": _title(action, locale),
         "summary": summary_lines,
         "document_id": doc["id"],
+        "doc_title": doc["title"],              # 서류 이름 — 액션 제목(title)과 다르다
         "preview_url": doc["preview_url"],      # 승인 화면에서 서류를 바로 본다
         "pdf_url": doc["pdf_url"],
         "warnings": warnings,
@@ -335,6 +406,23 @@ def approval_gate(state: AgentState) -> dict:
     if decision == "approve" or risk == "L1":
         return {}                       # executor 로 진행
 
+    # 서류가 만들어졌으면 화면은 서류 미리보기를 유지한다.
+    # 백엔드가 ui.type == "doc_preview" 일 때만 PDF 를 내려받아 저장하므로,
+    # 여기서 approval 로 덮으면 PDF 가 영영 저장되지 않는다.
+    # 승인 정보는 state.pending_approval 로 나가고, 화면은 그것도 함께 본다.
+    if pending.get("document_id"):
+        return {
+            "reply": "아래 내용을 실행할까요?",
+            "ui_type": "doc_preview",
+            "ui_payload": {
+                "document_id": pending["document_id"],
+                "title": pending.get("doc_title") or pending.get("title", ""),
+                "preview_url": pending.get("preview_url", ""),
+                "pdf_url": pending.get("pdf_url", ""),
+                "warnings": pending.get("warnings", []),
+            },
+        }
+
     return {
         "reply": "아래 내용을 실행할까요?",
         "ui_type": "approval",
@@ -363,7 +451,8 @@ def executor(state: AgentState) -> dict:
     # 실제 기관 접수는 제휴 시 기관 API 호출로 대체된다.
     # 지금은 아무것도 제출하지 않는다 — 접수번호를 만들어내지 않는 이유다.
     spec = actions_for(state.get("profile", {}).get("visa_type")).get(action, {})
-    agency = AGENCY_LABEL.get(spec.get("agency", ""), "담당 기관")
+    # 이 노드의 문구는 reply 로만 나간다 — 한국어로 쓰고 출구에서 번역한다.
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), "ko", "담당 기관")
 
     doc = next((d for d in reversed(state.get("documents", []))
                 if d.get("action_id") == action), None)
@@ -384,7 +473,7 @@ def executor(state: AgentState) -> dict:
         "result": result,
     }
 
-    lines = [f"{ACTION_TITLES.get(action, action)} 작성이 끝났습니다.",
+    lines = [f"{_title(action, 'ko')} 작성이 끝났습니다.",
              f"{agency}에 방문해 본인확인 후 제출하시면 됩니다."]
     if task:
         if task.get("required_docs"):
@@ -429,8 +518,9 @@ def explainer(state: AgentState) -> dict:
             if got["cites"]:
                 reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
                          + " / ".join(got["cites"])
-            return {"reply": reply, "reply_locale": locale, "ui_type": "none",
-                    "last_qa": last, "ask": None}
+            return {"reply": reply,
+                    "reply_locale": _written_locale(got["reply"], locale),
+                    "ui_type": "none", "last_qa": last, "ask": None}
         base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
                 "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
         return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
@@ -456,7 +546,9 @@ def explainer(state: AgentState) -> dict:
                                if nxt else None),
         }, locale=locale)
         if spoken:
-            return {"reply": spoken, "reply_locale": locale, "ui_type": "none"}
+            return {"reply": spoken,
+                    "reply_locale": _written_locale(spoken, locale),
+                    "ui_type": "none"}
 
     return {"reply": base, "ui_type": "none"}
 

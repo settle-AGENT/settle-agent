@@ -193,7 +193,8 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
 
     # 누적된 전체 프로필 기준으로 확인 카드를 다시 만든다
     payload = profile_to_payload(state.get("profile", {}),
-                                 state.get("confidence", {}), doc_type)
+                                 state.get("confidence", {}), doc_type,
+                                 locale=state.get("locale") or "en")
 
     low = [f["key"] for f in payload["fields"] if f["confidence"] < 0.90]
     head = ("신분증을 확인했습니다." if not low else
@@ -290,7 +291,52 @@ def start_action(session_id: str, action_id: str) -> dict:
     return _response(state)
 
 
+def preview_action(session_id: str, action_id: str) -> dict:
+    """서류를 생성하고 승인 대기 상태로 만든다.
+
+    start_action 과 나뉘어 있다 — start 는 액션을 열고 부족한 값을 묻는 단계,
+    preview 는 값이 다 모인 뒤 실제로 서류를 만드는 단계다. 백엔드는 이 응답의
+    ui.type == "doc_preview" 를 보고 PDF 를 내려받아 저장한다.
+
+    아직 답하지 않은 필드가 남아 있으면 서류를 만들지 않고 그 질문을 돌려준다.
+    이때 ui.type 은 "question" 이므로 백엔드는 저장 단계로 넘어가지 않는다.
+    """
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    task = next((t for t in snap.get("tasks", []) if t["id"] == action_id), None)
+
+    if task and task["status"] == "locked":
+        raise PrerequisiteMissing(action_id, task.get("blocked_by", []),
+                                  task.get("prereq", []))
+
+    # 이미 다른 액션이 승인을 기다리고 있으면 그래프가 그쪽 게이트로 빠진다.
+    # 요청한 액션의 서류를 만들러 왔으므로 대기 중인 것을 비우고 다시 세운다.
+    extra: dict[str, Any] = {
+        "current_action": action_id,
+        "in_progress": [action_id],
+    }
+    pending = snap.get("pending_approval") or {}
+    if pending and pending.get("action_id") != action_id:
+        extra["pending_approval"] = None
+        extra["approval_decision"] = None
+
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    return _response(state)
+
+
 def approve(session_id: str, action_id: str, approved: bool = True) -> dict:
+    """승인은 대기 중인 바로 그 액션에만 적용된다.
+
+    path 의 action_id 를 검증하지 않으면 A 를 승인한 요청으로 B 가 실행된다.
+    승인 게이트가 "무엇을" 승인했는지 확인하지 않으면 게이트가 아니다.
+    """
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    pending = snap.get("pending_approval") or {}
+
+    if not pending:
+        raise NothingToApprove(action_id)
+    if pending.get("action_id") != action_id:
+        raise ApprovalMismatch(action_id, pending.get("action_id"))
+
     state = _graph().invoke(_patch(session_id, {
         "approval_decision": "approve" if approved else "reject",
     }), _cfg(session_id))
@@ -311,6 +357,37 @@ def get_state(session_id: str) -> dict:
 # ──────────────────────────────────────────────────────────
 # 예외
 # ──────────────────────────────────────────────────────────
+class NothingToApprove(Exception):
+    """승인 대기 중인 액션이 없다. 이미 처리됐거나 순서가 어긋났다."""
+
+    def __init__(self, action_id: str):
+        self.action_id = action_id
+        super().__init__(f"nothing pending approval: {action_id}")
+
+    def detail(self) -> dict:
+        return {
+            "error": "validation_failed",
+            "message": "승인을 기다리는 작업이 없습니다. 화면을 새로고침해주세요.",
+            "details": {"action_id": self.action_id},
+        }
+
+
+class ApprovalMismatch(Exception):
+    """승인 요청의 액션과 대기 중인 액션이 다르다."""
+
+    def __init__(self, requested: str, pending: str | None):
+        self.requested = requested
+        self.pending = pending
+        super().__init__(f"approval mismatch: requested={requested} pending={pending}")
+
+    def detail(self) -> dict:
+        return {
+            "error": "validation_failed",
+            "message": "승인 대상이 화면과 다릅니다. 화면을 새로고침해주세요.",
+            "details": {"requested": self.requested, "pending": self.pending},
+        }
+
+
 class PrerequisiteMissing(Exception):
     def __init__(self, action_id: str, blocked_by: list[str], prereq: list[str]):
         self.action_id = action_id

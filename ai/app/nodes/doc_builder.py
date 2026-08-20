@@ -174,6 +174,7 @@ def render(form: str, profile: dict, *,
            required_docs: list[str] | None = None,
            account_type: str = "limited",
            doc_id: str | None = None,
+           locale: str = "en",
            strict: bool = True) -> dict:
     """서류를 생성한다.
 
@@ -219,7 +220,7 @@ def render(form: str, profile: dict, *,
 
     return {
         "document_id": doc_id,
-        "title": meta["title_ko"],
+        "title": meta.get(f"title_{locale}") or meta["title_ko"],
         "html_path": str(html_path),
         "pdf_path": str(pdf_path) if pdf_ok else None,
         "missing": missing,

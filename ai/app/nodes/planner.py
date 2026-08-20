@@ -10,17 +10,37 @@ from app.rules.loader import actions_for, evidence_labels, visa_spec
 
 # 화면 표시 순서 (매트릭스 정의 순서를 그대로 따르되, 명시하면 이 순서 우선)
 AGENCY_LABEL = {
-    "immigration": "출입국·외국인청",
-    "bank": "은행 영업점",
-    "telecom": "통신사 대리점",
-    "immigration_or_community_center": "출입국·외국인청 또는 주민센터",
+    "immigration": {"ko": "출입국·외국인청", "en": "Immigration Office"},
+    "bank": {"ko": "은행 영업점", "en": "Bank branch"},
+    "telecom": {"ko": "통신사 대리점", "en": "Mobile carrier store"},
+    "immigration_or_community_center": {
+        "ko": "출입국·외국인청 또는 주민센터",
+        "en": "Immigration Office or community service center"},
 }
 
 DOC_LABEL = {
-    "passport": "여권", "photo": "사진 1매", "arc": "외국인등록증",
-    "enrollment_cert": "재학증명서", "residence_proof": "체류지 증빙",
-    "employment_contract": "근로계약서", "business_registration": "사업자등록증",
+    "passport": {"ko": "여권", "en": "Passport"},
+    "photo": {"ko": "사진 1매", "en": "One photo"},
+    "arc": {"ko": "외국인등록증", "en": "Alien Registration Card"},
+    "enrollment_cert": {"ko": "재학증명서", "en": "Enrollment certificate"},
+    "residence_proof": {"ko": "체류지 증빙", "en": "Proof of residence"},
+    "employment_contract": {"ko": "근로계약서", "en": "Employment contract"},
+    "business_registration": {"ko": "사업자등록증", "en": "Business registration"},
 }
+
+
+def _pick(table: dict, key: str, locale: str, default: str = "") -> str:
+    """{ko, en} 테이블에서 locale 을 고른다. 모르는 키는 default."""
+    entry = table.get(key)
+    if not entry:
+        return default
+    return entry.get(locale) or entry["en"]
+
+
+def _field(spec: dict, base: str, locale: str) -> str | None:
+    """룰의 base_ko / base_en 중 locale 것. 영어가 없으면 한국어로 떨어뜨린다 —
+    빈 값을 내보내는 것보다 낫다."""
+    return spec.get(f"{base}_{locale}") or spec.get(f"{base}_ko")
 
 ORDER = [
     "alien_registration",
@@ -76,6 +96,7 @@ def build_task_graph(
     completed: set[str] | None = None,
     in_progress: set[str] | None = None,
     today: date | None = None,
+    locale: str = "en",
 ) -> list[dict]:
     """profile + 룰 → tasks[]
 
@@ -90,7 +111,8 @@ def build_task_graph(
     if not actions:
         return []                              # 미지원 체류자격
 
-    labels = {aid: s.get("label_ko", aid) for aid, s in actions.items()}
+    labels = {aid: _field(s, "label", locale) or aid
+              for aid, s in actions.items()}
     ordered = [a for a in ORDER if a in actions] + \
               [a for a in actions if a not in ORDER]
 
@@ -115,10 +137,10 @@ def build_task_graph(
             "d_day": d_day,
             "evidence": evidence_labels(spec.get("evidence", [])),
             # 화면에서 "어디에 뭘 들고 가야 하는지" 바로 보여주기 위한 값
-            "agency": AGENCY_LABEL.get(spec.get("agency", ""), ""),
-            "required_docs": [DOC_LABEL.get(d, d)
+            "agency": _pick(AGENCY_LABEL, spec.get("agency", ""), locale),
+            "required_docs": [_pick(DOC_LABEL, d, locale, d)
                               for d in spec.get("required_docs", [])],
-            "note": spec.get("note_ko") or spec.get("condition_ko"),
+            "note": _field(spec, "note", locale) or _field(spec, "condition", locale),
         })
 
     # 기한이 임박한 것부터 위로, 그다음 원래 순서

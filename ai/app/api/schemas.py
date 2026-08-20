@@ -56,6 +56,14 @@ class DocRef(BaseModel):
 class PendingApproval(BaseModel):
     action_id: str
     title: str
+    # 아래는 새로고침 후 승인 모달을 복원하기 위한 값. 전부 기본값이 있어
+    # 기존 클라이언트는 영향받지 않는다 (필드 추가만 허용 규칙).
+    summary: list[str] = []
+    document_id: Optional[str] = None
+    preview_url: Optional[str] = None
+    pdf_url: Optional[str] = None
+    evidence: list[str] = []
+    risk_level: Literal["L1", "L2", "L3"] = "L2"
 
 
 class SessionState(BaseModel):

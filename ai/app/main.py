@@ -29,9 +29,11 @@ from app.api.schemas import (  # noqa: E402
 )
 from app.agent import service as agent
 from app.extractors.arc import OcrFailed  # noqa: E402
-from app.agent.service import PrerequisiteMissing  # noqa: E402
-
-DEFAULT_SID = "demo-001"
+from app.agent.service import (  # noqa: E402
+    ApprovalMismatch,
+    NothingToApprove,
+    PrerequisiteMissing,
+)
 
 app = FastAPI(
     title="Settle Agent API",
@@ -76,7 +78,7 @@ def presign(req: PresignRequest):
 
 @app.post("/api/profile/extract-upload", response_model=AgentResponse, tags=["agent"])
 async def extract_upload(
-    session_id: str = Form(DEFAULT_SID),
+    session_id: str = Form(...),
     doc_type: str = Form(...),              # arc_front | arc_back | passport
     file: UploadFile = File(...),
 ):
@@ -135,19 +137,38 @@ def start_action(action_id: str, req: ActionRequest):
                                                             exc.detail()))
 
 
+@app.post("/api/actions/{action_id}/preview", response_model=AgentResponse, tags=["agent"])
+def preview_action(action_id: str, req: ActionRequest):
+    """서류를 만들고 승인 대기 상태로 만든다.
+
+    백엔드는 ui.type == "doc_preview" 일 때만 pdf_url 을 내려받아 저장한다.
+    부족한 값이 남아 있으면 ui.type 은 "question" 이고 서류는 만들어지지 않는다.
+    """
+    try:
+        return agent.preview_action(req.session_id, action_id)
+    except PrerequisiteMissing as exc:
+        raise HTTPException(409, detail=agent.localize_error(req.session_id,
+                                                             exc.detail()))
+
+
 @app.post("/api/actions/{action_id}/approve", response_model=AgentResponse, tags=["agent"])
 def approve_action(action_id: str, req: ApproveRequest):
-    return agent.approve(req.session_id, action_id, req.approved)
+    try:
+        return agent.approve(req.session_id, action_id, req.approved)
+    except (NothingToApprove, ApprovalMismatch) as exc:
+        # 409 — 클라이언트가 다시 상태를 읽고 재시도하면 해결된다.
+        raise HTTPException(409, detail=agent.localize_error(req.session_id,
+                                                             exc.detail()))
 
 
 @app.get("/api/state", response_model=AgentResponse, tags=["agent"])
-def read_state(session_id: str = DEFAULT_SID):
+def read_state(session_id: str):
     """새로고침 후 화면 복원용."""
     return agent.get_state(session_id)
 
 
 @app.get("/api/ledger", tags=["agent"])
-def ledger(session_id: str = DEFAULT_SID):
+def ledger(session_id: str):
     return agent.get_ledger(session_id)
 
 
