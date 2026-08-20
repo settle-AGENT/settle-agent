@@ -1041,6 +1041,19 @@ export default function App() {
           <p style={SUB}>{t("잠긴 항목은 먼저 끝내야 하는 과제가 있어요.", "Locked tasks require another task to be completed first.")}</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {ui.type === "doc_preview" && ui.payload?.document_id && (
+            <div style={{ ...card, display: "flex", gap: 13, borderColor: "var(--brand-2)" }}>
+              <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--brand-2)" }}>{t("방금 만든 신청서", "New application")}</div>
+                <b style={{ display: "block", marginTop: 4, fontSize: 14.5 }}>{ui.payload.title}</b>
+                <button type="button" onClick={() => openStoredDocument(ui.payload)} className="tap"
+                  style={{ marginTop: 8, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>
+                  {t("미리보기", "Preview")}
+                </button>
+              </div>
+            </div>
+          )}
           {tasks.length === 0 && (
             <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
               {t("아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.", "No tasks yet. Continue the conversation to build your task list.")}
