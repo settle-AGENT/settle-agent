@@ -240,8 +240,10 @@ function normalizeMockExtraction(mock, locale = "ko") {
 // 2) OCR 프로필 확정. message는 dirty 필드만 담은 JSON 문자열이다.
 export async function confirmProfile(sessionId, dirtyFields, locale = "ko") {
   if (MOCK) return delay({
-    reply: locale === "en" ? "I need to ask a few more questions." : "프로필을 확인했어요. 몇 가지만 더 여쭤볼게요.",
-    ui: { type: "question", payload: { field: "phone_kr", label: locale === "en" ? "Do you have a Korean phone number?" : "한국 휴대폰 번호가 있나요?", input_type: "text" } },
+    reply: locale === "en"
+      ? "Profile confirmed. Ask me anything about settling in Korea — bank accounts, visas, telecom, anything."
+      : "프로필을 확인했어요. 한국 정착에 필요한 것은 무엇이든 물어보세요. 체류·계좌·통신 뭐든 도와드릴게요.",
+    ui: { type: "none", payload: {} },
     state: { session_id: sessionId, locale, profile: { ...MOCK_EXTRACT.profile, ...dirtyFields } },
   });
 

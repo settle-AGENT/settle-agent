@@ -23,6 +23,7 @@ LABELS = {
     "org_name":    {"ko": "소속 학교·기관",   "en": "School / Organization"},
     "phone_kr":    {"ko": "휴대전화",         "en": "Phone (KR)"},
     "purpose":     {"ko": "사용 목적",        "en": "Purpose"},
+    "income_source": {"ko": "자금 출처",      "en": "Source of funds"},
     "gender":          {"ko": "성별",           "en": "Sex"},
     "passport_no":     {"ko": "여권번호",       "en": "Passport No."},
     "passport_issue":  {"ko": "여권 발급일",    "en": "Passport issue date"},

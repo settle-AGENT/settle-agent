@@ -257,6 +257,8 @@ export default function App() {
   const [previewError, setPreviewError] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [taskBusy, setTaskBusy] = useState("");
+  const [thinkingSteps, setThinkingSteps] = useState([]);
+  const [typingText, setTypingText] = useState(null);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
@@ -349,7 +351,7 @@ export default function App() {
     if (step !== 4) return;
     const frame = requestAnimationFrame(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }));
     return () => cancelAnimationFrame(frame);
-  }, [step, answers.phone, answers.cert, answers.purposes, verdict, chatLoading]);
+  }, [step, answers.phone, answers.cert, answers.purposes, verdict, chatLoading, messages]);
 
   useEffect(() => {
     if (cameraOpen && videoRef.current && cameraStreamRef.current) {
@@ -1238,22 +1240,58 @@ export default function App() {
       );
     }
 
+    const THINKING_LABELS = [
+      t("의도 파악 중…", "Understanding your question…"),
+      t("프로필 확인 중…", "Checking your profile…"),
+      t("규정 검토 중…", "Reviewing regulations…"),
+      t("응답 생성 중…", "Generating response…"),
+    ];
 
     const question = ui.type === "question" ? ui.payload : null;
     const options = question ? questionOptions(question) : [];
 
-    // 답변은 항상 POST /api/chat 의 message 로 간다. 응답의 ui.type 이 다음 화면을 정한다.
     const answer = async (value) => {
       if (chatLoading || !value) return;
       setChatLoading(true);
       setToast("");
+      setTypingText(null);
       setMessages((current) => [...current, { from: "user", text: value }]);
+      setChatInput("");
+
+      let thinkIdx = 0;
+      setThinkingSteps([THINKING_LABELS[0]]);
+      const thinkTimer = setInterval(() => {
+        thinkIdx++;
+        if (thinkIdx < THINKING_LABELS.length) {
+          setThinkingSteps((prev) => [...prev, THINKING_LABELS[thinkIdx]]);
+        }
+      }, 800);
+
       try {
         const response = applyAgent(await sendChat(sessionId, value, locale));
-        setChatInput("");
+        clearInterval(thinkTimer);
+        setThinkingSteps([]);
+
+        const reply = response?.reply || "";
+        if (reply) {
+          setTypingText("");
+          let charIdx = 0;
+          const typeTimer = setInterval(() => {
+            charIdx++;
+            if (charIdx <= reply.length) {
+              setTypingText(reply.slice(0, charIdx));
+            } else {
+              clearInterval(typeTimer);
+              setTypingText(null);
+            }
+          }, 30);
+        }
+
         const next = readUi(response).type;
-        if (next !== "question") go(5);      // 질문이 끝나면 과제 목록으로
+        if (next !== "question" && next !== "none") go(5);
       } catch (error) {
+        clearInterval(thinkTimer);
+        setThinkingSteps([]);
         if (!handleAuthError(error)) setToast(localizedError(error, locale, "메시지를 보내지 못했어요.", "Could not send the message."));
       } finally {
         setChatLoading(false);
@@ -1265,11 +1303,17 @@ export default function App() {
         <TopBar title={t("첫계좌 AI", "First Account AI")} onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
         <Rail active={3} locale={locale} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          {messages.map((message, index) => (
-            <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
-              {message.text}
-            </ChatBubble>
-          ))}
+          {messages.map((message, index) => {
+            const isLastAgent = message.from === "agent" && (index === messages.length - 1 || messages.slice(index + 1).every((m) => m.from === "user"));
+            const displayText = isLastAgent && typingText !== null ? typingText : message.text;
+            return (
+              <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
+                {displayText && displayText.split("\n").map((line, li) => (
+                  <span key={li}>{line}{li < displayText.split("\n").length - 1 && <br />}</span>
+                ))}
+              </ChatBubble>
+            );
+          })}
 
           {question && (
             <ChatBubble avatar wide>
@@ -1278,16 +1322,34 @@ export default function App() {
             </ChatBubble>
           )}
 
-          {/* 모르는 ui.type 이면 reply 만 보여주고 다음 화면으로 넘어갈 길을 남긴다 */}
-          {!question && !chatLoading && (
+          {chatLoading && thinkingSteps.length > 0 && (
+            <ChatBubble avatar>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {thinkingSteps.map((label, ti) => (
+                  <div key={ti} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: ti === thinkingSteps.length - 1 ? "var(--brand-2)" : "var(--muted)" }}>
+                    {ti === thinkingSteps.length - 1 ? <span className="thinking-dot" /> : <span style={{ color: "var(--ok)" }}>✓</span>}
+                    {label}
+                  </div>
+                ))}
+              </div>
+            </ChatBubble>
+          )}
+
+          {!question && !chatLoading && messages.length > 0 && (
             <button type="button" onClick={() => go(5)} className="chat-submit tap">{t("할 일 목록 보기", "View tasks")}</button>
           )}
 
-          {chatLoading && <ChatBubble avatar>{t("답변을 정리하고 있어요…", "Preparing your answer…")}</ChatBubble>}
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
 
           <div ref={chatEndRef} aria-hidden="true" />
         </div>
+        <ChatInputBar
+          value={chatInput}
+          onChange={setChatInput}
+          disabled={chatLoading}
+          onSend={() => answer(chatInput)}
+          locale={locale}
+        />
       </Shell>
     );
   }
@@ -1629,6 +1691,31 @@ function Pick({ children, on, ok, onClick }) {
         border: on ? `1.5px solid ${accent}` : "1px solid oklch(0.88 0.01 60)", background: on ? tint : "#fff", fontFamily: "'Noto Sans KR',sans-serif" }}>
       {children}
     </div>
+  );
+}
+function ChatInputBar({ value, onChange, disabled, onSend, locale = "ko" }) {
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      onSend();
+    }
+  };
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSend(); }} className="chat-input-bar">
+      <input
+        type="text"
+        className="chat-input-field"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={handleKey}
+        placeholder={locale === "en" ? "Type your message" : "메시지를 입력하세요"}
+        disabled={disabled}
+        autoComplete="off"
+      />
+      <button type="submit" className="chat-send-btn tap" disabled={disabled || !value.trim()}>
+        {disabled ? "…" : locale === "en" ? "Send" : "전송"}
+      </button>
+    </form>
   );
 }
 function ExitConfirmModal({ onContinue, onExit, locale = "ko" }) {
