@@ -195,9 +195,17 @@ def render(form: str, profile: dict, *,
         "account_type": account_type,
     }
 
+    # 신뢰도 경고는 검토 화면에서만 보여준다. PDF/HTML 서식에는 OCR 신뢰도,
+    # "확인 필요", 원인 같은 메타데이터를 섞지 않고 실제 입력값만 넘긴다.
+    low_confidence = [r["key"] for r in rows if r["low_conf"]]
+    document_rows = [
+        {**row, "low_conf": False, "note": None, "evidence": None}
+        for row in rows
+    ]
+
     html = _env.get_template(meta["template"]).render(
         meta=meta,
-        rows=rows,
+        rows=document_rows,
         f=_flat(profile, rule_values),
         low=[],          # 경고 표시는 서류에 인쇄하지 않는다. 화면에서만 알린다.
         variant=variant,
@@ -226,5 +234,5 @@ def render(form: str, profile: dict, *,
         "html_path": str(html_path),
         "pdf_path": str(pdf_path) if pdf_ok else None,
         "missing": missing,
-        "low_confidence": [r["key"] for r in rows if r["low_conf"]],
+        "low_confidence": low_confidence,
     }
