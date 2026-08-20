@@ -33,40 +33,57 @@ DocType = Literal["arc_front", "arc_back", "passport"]
 # ──────────────────────────────────────────────────────────
 # 그래프 · 체크포인터 (프로세스당 1회 초기화)
 # ──────────────────────────────────────────────────────────
-# 커넥션을 모듈 전역에 붙잡아 둔다.
-# from_conn_string() 의 컨텍스트 매니저를 지역 변수로 두면 GC 시점에
-# 커넥션이 닫혀 "the connection is closed" 가 난다.
-_CONN = None
+# 커넥션 풀을 모듈 전역에 붙잡아 둔다.
+#
+# 예전에는 커넥션 하나를 붙잡았다. 두 가지가 문제였다.
+#   1) RDS 페일오버·유휴 타임아웃·네트워크 순단 중 하나만 나면 죽은 커넥션을
+#      계속 쥐고 모든 요청이 실패한다. 재연결 경로가 없어 컨테이너를 다시
+#      띄울 때까지 복구되지 않았다.
+#   2) 엔드포인트가 대부분 async 가 아니라 FastAPI 스레드풀에서 돈다.
+#      커넥션이 하나면 동시 요청의 체크포인트 읽기·쓰기가 직렬화된다.
+#
+# check=check_connection 이 커넥션을 내주기 전에 살아 있는지 확인하고,
+# 죽었으면 버리고 새로 만든다. 이것이 재연결 경로다.
+_POOL = None
 
 
 def _make_checkpointer():
-    global _CONN
+    global _POOL
 
     url = os.getenv("DATABASE_URL")
     if url:
         try:
-            from psycopg import Connection
             from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
             from langgraph.checkpoint.postgres import PostgresSaver
 
-            _CONN = Connection.connect(
+            _POOL = ConnectionPool(
                 url,
-                autocommit=True,        # checkpointer 는 자체 트랜잭션을 쓰지 않는다
-                prepare_threshold=0,
-                row_factory=dict_row,
+                min_size=1,
+                max_size=int(os.getenv("DB_POOL_MAX", "4")),
+                kwargs={
+                    "autocommit": True,   # checkpointer 는 자체 트랜잭션을 쓰지 않는다
+                    "prepare_threshold": 0,
+                    "row_factory": dict_row,
+                },
+                check=ConnectionPool.check_connection,
+                max_lifetime=600,         # 유휴 타임아웃에 걸리기 전에 먼저 교체
+                open=True,
+                timeout=10,
             )
-            cp = PostgresSaver(_CONN)
-            cp.setup()                  # 테이블 자동 생성 (idempotent)
-            print("[agent] Postgres checkpointer 연결됨")
+            _POOL.wait(timeout=10)        # 여기서 실패해야 /health 가 정직해진다
+            cp = PostgresSaver(_POOL)
+            cp.setup()                    # 테이블 자동 생성 (idempotent)
+            print("[agent] Postgres checkpointer 연결됨 (pool)")
             return cp
-        except Exception as exc:        # noqa: BLE001
+        except Exception as exc:          # noqa: BLE001
             print(f"[agent] Postgres checkpointer 실패, 메모리로 대체: {exc!r}")
-            if _CONN is not None:
+            if _POOL is not None:
                 try:
-                    _CONN.close()
-                except Exception:       # noqa: BLE001
+                    _POOL.close()
+                except Exception:         # noqa: BLE001
                     pass
-                _CONN = None
+                _POOL = None
 
     from langgraph.checkpoint.memory import MemorySaver
     print("[agent] MemorySaver 사용 (재시작 시 세션 소멸)")
@@ -83,9 +100,19 @@ def is_persistent() -> bool:
 
     배포 직후에도 /health가 실제 RDS 연결을 검증해야 하므로,
     첫 Agent 요청을 기다리지 않고 그래프를 여기서 초기화한다.
+
+    풀은 죽은 커넥션을 스스로 교체하므로, 순단 직후라도 복구되면
+    다시 True 가 된다.
     """
     _graph()
-    return _CONN is not None and not _CONN.closed
+    if _POOL is None:
+        return False
+    try:
+        with _POOL.connection(timeout=2) as conn:
+            conn.execute("SELECT 1")
+        return True
+    except Exception:                      # noqa: BLE001
+        return False
 
 
 def _cfg(session_id: str) -> dict:
