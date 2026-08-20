@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     UV_LINK_MODE=copy \
     OCR_CACHE_DIR=/tmp/ocr_cache \
+    XDG_CACHE_HOME=/tmp/cache \
     HF_HOME=/app/.cache/huggingface \
     EMBED_MODEL=intfloat/multilingual-e5-small
 
@@ -34,7 +35,8 @@ RUN groupadd --system app \
 
 COPY pyproject.toml uv.lock README.md ./
 
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project \
+    && uv cache clean
 
 COPY app ./app
 COPY rules ./rules
@@ -48,8 +50,10 @@ RUN mkdir -p "$HF_HOME" \
     && python -c "from sentence_transformers import SentenceTransformer; import os; SentenceTransformer(os.environ['EMBED_MODEL'])" \
     || echo "WARN: 임베딩 모델 사전 다운로드 실패 — 런타임에 재시도한다."
 
-RUN mkdir -p "$OCR_CACHE_DIR" /app/output \
-    && chown -R app:app /app "$OCR_CACHE_DIR"
+# chown 대상을 쓰기가 필요한 곳으로 좁힌다. /app 전체를 chown 하면
+# venv 가 통째로 새 레이어에 복제돼 이미지가 배로 커진다.
+RUN mkdir -p "$OCR_CACHE_DIR" "$XDG_CACHE_HOME" /app/output \
+    && chown -R app:app "$OCR_CACHE_DIR" "$XDG_CACHE_HOME" /app/output "$HF_HOME"
 
 USER app
 
