@@ -40,15 +40,22 @@ RUN uv sync --frozen --no-dev --no-install-project \
 
 COPY app ./app
 COPY rules ./rules
+COPY scripts ./scripts
 COPY mappings ./mappings
 COPY templates ./templates
 
 ENV PATH="/app/.venv/bin:$PATH"
 
 # 임베딩 모델을 이미지에 굽는다 — 런타임에 HF 를 타지 않는다.
+# 실패를 넘기지 않는다. 모델이 없으면 벡터 검색이 통째로 죽고, 그 사실이
+# 런타임에야 드러난다. 빌드에서 잡는 편이 낫다.
 RUN mkdir -p "$HF_HOME" \
-    && python -c "from sentence_transformers import SentenceTransformer; import os; SentenceTransformer(os.environ['EMBED_MODEL'])" \
-    || echo "WARN: 임베딩 모델 사전 다운로드 실패 — 런타임에 재시도한다."
+    && python -c "from sentence_transformers import SentenceTransformer; import os; SentenceTransformer(os.environ['EMBED_MODEL'])"
+
+# 코퍼스 임베딩도 미리 계산해 굽는다. 컨테이너는 이 파일을 읽어 upsert 만
+# 하므로 기동이 몇 초로 끝난다 — 매번 1,600여 조각을 임베딩하지 않는다.
+RUN python scripts/export_rag.py /app/rag_chunks.jsonl \
+    && wc -l /app/rag_chunks.jsonl
 
 # chown 대상을 쓰기가 필요한 곳으로 좁힌다. /app 전체를 chown 하면
 # venv 가 통째로 새 레이어에 복제돼 이미지가 배로 커진다.

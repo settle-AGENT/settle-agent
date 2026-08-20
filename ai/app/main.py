@@ -50,15 +50,21 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _warm_embedder() -> None:
-    from app.tools import embed
+    from app.tools import embed, rag_store
     embed.warm()
-    
+    # 벡터가 비어 있으면 검색이 BM25 단독으로 조용히 떨어진다. 기동할 때
+    # 채우고, 진행 상태를 /health 로 드러낸다. 적재는 기동을 막지 않는다.
+    rag_store.ensure_loaded_async()
+
+
 @app.get("/health", tags=["meta"])
 def health():
+    from app.tools import rag_store
     return {
         "ok": True,
         "mode": "agent",
         "persistent": agent.is_persistent(),   # False 면 재시작 시 세션 소멸
+        "rag": rag_store.status(),             # ready 가 False 면 BM25 단독
     }
 
 

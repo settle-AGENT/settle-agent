@@ -15,8 +15,9 @@ output/
 seed/ocr_cache/
 backend/app.jar
 
-# 임베딩 덤프 — 재생성 가능, 클라우드팀에 별도 전달
+# 임베딩 덤프 — 이미지 빌드가 만든다(ai/Dockerfile). 커밋하지 않는다.
 seed/rag_chunks.jsonl
+ai/rag_chunks.jsonl
 
 # 안내매뉴얼 원본 PDF(15MB) — 하이코리아에서 받는다. 출처는 ai/README.md
 ai/corpus/manual/*.pdf
