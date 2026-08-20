@@ -407,6 +407,85 @@ button:disabled { cursor: default; }
 .chat-sources { color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .chat-sources summary { cursor: pointer; font-weight: 700; }
 
+/* 상담 메뉴 카드 */
+.chat-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.chat-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.chat-menu-item:not(.locked):hover { border-color: var(--brand-2); }
+.chat-menu-item:not(.locked):active { transform: scale(0.98); }
+.chat-menu-item.selected { border: 1.5px solid var(--brand-2); background: oklch(0.7 0.13 45 / 0.07); }
+.chat-menu-item.locked { opacity: 0.6; cursor: default; background: oklch(0.96 0.006 60); }
+.chat-menu-num {
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 7px;
+  background: var(--ink); color: #fff;
+  font-size: 12px; font-weight: 800;
+  font-family: 'IBM Plex Mono', monospace;
+  flex: none;
+}
+.chat-menu-num.muted { background: oklch(0.75 0.01 60); }
+.chat-menu-label { flex: 1; font-size: 13.5px; font-weight: 700; }
+.chat-menu-lock { font-size: 13px; flex: none; }
+
+/* 자유대화 입력 바 */
+.chat-input-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 18px 34px;
+  background: oklch(0.98 0.008 60);
+  border-top: 1px solid var(--line);
+}
+.chat-input-field {
+  flex: 1;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 0 16px;
+  outline: none;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.chat-input-field:focus { border-color: var(--brand-2); box-shadow: 0 0 0 3px oklch(0.7 0.13 45 / 0.1); }
+.chat-input-field::placeholder { color: oklch(0.65 0.01 60); }
+.chat-input-field:disabled { opacity: 0.6; }
+.chat-send-btn {
+  min-width: 52px;
+  height: 44px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 0 14px;
+}
+.chat-send-btn:disabled { opacity: 0.4; }
+
+/* 추리 과정 애니메이션 */
+.thinking-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--brand-2);
+  animation: thinking-pulse 1s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
 /* 심사 결과 — Figma의 5. 심사 화면 구조 */
 .review-status { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: 11.5px; }
 .review-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
