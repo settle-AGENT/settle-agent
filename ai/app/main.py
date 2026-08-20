@@ -90,21 +90,21 @@ async def extract_upload(
 
     except OcrFailed as exc:
         # 예상된 실패 — 사용자가 다시 촬영하면 해결된다. 422 로 안내한다.
-        raise HTTPException(422, detail={
+        raise HTTPException(422, detail=agent.localize_error(session_id, {
             "error": "extraction_failed",
             "message": str(exc),
             "details": {"doc_type": doc_type, "filename": file.filename, "ext": ext},
-        })
+        }))
 
     except Exception as exc:                                  # noqa: BLE001
         # 버그 — 사용자에게 "다시 촬영하세요" 라고 하면 영원히 해결되지 않는다.
         traceback.print_exc()
-        raise HTTPException(500, detail={
+        raise HTTPException(500, detail=agent.localize_error(session_id, {
             "error": "internal",
             "message": "서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
             "details": {"reason": f"{type(exc).__name__}: {exc}",
                         "doc_type": doc_type, "filename": file.filename},
-        })
+        }))
 
 
 @app.post("/api/profile/confirm", response_model=AgentResponse, tags=["agent"])
@@ -113,11 +113,11 @@ def confirm_profile(req: ChatRequest):
     try:
         edits = json.loads(req.message) if req.message else {}
     except json.JSONDecodeError:
-        raise HTTPException(422, detail={
+        raise HTTPException(422, detail=agent.localize_error(req.session_id, {
             "error": "validation_failed",
-            "message": "edits must be a JSON object",
+            "message": "수정한 값을 읽지 못했습니다. 다시 시도해주세요.",
             "details": {},
-        })
+        }))
     return agent.apply_profile_edits(req.session_id, edits)
 
 
@@ -131,7 +131,8 @@ def start_action(action_id: str, req: ActionRequest):
     try:
         return agent.start_action(req.session_id, action_id)
     except PrerequisiteMissing as exc:
-        raise HTTPException(409, detail=exc.detail())
+        raise HTTPException(409, detail=agent.localize_error(req.session_id,
+                                                            exc.detail()))
 
 
 @app.post("/api/actions/{action_id}/approve", response_model=AgentResponse, tags=["agent"])
@@ -156,13 +157,24 @@ from pathlib import Path as _Path  # noqa: E402
 OUTPUT_DIR = _Path(__file__).resolve().parents[1] / "output"
 
 
+def _session_of(document_id: str) -> str:
+    """서류 id 는 doc_builder 가 "{session_id}-{action_id}" 로 만든다.
+
+    URL 에 session_id 를 따로 실어 보내지 않고 여기서 되찾는다.
+    action_id 에는 하이픈이 없으므로 마지막 하이픈이 경계다.
+    """
+    return document_id.rsplit("-", 1)[0]
+
+
 @app.get("/api/documents/{document_id}/preview", response_class=HTMLResponse,
          tags=["documents"])
 def document_preview(document_id: str):
     """iframe 으로 띄울 HTML. PDF 뷰어 없이 미리보기가 된다."""
     path = OUTPUT_DIR / f"{document_id}.html"
     if not path.exists():
-        raise HTTPException(404, "document not found")
+        # 이 두 엔드포인트만 detail 이 문자열이다. 형태는 그대로 두고 언어만 맞춘다.
+        raise HTTPException(404, agent.localize_message(
+            _session_of(document_id), "요청하신 서류를 찾을 수 없습니다."))
     return HTMLResponse(path.read_text(encoding="utf-8"))
 
 
@@ -170,6 +182,8 @@ def document_preview(document_id: str):
 def document_pdf(document_id: str):
     path = OUTPUT_DIR / f"{document_id}.pdf"
     if not path.exists():
-        raise HTTPException(404, "document not found")
+        # 이 두 엔드포인트만 detail 이 문자열이다. 형태는 그대로 두고 언어만 맞춘다.
+        raise HTTPException(404, agent.localize_message(
+            _session_of(document_id), "요청하신 서류를 찾을 수 없습니다."))
     return FileResponse(path, media_type="application/pdf",
                         filename=f"{document_id}.pdf")

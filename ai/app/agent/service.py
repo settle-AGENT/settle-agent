@@ -88,11 +88,58 @@ def _seen(session_id: str) -> bool:
 # ──────────────────────────────────────────────────────────
 # 응답 조립
 # ──────────────────────────────────────────────────────────
+def _localized(state: dict, reply: str | None, reply_locale: str | None) -> str:
+    """사용자 언어로 맞춘 reply.
+
+    노드와 이 모듈의 문구는 대부분 한국어 리터럴이다. 열 몇 군데에 번역을
+    흩어 놓는 대신 나가는 길목 한 곳에서 옮긴다. LLM 이 이미 사용자 언어로
+    쓴 문장만 reply_locale 이 찍혀 있어 번역을 건너뛴다 — 노드는 state 에,
+    이 모듈은 인자로 알린다.
+    """
+    locale = state.get("locale") or "en"
+    written = reply_locale if reply is not None else state.get("reply_locale")
+    text = reply if reply is not None else (state.get("reply") or "")
+    if not text or written == locale:
+        return text
+    return llm.translate(text, locale)      # locale==ko 이거나 LLM 없으면 원문
+
+
+def locale_of(session_id: str) -> str:
+    """세션의 표시 언어. 세션이 아직 없으면 앱 기본값."""
+    if not _seen(session_id):
+        return "en"
+    return _graph().get_state(_cfg(session_id)).values.get("locale") or "en"
+
+
+def localize_message(session_id: str, message: str) -> str:
+    """사용자에게 보이는 오류 문구를 세션 언어로 옮긴다.
+
+    reply 와 같은 규칙이다 — 문구는 한국어로 쓰고 나가는 길목에서 옮긴다.
+    """
+    locale = locale_of(session_id)
+    if not message or locale == "ko":
+        return message
+    return llm.translate(message, locale)
+
+
+def localize_error(session_id: str, detail: dict) -> dict:
+    """오류 detail 의 message 만 옮긴다.
+
+    error 코드와 details 는 기계가 읽으므로 건드리지 않는다.
+    """
+    message = detail.get("message") or ""
+    if not message:
+        return detail
+    return {**detail, "message": localize_message(session_id, message)}
+
+
 def _response(state: dict, reply: str | None = None,
-              ui_type: str | None = None, ui_payload: dict | None = None) -> dict:
+              ui_type: str | None = None, ui_payload: dict | None = None,
+              reply_locale: str | None = None) -> dict:
+    """reply_locale 은 reply 인자가 이미 어느 언어로 쓰였는지. 기본값은 한국어."""
     return {
         "schema_version": "1",
-        "reply": reply if reply is not None else (state.get("reply") or ""),
+        "reply": _localized(state, reply, reply_locale),
         "ui": {
             "type": ui_type or state.get("ui_type") or "none",
             "payload": ui_payload if ui_payload is not None
@@ -194,25 +241,29 @@ def send_message(session_id: str, message: str) -> dict:
     extra: dict[str, Any] = {"messages": [{"role": "user", "content": message}]}
 
     if asked:
-        value, failed = message.strip(), None
+        value, failed, failed_locale = message.strip(), None, None
+        locale = snap.get("locale") or "en"
 
         if llm.available():
             label, enum = _FIELD_META.get(asked, (asked, None))
             parsed = llm.parse_answer(asked, label=label, message=message,
-                                      enum=enum, locale=snap.get("locale", "ko"))
+                                      enum=enum, locale=locale)
             if parsed is None:
                 pass                                  # LLM 실패 → 원문 사용
             elif parsed.get("ok") and parsed.get("value"):
                 value = parsed["value"]
+            elif parsed.get("reason"):
+                # reason 은 parse_answer 가 사용자 언어로 쓴다. 다시 번역하지 않는다.
+                failed, failed_locale = parsed["reason"].strip(), locale
             else:
-                failed = parsed.get("reason") or "값을 알아듣지 못했습니다."
-                failed = failed.strip()
+                failed = "값을 알아듣지 못했습니다."
 
         if failed:
             # 같은 필드를 다시 묻는다. asked_field 를 유지한다.
             state = _graph().get_state(_cfg(session_id)).values
             return _response(state, failed, "question",
-                             state.get("ui_payload") or {})
+                             state.get("ui_payload") or {},
+                             reply_locale=failed_locale)
 
         extra["profile"] = {asked: value}
         extra["asked_field"] = None

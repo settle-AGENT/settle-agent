@@ -76,9 +76,19 @@ def run(question: str, visa: str | None, term: str) -> tuple[bool, str, int]:
     return True, hits[0]["cite"] + tail, len(foreign)
 
 
+def vector_state() -> str:
+    """DATABASE_URL 이 있는 것과 벡터 검색이 실제로 도는 것은 다르다.
+    DB 가 꺼져 있으면 qa 는 조용히 BM25 로 떨어지므로, 여기서 실제로 확인한다."""
+    if not os.getenv("DATABASE_URL"):
+        return "OFF (DATABASE_URL 없음 — BM25 단독)"
+    hits = qa.search("체류기간 연장허가 제출서류")
+    if any("vector" in (h.get("found_by") or []) for h in hits):
+        return "ON"
+    return "OFF (DB 응답 없음 — BM25 단독으로 떨어졌습니다)"
+
+
 def main() -> None:
-    live = bool(os.getenv("DATABASE_URL"))
-    print(f"코퍼스 {qa._index()[5]}조각 | 벡터검색 {'ON' if live else 'OFF (BM25 단독)'}\n")
+    print(f"코퍼스 {qa._index()[5]}조각 | 벡터검색 {vector_state()}\n")
 
     fails = noise = 0
     print("── 한국어")

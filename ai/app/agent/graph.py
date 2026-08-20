@@ -100,22 +100,27 @@ AGENCY_LABEL: dict[str, str] = {
     "immigration_or_community_center": "출입국·외국인청 또는 주민센터",
 }
 
+# 답변 뒤에 붙는 근거 표시. 답변 본문은 이미 사용자 언어라 통째로 번역하지 않는다.
+CITE_LABEL: dict[str, str] = {"ko": "근거", "en": "Source"}
+
 
 # ══════════════════════════════════════════════════════════
 # 노드
 # ══════════════════════════════════════════════════════════
 def planner(state: AgentState) -> dict:
     """룰 엔진으로 Task Graph를 계산한다. LLM 없음."""
+    # 진입 노드다. 지난 턴의 reply_locale 이 남아 이번 턴 한국어 문구가
+    # 번역을 건너뛰는 일이 없도록 여기서 매 턴 지운다.
     profile = state.get("profile", {})
     if not profile.get("visa_type"):
-        return {"tasks": []}
+        return {"tasks": [], "reply_locale": None}
 
     tasks = build_task_graph(
         profile,
         completed=set(state.get("completed", [])),
         in_progress=set(state.get("in_progress", [])),
     )
-    return {"tasks": tasks}
+    return {"tasks": tasks, "reply_locale": None}
 
 
 def router(state: AgentState) -> dict:
@@ -171,6 +176,7 @@ def slot_filler(state: AgentState) -> dict:
 
     label, hint = q["label"], q.get("hint")
     lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
+    written_locale = None
 
     # LLM 은 문장 생성만. 실패해도 흐름이 끊기지 않는다.
     if llm.available():
@@ -185,11 +191,13 @@ def slot_filler(state: AgentState) -> dict:
             label = written["question"]
             hint = written.get("hint") or hint
             lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
+            written_locale = locale       # 이미 사용자 언어다 — 다시 번역하지 않는다
 
     return {
         "missing_fields": missing,
         "asked_field": field,
         "reply": lead,
+        "reply_locale": written_locale,
         "ui_type": "question",
         "ui_payload": {
             "field": field,
@@ -419,17 +427,16 @@ def explainer(state: AgentState) -> dict:
         if got:
             reply = got["reply"]
             if got["cites"]:
-                reply += "\n\n근거 · " + " / ".join(got["cites"])
-            return {"reply": reply, "ui_type": "none",
+                reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
+                         + " / ".join(got["cites"])
+            return {"reply": reply, "reply_locale": locale, "ui_type": "none",
                     "last_qa": last, "ask": None}
         base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
                 "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
-        return {"reply": llm.translate(base, locale) if llm.available() else base,
-                "ui_type": "none", "last_qa": last, "ask": None}
+        return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
 
     if not tasks:
-        base = "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요."
-        return {"reply": llm.translate(base, locale) if llm.available() else base,
+        return {"reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
                 "ui_type": "none"}
 
     base = summary(tasks)
@@ -449,7 +456,7 @@ def explainer(state: AgentState) -> dict:
                                if nxt else None),
         }, locale=locale)
         if spoken:
-            return {"reply": spoken, "ui_type": "none"}
+            return {"reply": spoken, "reply_locale": locale, "ui_type": "none"}
 
     return {"reply": base, "ui_type": "none"}
 
