@@ -13,7 +13,12 @@ const SCAN_PAGES = [
   { key: "arcBack", docType: "arc_back", label: "외국인등록증 뒷면", sub: "뒷면" },
   { key: "passport", docType: "passport", label: "여권", sub: "여권 사진면" },
 ];
-const PREVIEW_ACTION_ID = "open_bank_account";
+// 신청서 종류. action_id 가 서버의 문서 생성 경로를 가른다.
+const FORM_TYPES = [
+  { id: "alien_registration", title: "통합신청서(신고서)", sub: "외국인등록 · 체류지 변경 · 자격외활동" },
+  { id: "open_bank_account", title: "계좌개설신청서", sub: "은행 영업점 제출용" },
+];
+const DEFAULT_FORM_TYPE = FORM_TYPES[0].id;
 
 const card = {
   padding: 15, borderRadius: 14, border: "1px solid var(--line)", background: "#fff",
@@ -69,6 +74,7 @@ export default function App() {
   const [taskBusy, setTaskBusy] = useState("");
   const [docs, setDocs] = useState(null);
   const [openDoc, setOpenDoc] = useState(null);
+  const [formType, setFormType] = useState(DEFAULT_FORM_TYPE);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
@@ -175,12 +181,12 @@ export default function App() {
 
   const go = (n) => setStep(n);
 
-  const openPdfPreview = async () => {
+  const openPdfPreview = async (actionId = formType) => {
     if (previewLoading) return;
     setPreviewLoading(true);
     setPreviewError("");
     try {
-      const response = await previewAction(PREVIEW_ACTION_ID, sessionId);
+      const response = await previewAction(actionId, sessionId);
       setAgentState(response?.state || null);
       const pendingApproval = response?.ui?.type === "approval"
         ? response.ui.payload
@@ -260,6 +266,11 @@ export default function App() {
   const applyAgent = (response) => {
     if (response?.state) setAgentState(response.state);
     setUi(readUi(response));
+    // 승인 대기는 어느 응답에나 실려 온다. 여기서 한 번에 받아야 화면마다 유실되지 않는다.
+    const pendingApproval = response?.ui?.type === "approval"
+      ? response.ui.payload
+      : response?.state?.pending_approval;
+    setApproval(pendingApproval || null);
     if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
     return response;
   };
@@ -645,6 +656,13 @@ export default function App() {
             <button type="button" onClick={editAnswers} className="review-edit tap">답변 수정</button>
             <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind)}</button>
           </div>
+          <div style={{ padding: "0 20px 20px" }}>
+            <button type="button" onClick={() => go(5)} className="tap"
+              style={{ width: "100%", minHeight: 44, borderRadius: 12, border: "1px solid var(--line)",
+                background: "#fff", fontSize: 13.5, fontWeight: 700 }}>
+              할 일 목록
+            </button>
+          </div>
         </Shell>
       );
     }
@@ -730,6 +748,20 @@ export default function App() {
           <p style={SUB}>잠긴 항목은 먼저 끝내야 하는 과제가 있어요.</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {/* confirm 직후 ui.type 이 doc_preview 로 오면 생성된 신청서를 여기서 바로 보여준다. */}
+          {ui.type === "doc_preview" && ui.payload?.document_id && (
+            <div style={{ ...card, display: "flex", gap: 13, borderColor: "var(--brand-2)" }}>
+              <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--brand-2)" }}>방금 만든 신청서</div>
+                <b style={{ display: "block", marginTop: 4, fontSize: 14.5 }}>{ui.payload.title}</b>
+                <button type="button" onClick={() => openStoredDocument(ui.payload)} className="tap"
+                  style={{ marginTop: 8, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>
+                  미리보기
+                </button>
+              </div>
+            </div>
+          )}
           {tasks.length === 0 && (
             <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
               아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.
@@ -749,6 +781,7 @@ export default function App() {
             내 신청서 · 서류함
           </button>
         </div>
+        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
   }
@@ -818,8 +851,25 @@ export default function App() {
           ))}
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
+          {/* 신청서 종류가 previewAction 의 action_id 를 정한다. */}
+          <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 8 }}>신청서 종류</div>
+          <div role="radiogroup" aria-label="신청서 종류" style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+            {FORM_TYPES.map((type) => {
+              const selected = formType === type.id;
+              return (
+                <button key={type.id} type="button" role="radio" aria-checked={selected}
+                  onClick={() => setFormType(type.id)} className="tap"
+                  style={{ textAlign: "left", padding: "11px 13px", borderRadius: 12,
+                    border: `1px solid ${selected ? "var(--brand-2)" : "var(--line)"}`,
+                    background: selected ? "oklch(0.96 0.02 60)" : "#fff" }}>
+                  <b style={{ fontSize: 13.5 }}>{type.title}</b>
+                  <div style={{ marginTop: 3, fontSize: 11.5, color: "var(--muted)" }}>{type.sub}</div>
+                </button>
+              );
+            })}
+          </div>
           {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
-          <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
+          <PrimaryButton disabled={previewLoading} onClick={() => openPdfPreview(formType)}>
             {previewLoading ? "PDF 생성 중…" : "PDF 미리보기"}
           </PrimaryButton>
           <button type="button" onClick={() => go(9)} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>내 서류함 · 실행 이력</button>
