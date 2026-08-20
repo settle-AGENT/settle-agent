@@ -26,6 +26,11 @@
 		reverse_proxy backend:{$BACKEND_CONTAINER_PORT}
 	}
 
+	@swagger path /swagger-ui.html /swagger-ui/* /v3/api-docs /v3/api-docs/*
+	handle @swagger {
+		reverse_proxy backend:{$BACKEND_CONTAINER_PORT}
+	}
+
 	handle {
 		reverse_proxy frontend:{$FRONTEND_CONTAINER_PORT}
 	}

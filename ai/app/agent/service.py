@@ -8,12 +8,19 @@ from __future__ import annotations
 import os
 import uuid
 from functools import lru_cache
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from app.agent.graph import build_graph
 from app.agent.state import new_state
-from app.nodes.planner import summary
-from app.nodes.profiler import profile_to_payload, public_profile
+from app.nodes.doc_builder import CONF_THRESHOLD
+from app.nodes.planner import MENU_TITLE, menu_options, summary
+from app.nodes.profiler import (
+    HARD_KEYS,
+    SOFT_KEYS,
+    conflicts,
+    profile_to_payload,
+    public_profile,
+)
 from app.nodes.profiler import run as profiler_run
 from app.tools import llm
 
@@ -69,7 +76,12 @@ def _graph():
 
 
 def is_persistent() -> bool:
-    """Postgres 에 붙었는지. /health 에서 노출하면 디버깅이 쉽다."""
+    """Checkpointer를 초기화하고 Postgres 연결 상태를 반환한다.
+
+    배포 직후에도 /health가 실제 RDS 연결을 검증해야 하므로,
+    첫 Agent 요청을 기다리지 않고 그래프를 여기서 초기화한다.
+    """
+    _graph()
     return _CONN is not None and not _CONN.closed
 
 
@@ -175,6 +187,13 @@ def start_session(session_id: str | None = None, locale: str = "en") -> dict:
     """
     sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
     state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
+
+    # 첫 화면의 말문. 여기서 무엇을 할 수 있는지 알려주지 않으면 사용자는
+    # 빈 입력창 앞에서 아무 말도 못 한다. 이어받은 세션은 인사하지 않는다 —
+    # 새로고침할 때마다 자기소개를 다시 하면 이상하다.
+    if not state.get("messages"):
+        return _response(state, _pick(GREETING, "new", locale), "none", {},
+                         reply_locale=locale)
     return _response(state)
 
 
@@ -183,6 +202,20 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
     """신분증 → 프로필 갱신 → Task Graph 재계산."""
     holder: dict = {"profile": {}, "confidence": {}}
     holder, payload = profiler_run(holder, image, doc_type, ext=ext)
+    incoming = holder["profile"]
+
+    # 이미 쌓인 프로필과 대조한다. 병합은 나중 값이 이기므로, 여기서 막지
+    # 않으면 다른 사람의 서류가 조용히 섞여 한 프로필이 된다.
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    existing = snap.get("profile") or {}
+
+    if hard := conflicts(existing, incoming, HARD_KEYS):
+        raise IdentityMismatch(doc_type, hard)
+
+    # 이름은 표기가 갈릴 수 있어 거부하지 않는다. 대신 확인 대상으로 내린다.
+    soft = conflicts(existing, incoming, SOFT_KEYS)
+    for key in soft:
+        holder["confidence"][key] = 0.50
 
     state = _graph().invoke(_patch(session_id, {
         "profile": holder["profile"],
@@ -196,9 +229,13 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
                                  state.get("confidence", {}), doc_type,
                                  locale=state.get("locale") or "en")
 
-    low = [f["key"] for f in payload["fields"] if f["confidence"] < 0.90]
+    low = [f["key"] for f in payload["fields"]
+           if f["confidence"] < CONF_THRESHOLD]
     head = ("신분증을 확인했습니다." if not low else
             f"신분증을 확인했습니다. {len(low)}개 항목은 확인이 필요합니다.")
+    if soft:
+        head += ("\n서류마다 이름 표기가 다릅니다. "
+                 "여권과 같은 표기로 맞춰주세요.")
     tasks = state.get("tasks") or []
     reply = f"{head}\n{summary(tasks)}" if tasks else head
 
@@ -228,6 +265,81 @@ _FIELD_META = {
     "income_source": ("Source of funds",
                       {"scholarship": 1, "family_support": 1, "part_time": 1, "savings": 1}),
 }
+
+
+# ──────────────────────────────────────────────────────────
+# 자유 발화 라우팅
+# ──────────────────────────────────────────────────────────
+# 승인(실행)은 여기 없다. 채팅으로 할 수 있는 것은 "과제를 연다" 까지고,
+# 되돌릴 수 없는 행동은 approval_gate 의 명시적 승인으로만 나간다.
+_OFFER_TEXT = {
+    "start_action": "Start the task now?",
+    "menu": "Pick one from the menu.",
+}
+
+GREETING = {
+    "new": {
+        "ko": "안녕하세요. 한국 정착에 필요한 일들을 함께 처리하는 도우미입니다.\n"
+              "체류·계좌·통신 무엇이든 물어보세요. "
+              "지금 뭘 해야 할지 모르겠으면 \"메뉴\"라고 말씀해주세요.",
+        "en": "Hello. I help you get settled in Korea.\n"
+              "Ask me anything about your visa, bank account, or phone. "
+              "If you are not sure where to start, just say \"menu\".",
+    },
+}
+
+_ACK = {
+    "no":      {"ko": "알겠습니다. 필요하시면 언제든 말씀해주세요.",
+                "en": "Alright. Tell me whenever you need it."},
+    "unclear": {"ko": "시작할까요? '네' 또는 '아니요' 로 답해주세요.",
+                "en": "Shall I start? Please answer yes or no."},
+    "done":    {"ko": "{}은(는) 이미 완료하셨습니다.",
+                "en": "You have already completed {}."},
+    "nothing": {"ko": "지금 하실 수 있는 일이 없습니다.",
+                "en": "There is nothing to do right now."},
+    # 할 일이 없는 것과 아직 모르는 것은 다르다. 프로필이 비었는데 "없습니다"
+    # 라고 하면 사용자는 앱이 고장 났다고 생각한다.
+    "no_profile": {"ko": "외국인등록증을 먼저 촬영해주세요. "
+                         "체류자격을 알아야 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
+                   "en": "Please photograph your residence card first. "
+                         "I need your visa status before I can tell you what to do."},
+}
+
+
+def _pick(table: dict, key: str, locale: str) -> str:
+    return table[key].get(locale) or table[key]["en"]
+
+
+def _task(tasks: list[dict], action_id: str) -> dict | None:
+    return next((t for t in tasks if t["id"] == action_id), None)
+
+
+def _offer_start(task: dict, locale: str) -> tuple[str, dict]:
+    """과제 하나를 권하는 문구와, 다음 턴에 'ㅇㅇ' 을 해석할 근거를 만든다."""
+    bits = [f"{task['label']}부터 하셔야 합니다."
+            if task["status"] == "locked" else f"{task['label']}을(를) 하실 수 있습니다."]
+    if task.get("agency"):
+        bits.append(f"제출처는 {task['agency']}입니다.")
+    if task.get("deadline"):
+        d = task.get("d_day")
+        if d is not None and d < 0:
+            bits.append(f"기한 {task['deadline']}에서 {abs(d)}일 지났습니다.")
+        elif d is not None:
+            bits.append(f"기한은 {task['deadline']}, {d}일 남았습니다.")
+    if task.get("required_docs"):
+        bits.append("지참 서류는 " + ", ".join(task["required_docs"]) + "입니다.")
+    bits.append("지금 시작할까요?")
+    offer = {"kind": "start_action", "action_id": task["id"], "label": task["label"]}
+    return " ".join(bits), offer
+
+
+def _blocking(tasks: list[dict], task: dict) -> dict:
+    """잠긴 과제를 풀어 줄, 지금 할 수 있는 선행 과제. 없으면 자기 자신."""
+    for pid in task.get("prereq", []):
+        p = _task(tasks, pid)
+        if p and p["status"] != "done":
+            return p if p["status"] != "locked" else _blocking(tasks, p)
+    return task
 
 
 def send_message(session_id: str, message: str) -> dict:
@@ -268,9 +380,115 @@ def send_message(session_id: str, message: str) -> dict:
 
         extra["profile"] = {asked: value}
         extra["asked_field"] = None
-    else:
-        extra["ask"] = message          # 슬롯 필링 답변이 아니면 자유 질문이다
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        return _response(state)
 
+    # ── 자유 발화 ──────────────────────────────────────────
+    locale = snap.get("locale") or "en"
+    tasks = snap.get("tasks") or []
+    offer = snap.get("pending_offer") or {}
+
+    # 메뉴에서 고른 값은 그대로 돌아온다. 확실한 것을 LLM 에 물을 이유가 없다.
+    picked = message.strip()
+    if offer.get("kind") == "menu" and picked in (offer.get("options") or []):
+        return _guide(session_id, extra, tasks, picked, locale)
+
+    intent = llm.classify(
+        message,
+        actions=[t["id"] for t in tasks],
+        offer=_OFFER_TEXT.get(offer.get("kind")) if offer else None,
+    ) or {}
+    kind = intent.get("intent")
+
+    # 1. 물어둔 제안에 대한 대답
+    if offer and kind == "confirm":
+        if intent.get("yes") is True:
+            if offer.get("kind") == "start_action":
+                return _begin(session_id, extra, offer["action_id"], locale)
+        elif intent.get("yes") is False:
+            extra["pending_offer"] = None
+            state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+            return _response(state, _pick(_ACK, "no", locale), "none", {},
+                             reply_locale=locale)
+        # yes 가 None 이면 애매하다는 뜻이다. 실행하지 않고 다시 묻는다.
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        return _response(state, _pick(_ACK, "unclear", locale), "none", {},
+                         reply_locale=locale)
+
+    # 2. 메뉴 요청
+    if kind == "menu":
+        return _menu(session_id, extra, locale)
+
+    # 3. 특정 과제를 하겠다는 요청
+    if kind == "action" and intent.get("action_id"):
+        return _guide(session_id, extra, tasks, intent["action_id"], locale)
+
+    # 4. 나머지는 질의응답으로 보낸다
+    extra["ask"] = message
+    extra["pending_offer"] = None
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    return _response(state)
+
+
+def _menu(session_id: str, extra: dict, locale: str) -> dict:
+    """지금 이 사람이 할 수 있는 일을 select 로 내린다."""
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    options = menu_options(state.get("tasks") or [], locale)
+    if not options:
+        key = "nothing" if (state.get("profile") or {}).get("visa_type") \
+              else "no_profile"
+        return _response(state, _pick(_ACK, key, locale), "none", {},
+                             reply_locale=locale)
+
+    state = _graph().invoke(
+        _patch(session_id, {"pending_offer": {
+            "kind": "menu", "options": [o["value"] for o in options]}}),
+        _cfg(session_id))
+    title = MENU_TITLE.get(locale) or MENU_TITLE["en"]
+    return _response(state, title, "question", {
+        "field": "menu",
+        "label": title,
+        "input_type": "select",
+        "options": options,
+        "hint": None,
+    }, reply_locale=locale)
+
+
+def _guide(session_id: str, extra: dict, tasks: list[dict],
+           action_id: str, locale: str) -> dict:
+    """과제 하나에 대한 안내. 상태에 따라 답이 갈린다."""
+    task = _task(tasks, action_id)
+    if task is None:                      # 이 체류자격에 없는 과제
+        extra["ask"] = action_id
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        return _response(state)
+
+    if task["status"] == "done":
+        extra["pending_offer"] = None
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        return _response(state,
+                         _pick(_ACK, "done", locale).format(task["label"]),
+                         "none", {}, reply_locale=locale)
+
+    # 잠겼으면 풀어 줄 선행 과제를 권한다. 사용자가 원한 것을 기억해 두지 않아도
+    # 선행이 끝나면 planner 가 다시 available 로 올려 준다.
+    target = _blocking(tasks, task) if task["status"] == "locked" else task
+    reply, offer = _offer_start(target, locale)
+    if target["id"] != task["id"]:
+        reply = f"{task['label']}은(는) 아직 잠겨 있습니다. " + reply
+
+    extra["pending_offer"] = offer
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    return _response(state, reply, "none", {})
+
+
+def _begin(session_id: str, extra: dict, action_id: str, locale: str) -> dict:
+    """승낙받은 과제를 연다. 여기서 실행되는 것은 없다 — 부족한 값을 묻기 시작할 뿐이다."""
+    extra.update({
+        "current_action": action_id,
+        "in_progress": [action_id],
+        "pending_offer": None,
+    })
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     return _response(state)
 
@@ -357,6 +575,37 @@ def get_state(session_id: str) -> dict:
 # ──────────────────────────────────────────────────────────
 # 예외
 # ──────────────────────────────────────────────────────────
+class IdentityMismatch(Exception):
+    """올린 서류의 신원이 이미 등록된 것과 다르다.
+
+    재촬영으로 해결되지 않는다 — 다른 사람의 서류이거나, 앞서 올린 것이
+    잘못됐다는 뜻이다. 어느 항목이 어떻게 다른지 알려준다.
+    """
+
+    LABELS: ClassVar[dict[str, str]] = {
+        "birth_date": "생년월일", "nationality": "국적", "gender": "성별"}
+
+    def __init__(self, doc_type: str, mismatched: dict[str, tuple[str, str]]):
+        self.doc_type = doc_type
+        self.mismatched = mismatched
+        super().__init__(f"identity mismatch: {sorted(mismatched)}")
+
+    def detail(self) -> dict:
+        items = ", ".join(
+            f"{self.LABELS.get(k, k)}({old} → {new})"
+            for k, (old, new) in sorted(self.mismatched.items()))
+        return {
+            "error": "validation_failed",
+            "message": (f"앞서 등록한 신분증과 정보가 다릅니다: {items}. "
+                        "같은 사람의 서류가 맞는지 확인해주세요."),
+            "details": {
+                "doc_type": self.doc_type,
+                "mismatched": {k: {"existing": o, "incoming": n}
+                               for k, (o, n) in self.mismatched.items()},
+            },
+        }
+
+
 class NothingToApprove(Exception):
     """승인 대기 중인 액션이 없다. 이미 처리됐거나 순서가 어긋났다."""
 

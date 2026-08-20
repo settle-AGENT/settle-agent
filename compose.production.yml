@@ -54,6 +54,10 @@ services:
     environment:
       SERVER_PORT: ${BACKEND_CONTAINER_PORT:-8080}
       AI_BASE_URL: http://ai:${AI_CONTAINER_PORT:-8000}
+      # 프로덕션에선 Hibernate 가 스키마를 말없이 고치게 두지 않는다. 스키마가
+      # 엔티티와 어긋나면 배포를 조용히 통과시키는 대신 기동을 실패시킨다.
+      # (로컬은 application.yml 기본값 update 를 그대로 쓴다.)
+      JPA_DDL_AUTO: validate
     depends_on:
       - ai
 

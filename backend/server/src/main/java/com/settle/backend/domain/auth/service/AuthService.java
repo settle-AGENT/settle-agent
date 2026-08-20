@@ -8,7 +8,6 @@ import com.settle.backend.domain.auth.exception.InvalidCredentialsException;
 import com.settle.backend.domain.member.entity.Member;
 import com.settle.backend.domain.member.repository.MemberRepository;
 import java.util.Locale;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,18 +17,15 @@ public class AuthService {
     private final MemberRepository memberRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
-    private final String passcode;
 
     public AuthService(
             MemberRepository memberRepository,
             PasswordEncoder passwordEncoder,
-            JwtTokenService jwtTokenService,
-            @Value("${settle.auth.passcode}") String passcode
+            JwtTokenService jwtTokenService
     ) {
         this.memberRepository = memberRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenService = jwtTokenService;
-        this.passcode = passcode;
     }
 
     @Transactional
@@ -46,8 +42,7 @@ public class AuthService {
     public AuthResponse login(LoginRequest request) {
         Member member = memberRepository.findByEmail(normalizeEmail(request.email()))
                 .orElseThrow(InvalidCredentialsException::new);
-        if (!passwordEncoder.matches(request.password(), member.getPasswordHash())
-                || !passcode.equals(request.passcode())) {
+        if (!passwordEncoder.matches(request.password(), member.getPasswordHash())) {
             throw new InvalidCredentialsException();
         }
         return response(member);

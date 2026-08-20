@@ -3,6 +3,7 @@ package com.settle.backend.domain.profile.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.settle.backend.common.auth.SessionOwnership;
+import com.settle.backend.domain.document.service.GeneratedDocumentService;
 import com.settle.backend.domain.profile.client.AiProfileClient;
 import com.settle.backend.domain.profile.dto.ProfileConfirmRequest;
 import com.settle.backend.domain.profile.exception.ProfileValidationException;
@@ -16,10 +17,16 @@ import org.springframework.stereotype.Service;
 public class ProfileService {
     private final AiProfileClient aiProfileClient;
     private final ObjectMapper objectMapper;
+    private final GeneratedDocumentService documentService;
 
-    public ProfileService(AiProfileClient aiProfileClient, ObjectMapper objectMapper) {
+    public ProfileService(
+            AiProfileClient aiProfileClient,
+            ObjectMapper objectMapper,
+            GeneratedDocumentService documentService
+    ) {
         this.aiProfileClient = aiProfileClient;
         this.objectMapper = objectMapper;
+        this.documentService = documentService;
     }
 
     public ResponseEntity<Map<String, Object>> confirm(
@@ -27,7 +34,11 @@ public class ProfileService {
     ) {
         SessionOwnership.require(memberId, request.sessionId());
         validateMessage(request.message());
-        return aiProfileClient.confirm(request);
+        return documentService.withReadyReferences(
+                aiProfileClient.confirm(request),
+                memberId,
+                request.sessionId()
+        );
     }
 
     private void validateMessage(String message) {

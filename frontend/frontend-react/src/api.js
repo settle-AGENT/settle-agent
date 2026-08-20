@@ -2,6 +2,8 @@
 // 목 모드가 필요한 경우에만 VITE_USE_MOCK=true로 실행한다.
 
 const MOCK = import.meta.env.VITE_USE_MOCK === "true";
+let mockDocuments = [];
+let mockLedger = [];
 
 async function post(path, body) {
   const res = await fetch(path, {
@@ -22,6 +24,7 @@ export const SCHEMA_VERSION = "1";
 // Spring 의 모든 보호 엔드포인트가 Bearer 토큰에서 memberId 를 꺼낸다.
 // S3 presigned PUT 에는 절대 붙이지 않는다 — 서명이 깨진다.
 const TOKEN_KEY = "settle_access_token";
+const MEMBER_KEY = "settle_member_id";
 
 export function readToken() {
   return window.localStorage.getItem(TOKEN_KEY) || "";
@@ -31,8 +34,13 @@ export function saveToken(token) {
   if (token) window.localStorage.setItem(TOKEN_KEY, token);
 }
 
+export function readMemberId() {
+  return window.localStorage.getItem(MEMBER_KEY) || "";
+}
+
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(MEMBER_KEY);
 }
 
 function authHeaders(extra) {
@@ -51,6 +59,8 @@ export class AgentError extends Error {
 }
 
 const ERROR_MESSAGE = {
+  EMAIL_ALREADY_EXISTS: "이미 가입된 이메일이에요. 로그인하거나 다른 이메일을 사용해 주세요.",
+  INVALID_CREDENTIALS: "이메일 또는 비밀번호를 확인해 주세요.",
   invalid_or_missing_token: "로그인이 만료됐어요. 다시 로그인해 주세요.",
   session_access_denied: "다른 계정의 세션이에요. 다시 로그인해 주세요.",
   prerequisite_missing: "먼저 완료해야 하는 과제가 있어요.",
@@ -116,9 +126,9 @@ const MOCK_EXTRACT = {
     stay_expiry: "2028.02.27",
     addr_kr: "서울 성북구 안암로 145, 국제학사 B-412",
     birth_date: "2003.11.20",
-    sex: "F",
+    gender: "F",
   },
-  // confidence < 0.9 → 사용자 확인 대상 (arc.py 규약)
+  // confidence < 0.95 → 사용자 확인 대상 (doc_builder.CONF_THRESHOLD)
   confidence: {
     name_en: 0.99,
     arc_no: 0.97,
@@ -141,25 +151,31 @@ const NATIONALITY_LABEL = {
 // 1) 외국인등록증/여권 OCR 추출
 export async function signUp({ email, password, passwordConfirm }) {
   if (MOCK) return delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" });
-  return authPost("/api/v1/auth/signup", { email, password, passwordConfirm });
+  return authPost("/api/v1/auth/signup", { email: email.trim(), password, passwordConfirm });
 }
 
-export async function login({ email, password, passcode }) {
+export async function login({ email, password }) {
   const payload = MOCK
     ? await delay({ memberId: "mock-member", accessToken: "mock-token", tokenType: "Bearer" })
-    : await authPost("/api/v1/auth/login", { email, password, passcode });
+    : await authPost("/api/v1/auth/login", { email: email.trim(), password });
   saveToken(payload.accessToken);
+  if (payload.memberId) window.localStorage.setItem(MEMBER_KEY, payload.memberId);
   return payload;
 }
 
 async function authPost(path, body) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new AgentError("네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", { code: "network" });
+  }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || "인증 요청을 처리하지 못했어요.");
+  if (!response.ok) throw toAgentError(response.status, payload, "인증 요청을 처리하지 못했어요.");
   return payload;
 }
 
@@ -168,9 +184,9 @@ export async function extractDocs({ arcFront, arcBack, passport }) {
   return post("/api/ocr/extract", { arcFront, arcBack, passport });
 }
 
-export async function uploadAndExtract(file, documentType) {
+export async function uploadAndExtract(file, documentType, locale = "ko") {
   if (file.type !== "image/png") throw new Error("PNG 이미지만 업로드할 수 있어요.");
-  if (MOCK) return delay(normalizeMockExtraction(MOCK_EXTRACT));
+  if (MOCK) return delay(normalizeMockExtraction(MOCK_EXTRACT, locale));
 
   const createUpload = await requireOk(await fetch("/api/v1/uploads", {
     method: "POST",
@@ -205,28 +221,28 @@ function normalizeExtraction(response) {
   };
 }
 
-function normalizeMockExtraction(mock) {
+function normalizeMockExtraction(mock, locale = "ko") {
   const readonly = new Set(["arc_no"]);
   const labels = {
     name_en: "이름", arc_no: "등록번호", nationality: "국적", visa_type: "체류자격",
-    stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", sex: "성별",
+    stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", gender: "성별",
   };
   const fields = Object.entries(mock.profile).map(([key, value]) => ({
     key, label: labels[key] || key, value, confidence: mock.confidence[key] ?? 1, editable: !readonly.has(key),
   }));
   return normalizeExtraction({
-    reply: "신분증을 확인했습니다.",
+    reply: locale === "en" ? "I checked your documents." : "신분증을 확인했습니다.",
     ui: { type: "profile_confirm", payload: { fields } },
-    state: { session_id: "demo-001", profile: mock.profile },
+    state: { session_id: "demo-001", locale, profile: mock.profile },
   });
 }
 
 // 2) OCR 프로필 확정. message는 dirty 필드만 담은 JSON 문자열이다.
-export async function confirmProfile(sessionId, dirtyFields) {
+export async function confirmProfile(sessionId, dirtyFields, locale = "ko") {
   if (MOCK) return delay({
-    reply: "프로필을 확인했어요. 몇 가지만 더 여쭤볼게요.",
-    ui: { type: "question", payload: { field: "phone_kr" } },
-    state: { session_id: sessionId, profile: { ...MOCK_EXTRACT.profile, ...dirtyFields } },
+    reply: locale === "en" ? "I need to ask a few more questions." : "프로필을 확인했어요. 몇 가지만 더 여쭤볼게요.",
+    ui: { type: "question", payload: { field: "phone_kr", label: locale === "en" ? "Do you have a Korean phone number?" : "한국 휴대폰 번호가 있나요?", input_type: "text" } },
+    state: { session_id: sessionId, locale, profile: { ...MOCK_EXTRACT.profile, ...dirtyFields } },
   });
 
   return agentFetch("/api/profile/confirm", {
@@ -243,8 +259,8 @@ export async function createSession(locale = "ko") {
 }
 
 // ── 화면 4. 상담 답변 제출 ───────────────────────────────────────────
-export async function sendChat(sessionId, message) {
-  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId }, "알겠습니다."));
+export async function sendChat(sessionId, message, locale = "ko") {
+  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId, locale }, locale === "en" ? "Got it." : "알겠습니다."));
   return agentFetch("/api/chat", {
     body: { session_id: sessionId, message },
     label: "메시지 전송",
@@ -253,30 +269,65 @@ export async function sendChat(sessionId, message) {
 
 // ── 화면 5. 과제 시작 ────────────────────────────────────────────────
 // locked 과제면 409 prerequisite_missing 이 AgentError 로 올라온다.
-export async function startAction(sessionId, actionId) {
-  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId }, "과제를 시작할게요."));
+export async function startAction(sessionId, actionId, locale = "ko") {
+  if (MOCK) return delay(mockAgentResponse({ session_id: sessionId, locale }, locale === "en" ? "Let's start this task." : "과제를 시작할게요."));
   return agentFetch(`/api/actions/${encodeURIComponent(actionId)}/start`, {
     body: { session_id: sessionId },
     label: "과제 시작",
   });
 }
 
-function mockAgentResponse(state, reply = "안녕하세요. 신분증부터 확인할게요.") {
+function mockAgentResponse(state, reply) {
+  const locale = state.locale || "ko";
   return {
     schema_version: SCHEMA_VERSION,
-    reply,
+    reply: reply || (locale === "en" ? "If you upload your ID, I'll tell you what you need to do." : "안녕하세요. 신분증부터 확인할게요."),
     ui: { type: "none", payload: {} },
     state: { locale: "ko", profile: {}, tasks: [], documents: [], pending_approval: null, ...state },
   };
 }
 
 // 3) 룰 엔진 판정
-export async function getVerdict(profileId, answers) {
-  if (MOCK) return delay(mockVerdict(answers));
+export async function getVerdict(profileId, answers, locale = "ko") {
+  if (MOCK) return delay(mockVerdict(answers, locale));
   return post("/api/verdict", { profileId, answers });
 }
 
-export async function previewAction(actionId, sessionId) {
+export async function previewAction(actionId, sessionId, locale = "ko") {
+  if (MOCK) {
+    const pdfUrl = `/mock/documents/${sessionId}-${actionId}.pdf`;
+    const integrated = actionId !== "open_bank_account";
+    const actionNames = {
+      alien_registration: ["외국인등록", "Alien registration"],
+      residence_change: ["체류지 변경", "Change of residence"],
+      work_activity: ["체류자격외활동허가", "Activity permit"],
+      open_bank_account: ["은행 계좌 개설", "Open a bank account"],
+    };
+    const actionName = actionNames[actionId] || [actionId, actionId];
+    const mockDocument = {
+      id: `${sessionId}-${actionId}`,
+      title: integrated
+        ? (locale === "en" ? "Integrated Application (Report)" : "통합신청서(신고서)")
+        : (locale === "en" ? "Bank account application" : "계좌개설신청서"),
+      created_at: new Date().toISOString(),
+      preview_url: pdfUrl,
+      pdf_url: pdfUrl,
+    };
+    mockDocuments = [mockDocument, ...mockDocuments.filter((document) => document.id !== mockDocument.id)];
+    const pendingApproval = {
+      action_id: actionId,
+      title: actionName[locale === "en" ? 1 : 0],
+      summary: [locale === "en" ? "Submit the completed application" : "작성된 신청서 제출"],
+      evidence: [],
+      risk_level: "L2",
+    };
+    return delay({
+      schema_version: SCHEMA_VERSION,
+      reply: locale === "en" ? "Your document is ready." : "서류를 작성했습니다.",
+      ui: { type: "doc_preview", payload: { document_id: mockDocument.id, ...mockDocument, warnings: [] } },
+      state: { session_id: sessionId, locale, profile: {}, tasks: [], documents: mockDocuments, pending_approval: pendingApproval },
+    });
+  }
   const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/preview`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
@@ -286,7 +337,20 @@ export async function previewAction(actionId, sessionId) {
   return response.json();
 }
 
-export async function approveAction(actionId, sessionId, approved) {
+export async function approveAction(actionId, sessionId, approved, locale = "ko") {
+  if (MOCK) {
+    if (approved && !mockLedger.some((entry) => entry.action === actionId)) {
+      mockLedger = [{ action: actionId, risk_level: "L2", approved_at: new Date().toISOString(), evidence: [] }];
+    }
+    return delay({
+      schema_version: SCHEMA_VERSION,
+      reply: approved
+        ? (locale === "en" ? "The approved action has been completed." : "승인한 작업을 실행했습니다.")
+        : (locale === "en" ? "The action was canceled." : "실행을 취소했습니다."),
+      ui: { type: "none", payload: {} },
+      state: { session_id: sessionId, locale, profile: {}, tasks: [], documents: mockDocuments, pending_approval: null },
+    });
+  }
   const response = await fetch(`/api/actions/${encodeURIComponent(actionId)}/approve`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
@@ -297,6 +361,7 @@ export async function approveAction(actionId, sessionId, approved) {
 }
 
 export async function getLedger(sessionId) {
+  if (MOCK) return delay(mockLedger);
   const response = await fetch(`/api/ledger?session_id=${encodeURIComponent(sessionId)}`, {
     headers: authHeaders(),
   });
@@ -305,6 +370,12 @@ export async function getLedger(sessionId) {
 }
 
 export async function fetchDocument(url) {
+  if (MOCK) {
+    const title = url.includes("open_bank_account")
+      ? "Bank Account Application"
+      : "Integrated Application (Report)";
+    return delay(new Blob([createMockPdf(title)], { type: "application/pdf" }));
+  }
   const response = await fetch(url, { headers: authHeaders() });
   await requireOk(response, "PDF 불러오기");
   return response.blob();
@@ -315,11 +386,12 @@ export function nationalityLabel(code) {
 }
 
 // ── 판정 룰(프론트 목). 실제 판정은 백엔드 rules 엔진이 담당 ──────────
-function mockVerdict(answers = {}) {
+function mockVerdict(answers = {}, locale = "ko") {
   const passportIssue = answers.scenario === "passport" || answers.passportIssue === true;
   const noPhone = answers.phone === "no";
   const noCert = answers.cert === "no";
   const kind = passportIssue ? "passport" : noPhone ? "phone" : noCert ? "cert" : "ready";
+  if (locale === "en") return mockVerdictEnglish(kind);
   const sources = [
     "금융거래 실명확인 업무 가이드 — 외국인 확인서류 §3.2",
     "한도제한계좌 해제 요건 안내 (2026.01 개정)",
@@ -365,6 +437,69 @@ function mockVerdict(answers = {}) {
   };
 }
 
+function mockVerdictEnglish(kind) {
+  const sources = [
+    "Financial identity verification guide — Foreign nationals §3.2",
+    "Restricted-account limit release requirements (revised Jan 2026)",
+    "KB Kookmin Bank student account-opening criteria",
+  ];
+  if (kind === "passport") return {
+    kind, sources,
+    headline: "One document needs attention",
+    summary: "Your passport expires in four months. Renew it before visiting because the bank requires at least six months of validity.",
+    blocker: { title: "Passport validity", badge: "Extracted", body: "Read from passport: expires 2026-12-09 — below the six-month requirement. Your residence card is fine." },
+    limited: { status: "After renewal", ready: false, body: "Everything else passed. Renew your passport to continue." },
+    regular: { status: "Not yet", body: "A standard account requires at least six months of stay history or proof of income." },
+  };
+  if (kind === "phone") return {
+    kind, sources,
+    headline: "One more thing before you are ready",
+    summary: "You need a Korean phone number registered in your name before visiting the bank.",
+    blocker: { title: "Phone in your name", badge: "Required", body: "The branch verifies you by text message. A prepaid number is acceptable, but a friend's number is not." },
+    limited: { status: "After activation", ready: false, body: "Your residence card, passport, and enrollment certificate are ready." },
+    regular: { status: "Not yet", body: "A standard account requires at least six months of stay history or proof of income." },
+  };
+  if (kind === "cert") return {
+    kind, sources,
+    headline: "Almost ready — one document remains",
+    summary: "Bring an enrollment certificate or admission letter. You do not need to scan it; bring the paper original.",
+    blocker: { title: "Enrollment certificate", badge: "Paper only", body: "Print it from your school portal and submit it at the branch." },
+    limited: { status: "After issuance", ready: false, body: "Your residence card, passport, and phone are ready." },
+    regular: { status: "Not yet", body: "A standard account requires at least six months of stay history or proof of income." },
+  };
+  return {
+    kind, sources,
+    headline: "You can visit the bank today",
+    summary: "You have what you need for a restricted account. You may be able to raise the limit after six months.",
+    blocker: null,
+    limited: { status: "Ready", ready: true, body: "Bring your residence card, passport, enrollment certificate, and phone registered in your name." },
+    regular: { status: "Not yet", body: "A standard account requires at least six months of stay history or proof of income." },
+  };
+}
+
 function delay(v, ms = 500) {
   return new Promise((r) => setTimeout(() => r(v), ms));
+}
+
+function createMockPdf(title) {
+  const escapedTitle = title.replace(/[()\\]/g, "\\$&");
+  const content = `BT /F1 18 Tf 72 720 Td (${escapedTitle}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(new TextEncoder().encode(pdf).length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = new TextEncoder().encode(pdf).length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return pdf;
 }

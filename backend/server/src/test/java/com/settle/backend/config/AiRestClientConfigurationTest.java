@@ -36,7 +36,9 @@ class AiRestClientConfigurationTest {
 
         RestClient restClient = new AiRestClientConfiguration().aiRestClient(
                 RestClient.builder(),
-                "http://127.0.0.1:" + server.getAddress().getPort()
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                5,
+                120
         );
         HttpAiProfileClient client = new HttpAiProfileClient(restClient);
 

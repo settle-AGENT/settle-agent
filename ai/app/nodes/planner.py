@@ -49,9 +49,6 @@ ORDER = [
     "work_activity",
     "open_bank_account",
 ]
-# 프로필에 이 값이 있으면 이미 해결된 것으로 본다 (D2에 visa_matrix로 이관)
-SATISFIED_IF = {"mobile_subscription": "phone_kr"}
-
 def _as_date(v) -> date | None:
     if not v:
         return None
@@ -78,12 +75,9 @@ def _deadline(spec: dict, profile: dict, today: date) -> tuple[str | None, int |
 
 
 def _status(action_id: str, spec: dict, completed: set[str],
-            in_progress: set[str], profile: dict | None = None) -> str:
+            in_progress: set[str]) -> str:
     if action_id in completed:
         return "done"
-    key = SATISFIED_IF.get(action_id)
-    if key and (profile or {}).get(key):
-        return "done"                      # 이미 갖고 있음 → 시킬 이유가 없다
     if action_id in in_progress:
         return "in_progress"
     if all(p in completed for p in spec.get("prereq", [])):
@@ -111,6 +105,18 @@ def build_task_graph(
     if not actions:
         return []                              # 미지원 체류자격
 
+    # 프로필에 값이 있으면 이미 끝낸 것으로 본다. 등록증 번호를 들고 있는데
+    # 외국인등록을 하라고 시키면 사용자는 앱을 믿지 않는다.
+    #
+    # completed 에 합쳐 넣는 것이 핵심이다. 상태만 done 으로 바꾸면 그것을
+    # 선행조건으로 삼는 과제들이 계속 잠겨 있다 — 등록은 끝났는데 계좌는
+    # 영영 안 열리는 상태가 된다.
+    completed = set(completed)
+    for aid, spec in actions.items():
+        key = spec.get("satisfied_if")
+        if key and profile.get(key):
+            completed.add(aid)
+
     labels = {aid: _field(s, "label", locale) or aid
               for aid, s in actions.items()}
     ordered = [a for a in ORDER if a in actions] + \
@@ -122,7 +128,7 @@ def build_task_graph(
         if spec.get("allowed") is False:
             continue                           # 이 자격으로는 불가한 액션
 
-        status = _status(aid, spec, completed, in_progress, profile)
+        status = _status(aid, spec, completed, in_progress)
         prereq = spec.get("prereq", [])
         deadline, d_day = _deadline(spec, profile, today)
 
@@ -150,6 +156,42 @@ def build_task_graph(
                               t["d_day"] is None,
                               t["d_day"] if t["d_day"] is not None else 0))
     return tasks
+
+
+MENU_TITLE = {"ko": "무엇을 도와드릴까요?", "en": "What can I help you with?"}
+_MENU_NOTE = {
+    "locked": {"ko": "{}\u00a0후 가능", "en": "after {}"},
+    "dday":   {"ko": "D-{}", "en": "D-{}"},
+    "over":   {"ko": "{}일 지남", "en": "{} days overdue"},
+}
+
+
+def menu_options(tasks: list[dict], locale: str = "en") -> list[dict]:
+    """할 수 있는 일 목록. select 옵션 형태로 돌려준다.
+
+    고정 목록이 아니다 — 체류자격에 따라 항목이 달라지고, 끝낸 과제는 빠지며,
+    잠긴 과제는 무엇 때문에 잠겼는지 라벨에 실린다. 화면에 보이는 것이 곧
+    지금 이 사람의 상태다.
+    """
+    def note(t: dict) -> str | None:
+        if t["status"] == "locked" and t.get("blocked_by"):
+            return _MENU_NOTE["locked"][locale].format(t["blocked_by"][0])
+        d = t.get("d_day")
+        if d is None:
+            return None
+        key = "over" if d < 0 else "dday"
+        return _MENU_NOTE[key][locale].format(abs(d))
+
+    out = []
+    for t in tasks:
+        if t["status"] == "done":
+            continue                       # 끝난 일을 다시 권하지 않는다
+        tail = note(t)
+        out.append({
+            "value": t["id"],
+            "label": f"{t['label']} · {tail}" if tail else t["label"],
+        })
+    return out
 
 
 def missing_for_deadlines(profile: dict, tasks: list[dict] | None = None) -> list[str]:
