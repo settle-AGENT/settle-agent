@@ -90,6 +90,15 @@ class AgentState(TypedDict, total=False):
     ask: Annotated[Optional[str], replace]               # 이번 턴의 자유 질문
     last_qa: Annotated[Optional[str], replace]           # 마지막으로 답한 질문
 
+    # 직전 턴에 사용자에게 물어둔 제안. "시작할까요?" 에 "ㅇㅇ" 이 돌아왔을 때
+    # 무엇에 대한 긍정인지 아는 유일한 근거다. 이게 없으면 "ㅇㅇ" 이 법령
+    # 질의응답으로 새어 들어간다.
+    #   {"kind": "start_action", "action_id": ..., "label": ...}
+    #   {"kind": "menu", "options": [action_id, ...]}
+    # 실행 승인은 여기 들어오지 않는다 — 승인은 채팅이 아니라 approval_gate 가
+    # 맡는다. 되돌릴 수 없는 행동을 말 한마디로 실행하지 않기 위해서다.
+    pending_offer: Annotated[Optional[dict], replace]
+
     # ── 산출물 ────────────────────────────────────────────
     documents: Annotated[list[dict], union_list]
     pending_approval: Annotated[Optional[PendingAction], replace]
@@ -129,6 +138,7 @@ def new_state(session_id: str, locale: str = "en") -> AgentState:
         current_action=None,
         missing_fields=[],
         asked_field=None,
+        pending_offer=None,
         documents=[],
         pending_approval=None,
         approval_decision=None,

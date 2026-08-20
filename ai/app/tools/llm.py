@@ -38,6 +38,12 @@ def available() -> bool:
     return _client() is not None
 
 
+def client():
+    """도구 루프처럼 _call 로 감쌀 수 없는 호출을 위해 원본 클라이언트를 준다."""
+    return _client()
+
+
+
 def _call(system: str, user: str, *, tool: dict | None = None,
           max_tokens: int = MAX_TOKENS) -> Any:
     """tool 을 주면 구조화 출력(dict), 없으면 텍스트(str)."""
@@ -206,20 +212,47 @@ def explain(verdict: dict, *, locale: str = "en") -> str | None:
 # ══════════════════════════════════════════════════════════
 # 4. 의도 분류 — 라우팅
 # ══════════════════════════════════════════════════════════
-_ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant app.
+_ROUTE_SYSTEM = """Classify the user's message in a Korean settlement-assistant app
+for foreign residents. The user writes casually, often in Korean internet
+shorthand, and may mix languages.
 
-- answer   : replying to the field the assistant just asked
-- question : asking whether something is possible / what is needed
-- action   : asking to start or do a task
-- other    : greeting, thanks, unrelated"""
+- confirm  : answering yes or no to the offer the assistant just made.
+             Only when an offer is pending. Set "yes" true or false.
+             Korean users say yes as ㅇㅇ, ㅇㅋ, ㄱㄱ, 응, 넵, 그래, 해줘, 좋아요;
+             and no as ㄴㄴ, 아니, 됐어, 나중에, 안 할래.
+             If the message is not a clear yes or no — hedging, a new question,
+             a question back — this is NOT confirm. Classify it as something
+             else. Never guess a yes.
+- menu     : asking what they can do here, or asking to see the list of tasks.
+             "뭐 할 수 있어", "메뉴", "뭐부터 해야 해", "목록 보여줘".
+- action   : asking to start or do a specific task, OR asking the app to
+             prepare / fill in / write the application form for one. Put its id
+             in action_id, chosen from the available actions given.
+             "계좌 만들고 싶어", "통장 열려면", "등록증 신청할래",
+             "신청서 만들어줘", "대신 작성해줘", "통합신청서 작성해줘".
+             The app does fill in forms — a request to write one is an action,
+             never "other".
+- answer   : replying to the field the assistant just asked.
+- question : asking whether something is possible, what is needed, what a rule
+             says. This is the default for anything informational.
+- other    : greeting, thanks, unrelated.
+
+Prefer question over action when the user is asking *about* a task rather than
+asking to start it. "계좌 어떻게 만들어요?" is a question; "계좌 만들어줘" is an action."""
 
 
 def classify(message: str, *, asked_field: str | None = None,
-             actions: list[str] | None = None) -> dict | None:
-    """returns {"intent": str, "action_id": str|None, "topic": str|None}"""
+             actions: list[str] | None = None,
+             offer: str | None = None) -> dict | None:
+    """returns {"intent": str, "action_id": str|None, "yes": bool|None, ...}
+
+    offer 는 직전 턴에 사용자에게 물어둔 제안의 설명이다. 이게 있어야만
+    confirm 이 성립한다 — 물어본 적 없는데 "ㅇㅇ" 을 긍정으로 읽으면 안 된다.
+    """
     return _call(
         _ROUTE_SYSTEM,
         f"Assistant just asked for: {asked_field or '(nothing)'}\n"
+        f"Pending offer awaiting yes/no: {offer or '(none)'}\n"
         f"Available actions: {actions or []}\n\nUser message: {message}",
         tool={
             "name": "classify_intent",
@@ -228,7 +261,11 @@ def classify(message: str, *, asked_field: str | None = None,
                 "type": "object",
                 "properties": {
                     "intent": {"type": "string",
-                               "enum": ["answer", "question", "action", "other"]},
+                               "enum": ["confirm", "menu", "action",
+                                        "answer", "question", "other"]},
+                    "yes": {"type": ["boolean", "null"],
+                            "description": "if intent=confirm: true for yes, "
+                                           "false for no. null if unclear."},
                     "action_id": {"type": ["string", "null"],
                                   "description": "action id if intent=action"},
                     "topic": {"type": ["string", "null"],
@@ -245,11 +282,27 @@ def classify(message: str, *, asked_field: str | None = None,
 # ══════════════════════════════════════════════════════════
 _TR_SYSTEM = """Translate the text. Keep it literal.
 Do not add, remove, soften, or explain anything.
-Keep proper nouns, law names, numbers, and dates unchanged."""
+Keep proper nouns, law names, numbers, and dates unchanged.
+
+Your entire output is the translation and nothing else. This text goes straight
+onto a user's screen — anything you add ends up there too.
+- No notes, no alternatives, no "or, depending on context", no commentary on
+  the grammar, no separators, no quotes around it.
+- Short fragments are still just fragments. Pick one natural rendering of
+  "아래 내용을 실행할까요?" and output only that.
+- Never address the user or ask what to translate. If the text is already in the
+  target language, output it unchanged."""
+
+
+_HAS_HANGUL = re.compile(r"[가-힣]")
 
 
 def translate(text: str, locale: str) -> str:
     if not text or locale == "ko" or not available():
+        return text
+    # 이미 영어인 문장을 영어로 번역시키면 모델이 번역 요청으로 알아듣고
+    # "번역할 문장을 주세요" 라고 답한다. 그 답이 그대로 사용자에게 나갔다.
+    if locale == "en" and not _HAS_HANGUL.search(text):
         return text
     out = _call(_TR_SYSTEM, f"Target language: {LANG.get(locale, locale)}\n\n{text}",
                 max_tokens=400)
