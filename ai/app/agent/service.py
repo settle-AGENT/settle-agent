@@ -8,13 +8,19 @@ from __future__ import annotations
 import os
 import uuid
 from functools import lru_cache
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from app.agent.graph import build_graph
 from app.agent.state import new_state
 from app.nodes.doc_builder import CONF_THRESHOLD
 from app.nodes.planner import summary
-from app.nodes.profiler import profile_to_payload, public_profile
+from app.nodes.profiler import (
+    HARD_KEYS,
+    SOFT_KEYS,
+    conflicts,
+    profile_to_payload,
+    public_profile,
+)
 from app.nodes.profiler import run as profiler_run
 from app.tools import llm
 
@@ -189,6 +195,20 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
     """신분증 → 프로필 갱신 → Task Graph 재계산."""
     holder: dict = {"profile": {}, "confidence": {}}
     holder, payload = profiler_run(holder, image, doc_type, ext=ext)
+    incoming = holder["profile"]
+
+    # 이미 쌓인 프로필과 대조한다. 병합은 나중 값이 이기므로, 여기서 막지
+    # 않으면 다른 사람의 서류가 조용히 섞여 한 프로필이 된다.
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    existing = snap.get("profile") or {}
+
+    if hard := conflicts(existing, incoming, HARD_KEYS):
+        raise IdentityMismatch(doc_type, hard)
+
+    # 이름은 표기가 갈릴 수 있어 거부하지 않는다. 대신 확인 대상으로 내린다.
+    soft = conflicts(existing, incoming, SOFT_KEYS)
+    for key in soft:
+        holder["confidence"][key] = 0.50
 
     state = _graph().invoke(_patch(session_id, {
         "profile": holder["profile"],
@@ -206,6 +226,9 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
            if f["confidence"] < CONF_THRESHOLD]
     head = ("신분증을 확인했습니다." if not low else
             f"신분증을 확인했습니다. {len(low)}개 항목은 확인이 필요합니다.")
+    if soft:
+        head += ("\n서류마다 이름 표기가 다릅니다. "
+                 "여권과 같은 표기로 맞춰주세요.")
     tasks = state.get("tasks") or []
     reply = f"{head}\n{summary(tasks)}" if tasks else head
 
@@ -364,6 +387,37 @@ def get_state(session_id: str) -> dict:
 # ──────────────────────────────────────────────────────────
 # 예외
 # ──────────────────────────────────────────────────────────
+class IdentityMismatch(Exception):
+    """올린 서류의 신원이 이미 등록된 것과 다르다.
+
+    재촬영으로 해결되지 않는다 — 다른 사람의 서류이거나, 앞서 올린 것이
+    잘못됐다는 뜻이다. 어느 항목이 어떻게 다른지 알려준다.
+    """
+
+    LABELS: ClassVar[dict[str, str]] = {
+        "birth_date": "생년월일", "nationality": "국적", "gender": "성별"}
+
+    def __init__(self, doc_type: str, mismatched: dict[str, tuple[str, str]]):
+        self.doc_type = doc_type
+        self.mismatched = mismatched
+        super().__init__(f"identity mismatch: {sorted(mismatched)}")
+
+    def detail(self) -> dict:
+        items = ", ".join(
+            f"{self.LABELS.get(k, k)}({old} → {new})"
+            for k, (old, new) in sorted(self.mismatched.items()))
+        return {
+            "error": "validation_failed",
+            "message": (f"앞서 등록한 신분증과 정보가 다릅니다: {items}. "
+                        "같은 사람의 서류가 맞는지 확인해주세요."),
+            "details": {
+                "doc_type": self.doc_type,
+                "mismatched": {k: {"existing": o, "incoming": n}
+                               for k, (o, n) in self.mismatched.items()},
+            },
+        }
+
+
 class NothingToApprove(Exception):
     """승인 대기 중인 액션이 없다. 이미 처리됐거나 순서가 어긋났다."""
 

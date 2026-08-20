@@ -70,6 +70,25 @@ def find_mrz(texts: list[str]) -> list[str]:
     return out
 
 
+# MRZ 1행: P<{발급국}{성}<<{이름}<<<…
+# 성과 이름 사이는 << , 낱말 사이는 < , 남는 자리는 < 로 채운다.
+_MRZ_NAME = re.compile(r"^P.([A-Z]{3})([A-Z<]+)$")
+
+
+def name_from_mrz(mrz: list[str]) -> str | None:
+    """MRZ 에서 영문 성명을 읽는다. 시각 영역은 글꼴 탓에 오인식이 잦아
+    이름만큼은 MRZ 쪽이 안정적이다."""
+    for line in mrz:
+        m = _MRZ_NAME.match(line)
+        if not m:
+            continue
+        surname, _, given = m.group(2).partition("<<")
+        parts = [w for w in (surname + "<" + given).split("<") if w]
+        if parts:
+            return " ".join(parts)
+    return None
+
+
 def cross_check(profile: dict, mrz: list[str]) -> tuple[bool, list[str]]:
     """MRZ 에서 확인 가능한 것만 대조한다. 불일치는 신뢰도만 낮춘다."""
     if not mrz:
@@ -108,7 +127,12 @@ def extract_profile(image_bytes: bytes, doc_type: str = "passport",
         raise OcrFailed("여권번호를 읽지 못했습니다. 정보면 전체가 들어가게 "
                         "다시 촬영해주세요.")
 
-    has_mrz, mismatched = cross_check(profile, find_mrz(texts))
+    mrz = find_mrz(texts)
+    if name := name_from_mrz(mrz):
+        profile["name_en"] = name
+        confidence["name_en"] = 0.93
+
+    has_mrz, mismatched = cross_check(profile, mrz)
     for k in profile:
         if not has_mrz:
             confidence[k] = min(confidence.get(k, 0.9), 0.88)
