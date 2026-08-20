@@ -1,0 +1,89 @@
+form: integrated_application
+title_ko: 통합신청서(신고서)
+title_en: Integrated Application (Report)
+template: integrated_application.html
+source_note: "출입국관리법 시행규칙 [별지 제34호서식]"
+
+variants:
+  registration:
+    checkbox: 외국인등록
+    checkbox_en: FOREIGN RESIDENT REGISTRATION
+    fee: 30000
+  address_change:
+    checkbox: 체류지변경신고
+    checkbox_en: ALTERATION OF RESIDENCE
+    fee: 0
+  activity_permit:
+    checkbox: 체류자격외활동허가
+    checkbox_en: ENGAGE IN ACTIVITIES NOT COVERED BY THE STATUS OF SOJOURN
+    fee: 120000
+
+fields:
+  applicant_name_en:
+    from: profile.name_en
+    required: true
+    label_ko: 성명(영문)
+    label_en: Name in Full
+  nationality:
+    from: profile.nationality
+    required: true
+    label_ko: 국적
+    label_en: Nationality
+    transform: country_name
+  birth_date:
+    from: profile.birth_date
+    required: true
+    label_ko: 생년월일
+    label_en: Date of Birth
+  sex:
+    from: profile.sex
+    required: false
+    label_ko: 성별
+    label_en: Sex
+  passport_no:
+    from: profile.passport_no
+    required: false
+    label_ko: 여권번호
+    label_en: Passport No.
+  arc_no:
+    from: profile.arc_no
+    required_when: "variant != registration"
+    label_ko: 외국인등록번호
+    label_en: Foreign Resident Registration No.
+  visa_type:
+    from: profile.visa_type
+    required: true
+    label_ko: 체류자격
+    label_en: Status of stay
+  stay_expiry:
+    from: profile.stay_expiry
+    required: false
+    label_ko: 체류기간 만료일
+    label_en: Period of sojourn until
+  addr_kr:
+    from: profile.addr_kr
+    required: true
+    label_ko: 대한민국 내 주소
+    label_en: Address in Korea
+  phone_kr:
+    from: profile.phone_kr
+    required: true
+    label_ko: 휴대전화
+    label_en: Cell phone No.
+  org_name:
+    from: profile.org_name
+    required: true
+    label_ko: 학교 이름
+    label_en: Name of School
+  entry_date:
+    from: profile.entry_date
+    required: false
+    label_ko: 입국일자
+    label_en: Date of entry
+
+disclaimer_ko: >
+  본 서식은 법령상 요구 항목을 기준으로 재구성된 작성 보조 문서이며,
+  최종 확인과 제출은 신청인 본인이 수행합니다.
+disclaimer_en: >
+  This form is a drafting aid reconstructed from statutory requirements.
+  Final verification and submission are performed by the applicant.

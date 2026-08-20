@@ -13,10 +13,16 @@ import org.springframework.stereotype.Service;
 public class DocumentService {
     private final FileService fileService;
     private final AiDocumentClient aiDocumentClient;
+    private final GeneratedDocumentService generatedDocumentService;
 
-    public DocumentService(FileService fileService, AiDocumentClient aiDocumentClient) {
+    public DocumentService(
+            FileService fileService,
+            AiDocumentClient aiDocumentClient,
+            GeneratedDocumentService generatedDocumentService
+    ) {
         this.fileService = fileService;
         this.aiDocumentClient = aiDocumentClient;
+        this.generatedDocumentService = generatedDocumentService;
     }
 
     public ResponseEntity<Map<String, Object>> extractAndSave(
@@ -31,7 +37,11 @@ public class DocumentService {
             );
             if (response.getStatusCode().is2xxSuccessful()) {
                 fileService.markDone(prepared.ticket());
-                return ResponseEntity.status(HttpStatus.CREATED).body(response.getBody());
+                return generatedDocumentService.withReadyReferences(
+                        ResponseEntity.status(HttpStatus.CREATED).body(response.getBody()),
+                        memberId,
+                        memberId.toString()
+                );
             }
             fileService.markFailed(prepared.ticket());
             return response;

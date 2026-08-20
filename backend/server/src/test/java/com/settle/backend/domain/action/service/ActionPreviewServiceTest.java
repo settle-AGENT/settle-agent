@@ -91,7 +91,12 @@ class ActionPreviewServiceTest {
                 pdf,
                 List.of("영문 이름을 확인해 주세요.")
         )).thenReturn(document);
-        when(documentService.listReady(MEMBER_ID, SESSION_ID)).thenReturn(List.of(document));
+        when(documentService.previewUrl(DOCUMENT_ID))
+                .thenReturn("/api/documents/%s/preview".formatted(DOCUMENT_ID));
+        when(documentService.downloadUrl(DOCUMENT_ID))
+                .thenReturn("/api/documents/%s/download".formatted(DOCUMENT_ID));
+        when(documentService.listReadyReferences(MEMBER_ID, SESSION_ID))
+                .thenReturn(List.of(Map.of("id", DOCUMENT_ID.toString())));
 
         AgentResponse result = service.preview(MEMBER_ID, "open_bank_account", SESSION_ID);
 

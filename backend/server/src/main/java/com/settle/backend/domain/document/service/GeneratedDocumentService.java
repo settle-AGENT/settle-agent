@@ -7,8 +7,11 @@ import com.settle.backend.domain.document.repository.GeneratedDocumentRepository
 import com.settle.backend.domain.file.service.S3FileGateway;
 import com.settle.backend.domain.member.entity.Member;
 import com.settle.backend.domain.member.repository.MemberRepository;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -78,6 +81,58 @@ public class GeneratedDocumentService {
                 sessionId,
                 GeneratedDocumentStatus.READY
         );
+    }
+
+    public List<Map<String, Object>> listReadyReferences(UUID memberId, String sessionId) {
+        return listReady(memberId, sessionId).stream()
+                .map(this::reference)
+                .toList();
+    }
+
+    public ResponseEntity<Map<String, Object>> withReadyReferences(
+            ResponseEntity<Map<String, Object>> response,
+            UUID memberId,
+            String sessionId
+    ) {
+        Map<String, Object> body = response.getBody();
+        if (!response.getStatusCode().is2xxSuccessful() || body == null) {
+            return response;
+        }
+
+        Map<String, Object> enrichedBody = new LinkedHashMap<>(body);
+        Map<String, Object> state = mutableMap(body.get("state"));
+        state.put("documents", listReadyReferences(memberId, sessionId));
+        enrichedBody.put("state", state);
+        return ResponseEntity.status(response.getStatusCode())
+                .headers(response.getHeaders())
+                .body(enrichedBody);
+    }
+
+    private Map<String, Object> reference(GeneratedDocument document) {
+        Map<String, Object> reference = new LinkedHashMap<>();
+        reference.put("id", document.getId().toString());
+        reference.put("title", document.getTitle());
+        reference.put("action_id", document.getActionId());
+        reference.put("preview_url", previewUrl(document.getId()));
+        reference.put("pdf_url", downloadUrl(document.getId()));
+        reference.put("created_at", document.getCreatedAt());
+        return reference;
+    }
+
+    public String previewUrl(UUID documentId) {
+        return "/api/documents/%s/preview".formatted(documentId);
+    }
+
+    public String downloadUrl(UUID documentId) {
+        return "/api/documents/%s/download".formatted(documentId);
+    }
+
+    private Map<String, Object> mutableMap(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> source) {
+            source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        }
+        return result;
     }
 
     private void validatePdf(byte[] pdf) {

@@ -8,15 +8,19 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
-from app.nodes.planner import build_task_graph, summary
-from app.nodes.profiler import profile_to_payload
+from app.nodes import qa
+from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
+from app.nodes.doc_builder import DocumentIncomplete, render
+from app.nodes.profiler import label_of as _label_of
 from app.rules.loader import actions_for, evidence_labels
+from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
 
@@ -28,60 +32,126 @@ def _now() -> str:
 # ──────────────────────────────────────────────────────────
 # 슬롯 필링 질문 정의 (mappings 완성 전까지 여기서 관리)
 # ──────────────────────────────────────────────────────────
+# label / hint / options 는 {ko, en}. LLM 이 문장을 만들어 주면 label·hint 는
+# 덮이지만 options 는 LLM 을 타지 않으므로 여기 값이 그대로 화면에 나간다.
 QUESTIONS: dict[str, dict] = {
-    "entry_date": {
-        "label": "When did you enter Korea?",
+    "birth_date": {
+        "label": {"ko": "생년월일이 어떻게 되시나요?",
+                  "en": "What is your date of birth?"},
         "input_type": "text",
         "options": [],
-        "hint": "YYYY-MM-DD — 여권 입국심사인에 찍혀 있습니다",
+        "hint": {"ko": "YYYY-MM-DD", "en": "YYYY-MM-DD"},
+    },
+    "entry_date": {
+        "label": {"ko": "한국에 언제 입국하셨나요?",
+                  "en": "When did you enter Korea?"},
+        "input_type": "text",
+        "options": [],
+        "hint": {"ko": "YYYY-MM-DD — 여권 입국심사인에 찍혀 있습니다",
+                 "en": "YYYY-MM-DD — stamped in your passport at entry"},
     },
     "org_name": {
-        "label": "Which school are you enrolled in?",
+        "label": {"ko": "어느 학교에 재학 중이신가요?",
+                  "en": "Which school are you enrolled in?"},
         "input_type": "text",
         "options": [],
-        "hint": "As written on your enrollment certificate",
+        "hint": {"ko": "재학증명서에 적힌 이름 그대로 적어주세요",
+                 "en": "As written on your enrollment certificate"},
     },
     "phone_kr": {
-        "label": "What is your phone number in Korea?",
+        "label": {"ko": "한국에서 쓰시는 전화번호를 알려주세요.",
+                  "en": "What is your phone number in Korea?"},
         "input_type": "text",
         "options": [],
     },
     "purpose": {
-        "label": "What will you use this account for?",
+        "label": {"ko": "이 계좌를 어떤 용도로 쓰실 건가요?",
+                  "en": "What will you use this account for?"},
         "input_type": "select",
         "options": [
-            {"value": "living_expense", "label": "Living expenses"},
-            {"value": "tuition", "label": "Tuition"},
-            {"value": "salary", "label": "Salary"},
-            {"value": "remittance", "label": "Remittance"},
+            {"value": "living_expense",
+             "label": {"ko": "생활비", "en": "Living expenses"}},
+            {"value": "tuition", "label": {"ko": "학비", "en": "Tuition"}},
+            {"value": "salary", "label": {"ko": "급여", "en": "Salary"}},
+            {"value": "remittance", "label": {"ko": "송금", "en": "Remittance"}},
         ],
     },
     "income_source": {
-        "label": "Where does your money come from?",
+        "label": {"ko": "자금은 어디에서 나오나요?",
+                  "en": "Where does your money come from?"},
         "input_type": "select",
         "options": [
-            {"value": "scholarship", "label": "Scholarship"},
-            {"value": "family_support", "label": "Family support"},
-            {"value": "part_time", "label": "Part-time job"},
-            {"value": "savings", "label": "Savings"},
+            {"value": "scholarship", "label": {"ko": "장학금", "en": "Scholarship"}},
+            {"value": "family_support",
+             "label": {"ko": "가족 지원", "en": "Family support"}},
+            {"value": "part_time", "label": {"ko": "아르바이트", "en": "Part-time job"}},
+            {"value": "savings", "label": {"ko": "예금·저축", "en": "Savings"}},
         ],
     },
 }
 
+
+def _text(value, locale: str) -> str | None:
+    """{ko, en} 이면 locale 을 고르고, 평문이면 그대로 둔다."""
+    if isinstance(value, dict):
+        return value.get(locale) or value.get("en")
+    return value
+
+
+def _options(opts: list[dict], locale: str) -> list[dict]:
+    """value 는 기계가 읽으므로 그대로, label 만 고른다."""
+    return [{"value": o["value"], "label": _text(o["label"], locale)} for o in opts]
+
+
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _written_locale(text: str, locale: str) -> str | None:
+    """LLM 이 실제로 어느 언어로 썼는지. reply_locale 에 그대로 넣는다.
+
+    LLM 은 요청한 언어가 아니라 **질문의 언어**를 따라가는 일이 있다.
+    locale=en 인데 한국어로 답한 것을 en 이라고 찍으면 service._localized 가
+    번역을 건너뛰어 영어 사용자에게 한국어가 그대로 나간다. 실제 언어를 보고
+    어긋나면 None 을 돌려 출구 번역이 살아나게 한다.
+    """
+    if not text:
+        return None
+    if locale == "en" and _HANGUL.search(text):
+        return None                       # 한국어로 썼다 → 출구에서 번역한다
+    return locale
+
 # 액션별 필수 필드 (D2에 mappings/*.yaml 로 이관)
 ACTION_FIELDS: dict[str, list[str]] = {
-    "alien_registration": ["entry_date", "org_name", "phone_kr"],
-    "residence_change": ["phone_kr"],
+    "alien_registration": ["birth_date", "entry_date", "org_name", "phone_kr"],
+    "residence_change": ["birth_date", "phone_kr"],
     "work_activity": ["org_name"],
-    "open_bank_account": ["org_name", "phone_kr", "purpose", "income_source"],
+    "open_bank_account": ["birth_date", "org_name", "phone_kr",
+                          "purpose", "income_source"],
 }
 
-ACTION_TITLES: dict[str, str] = {
-    "alien_registration": "출입국 방문예약 + 사전접수",
-    "residence_change": "체류지 변경신고 접수",
-    "work_activity": "체류자격외활동허가 신청",
-    "open_bank_account": "은행 지점 예약 + 사전접수",
+ACTION_TITLES: dict[str, dict] = {
+    "alien_registration": {"ko": "외국인등록 신청서 제출",
+                           "en": "Submit Alien Registration application"},
+    "residence_change": {"ko": "체류지 변경신고 제출",
+                         "en": "Submit Change of Residence report"},
+    "work_activity": {"ko": "체류자격외활동허가 신청서 제출",
+                      "en": "Submit Activity Permit application"},
+    "open_bank_account": {"ko": "계좌개설 신청서 제출",
+                          "en": "Submit account opening application"},
 }
+
+# 승인 payload 의 고정 문구. ui.payload 는 번역을 거치지 않으므로 여기서 고른다.
+SUMMARY_LABEL: dict[str, dict] = {
+    "agency": {"ko": "제출처", "en": "Submit to"},
+    "docs": {"ko": "지참 서류", "en": "Bring with you"},
+}
+
+
+def _title(action: str, locale: str) -> str:
+    return _text(ACTION_TITLES.get(action), locale) or action
+
+# 답변 뒤에 붙는 근거 표시. 답변 본문은 이미 사용자 언어라 통째로 번역하지 않는다.
+CITE_LABEL: dict[str, str] = {"ko": "근거", "en": "Source"}
 
 
 # ══════════════════════════════════════════════════════════
@@ -89,16 +159,19 @@ ACTION_TITLES: dict[str, str] = {
 # ══════════════════════════════════════════════════════════
 def planner(state: AgentState) -> dict:
     """룰 엔진으로 Task Graph를 계산한다. LLM 없음."""
+    # 진입 노드다. 지난 턴의 reply_locale 이 남아 이번 턴 한국어 문구가
+    # 번역을 건너뛰는 일이 없도록 여기서 매 턴 지운다.
     profile = state.get("profile", {})
     if not profile.get("visa_type"):
-        return {"tasks": []}
+        return {"tasks": [], "reply_locale": None}
 
     tasks = build_task_graph(
         profile,
         completed=set(state.get("completed", [])),
         in_progress=set(state.get("in_progress", [])),
+        locale=state.get("locale") or "en",
     )
-    return {"tasks": tasks}
+    return {"tasks": tasks, "reply_locale": None}
 
 
 def router(state: AgentState) -> dict:
@@ -138,7 +211,11 @@ def _missing_fields(state: AgentState, action: str) -> list[str]:
 
 
 def slot_filler(state: AgentState) -> dict:
-    """부족한 필드 중 하나를 묻는다. 무엇을 물을지는 코드가 정한다."""
+    """부족한 필드 중 하나를 묻는다.
+
+    무엇을 물을지는 코드가 정한다 (_missing_fields).
+    LLM 은 그 필드에 대한 **문장만** 만든다. 실패하면 고정 문구로 폴백.
+    """
     action = state.get("current_action")
     missing = _missing_fields(state, action)
     if not missing:
@@ -146,59 +223,148 @@ def slot_filler(state: AgentState) -> dict:
 
     field = missing[0]
     q = QUESTIONS.get(field, {"label": field, "input_type": "text", "options": []})
+    locale = state.get("locale", "en")
+
+    # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
+    label = _text(q["label"], locale)
+    hint = _text(q.get("hint"), locale)
+    lead = f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다."
+    written_locale = None
+
+    # LLM 은 문장 생성만. 실패해도 흐름이 끊기지 않는다.
+    if llm.available():
+        written = llm.ask_field(
+            field,
+            label=_text(q["label"], "en"),      # 필드 뜻 설명용 — 프롬프트는 영어다
+            locale=locale,
+            context=state.get("profile", {}),
+            remaining=len(missing),
+        )
+        if written and written.get("question"):
+            label = written["question"]
+            hint = written.get("hint") or hint
+            lead = label          # 채팅 버블이 비지 않도록 질문을 그대로 넣는다
+            written_locale = _written_locale(label, locale)
 
     return {
         "missing_fields": missing,
         "asked_field": field,
-        "reply": f"{len(missing)}개만 더 여쭤볼게요." if len(missing) > 1 else "마지막 질문입니다.",
+        "reply": lead,
+        "reply_locale": written_locale,
         "ui_type": "question",
         "ui_payload": {
             "field": field,
-            "label": q["label"],
+            "label": label,
             "input_type": q["input_type"],
-            "options": q.get("options", []),
-            "hint": q.get("hint"),
+            "options": _options(q.get("options", []), locale),
+            "hint": hint,
         },
     }
 
 
 def doc_builder(state: AgentState) -> dict:
-    """서류를 생성하고 승인 대기 상태로 만든다.
-
-    실제 렌더는 AI-2의 DocBuilder가 담당한다. 여기서는 문서 참조만 만든다.
-    """
+    """서류를 실제로 생성하고 승인 대기 상태로 만든다."""
     action = state["current_action"]
-    spec = actions_for(state["profile"].get("visa_type")).get(action, {})
+    profile = state.get("profile", {})
+    spec = actions_for(profile.get("visa_type")).get(action, {})
+
+    form = spec.get("form")
+    if not form:
+        return {
+            "reply": "이 단계는 서류 없이 진행됩니다.",
+            "ui_type": "none",
+            "ui_payload": {},
+        }
+
+    try:
+        result = render(
+            form,
+            profile,
+            confidence=state.get("confidence", {}),
+            variant=spec.get("form_type", "default"),
+            required_docs=spec.get("required_docs", []),
+            account_type=spec.get("account_type", "limited"),
+            doc_id=f"{state['session_id']}-{action}",
+            locale=state.get("locale") or "en",
+        )
+    except DocumentIncomplete as exc:
+        labels = {
+            "name_en": "영문 성명", "birth_date": "생년월일", "gender": "성별",
+            "nationality": "국적", "passport_no": "여권번호", "arc_no": "외국인등록번호",
+            "addr_kr": "국내 주소", "phone_kr": "국내 연락처", "org_name": "소속 기관",
+        }
+        need = ", ".join(labels.get(k, k) for k in exc.missing)
+        return {
+            "missing_fields": exc.missing,
+            "reply": f"서류를 작성하려면 {need}이(가) 더 필요합니다.",
+            "ui_type": "none",
+            "ui_payload": {},
+        }
+
+    # PDF 가 안 만들어졌는데 pdf_url 을 내보내면 백엔드는 404 를 받는다.
+    # render() 는 실패를 삼키고 pdf_path=None 으로 돌려주므로 여기서 걸러낸다.
+    # 원인은 대개 배포 환경에 WeasyPrint 의 네이티브 의존성이 없는 것이다.
+    if not result.get("pdf_path"):
+        return {
+            "reply": "서류 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            "ui_type": "none",
+            "ui_payload": {},
+            "pending_approval": None,
+        }
 
     doc = {
-        "id": f"doc-{action}",
-        "title": ACTION_TITLES.get(action, action),
+        "id": result["document_id"],
+        "title": result["title"],
         "action_id": action,
-        "preview_url": f"/api/documents/doc-{action}/preview",
-        "pdf_url": f"/api/documents/doc-{action}.pdf",
+        "preview_url": f"/api/documents/{result['document_id']}/preview",
+        "pdf_url": f"/api/documents/{result['document_id']}.pdf",
         "created_at": _now(),
     }
 
+    locale = state.get("locale") or "en"
+    warn_tpl = ("{} 값을 한 번 확인해주세요" if locale == "ko"
+                else "Please double-check {}")
+    warnings = [warn_tpl.format(_label_of(k, locale))
+                for k in result["low_confidence"]]
+
+    docs = [_pick(DOC_LABEL, d, locale, d) for d in spec.get("required_docs", [])]
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), locale,
+                   spec.get("agency", ""))
+
+    summary_lines = [_title(action, locale)]
+    if agency:
+        summary_lines.append(f"{_text(SUMMARY_LABEL['agency'], locale)} · {agency}")
+    if docs:
+        summary_lines.append(f"{_text(SUMMARY_LABEL['docs'], locale)} · "
+                             + ", ".join(docs))
+
     pending = {
         "action_id": action,
-        "title": ACTION_TITLES.get(action, action),
-        "summary": [ACTION_TITLES.get(action, action), "준비물 체크리스트 발송"],
+        "title": _title(action, locale),
+        "summary": summary_lines,
         "document_id": doc["id"],
+        "doc_title": doc["title"],              # 서류 이름 — 액션 제목(title)과 다르다
+        "preview_url": doc["preview_url"],      # 승인 화면에서 서류를 바로 본다
+        "pdf_url": doc["pdf_url"],
+        "warnings": warnings,
         "evidence": evidence_labels(spec.get("evidence", [])),
         "risk_level": spec.get("risk_level", "L2"),
     }
 
+    checks = "검증 5개 항목 모두 통과했습니다." if not warnings else \
+             f"검증 통과. {len(warnings)}개 항목은 확인을 권합니다."
+
     return {
         "documents": [doc],
         "pending_approval": pending,
-        "reply": "서류를 작성했습니다. 검증 5개 항목 모두 통과했습니다.",
+        "reply": f"서류를 작성했습니다. {checks}",
         "ui_type": "doc_preview",
         "ui_payload": {
             "document_id": doc["id"],
             "title": doc["title"],
             "preview_url": doc["preview_url"],
             "pdf_url": doc["pdf_url"],
-            "warnings": [],
+            "warnings": warnings,
         },
     }
 
@@ -240,12 +406,31 @@ def approval_gate(state: AgentState) -> dict:
     if decision == "approve" or risk == "L1":
         return {}                       # executor 로 진행
 
+    # 서류가 만들어졌으면 화면은 서류 미리보기를 유지한다.
+    # 백엔드가 ui.type == "doc_preview" 일 때만 PDF 를 내려받아 저장하므로,
+    # 여기서 approval 로 덮으면 PDF 가 영영 저장되지 않는다.
+    # 승인 정보는 state.pending_approval 로 나가고, 화면은 그것도 함께 본다.
+    if pending.get("document_id"):
+        return {
+            "reply": "아래 내용을 실행할까요?",
+            "ui_type": "doc_preview",
+            "ui_payload": {
+                "document_id": pending["document_id"],
+                "title": pending.get("doc_title") or pending.get("title", ""),
+                "preview_url": pending.get("preview_url", ""),
+                "pdf_url": pending.get("pdf_url", ""),
+                "warnings": pending.get("warnings", []),
+            },
+        }
+
     return {
         "reply": "아래 내용을 실행할까요?",
         "ui_type": "approval",
         "ui_payload": dict(pending),
     }
-
+def route_from_doc(state: AgentState) -> Literal["approval_gate", "__end__"]:
+    """서류가 실제로 만들어졌을 때만 승인 단계로 넘어간다."""
+    return "approval_gate" if state.get("pending_approval") else END
 
 def route_from_gate(state: AgentState) -> Literal["executor", "__end__"]:
     pending = state.get("pending_approval") or {}
@@ -263,18 +448,45 @@ def executor(state: AgentState) -> dict:
     pending = state.get("pending_approval") or {}
     action = pending.get("action_id") or state.get("current_action")
 
-    # 실제 기관 호출은 Mock Institution API. 여기서는 결과만 기록한다.
-    result = {"receipt_no": f"RCPT-{action[:6].upper()}-0001", "status": "received"}
+    # 실제 기관 접수는 제휴 시 기관 API 호출로 대체된다.
+    # 지금은 아무것도 제출하지 않는다 — 접수번호를 만들어내지 않는 이유다.
+    spec = actions_for(state.get("profile", {}).get("visa_type")).get(action, {})
+    # 이 노드의 문구는 reply 로만 나간다 — 한국어로 쓰고 출구에서 번역한다.
+    agency = _pick(AGENCY_LABEL, spec.get("agency", ""), "ko", "담당 기관")
+
+    doc = next((d for d in reversed(state.get("documents", []))
+                if d.get("action_id") == action), None)
+    task = next((t for t in state.get("tasks", []) if t["id"] == action), None)
+
+    result = {
+        "document_id": doc["id"] if doc else None,
+        "status": "prepared",              # submitted 아님
+    }
 
     entry = {
         "action": action,
-        "tool": "submit_application",
+        "tool": "prepare_application",
         "risk_level": pending.get("risk_level", "L2"),
         "approved_by": "user",
         "approved_at": _now(),
         "evidence": pending.get("evidence", []),
         "result": result,
     }
+
+    lines = [f"{_title(action, 'ko')} 작성이 끝났습니다.",
+             f"{agency}에 방문해 본인확인 후 제출하시면 됩니다."]
+    if task:
+        if task.get("required_docs"):
+            lines.append("지참 서류 · " + ", ".join(task["required_docs"]))
+        if task.get("deadline"):
+            d = task.get("d_day")
+            if d is not None and d < 0:
+                lines.append(f"기한 · {task['deadline']} — 이미 {abs(d)}일 "
+                             f"지났습니다. 지연 사유 확인이 필요합니다.")
+            elif d is not None:
+                lines.append(f"기한 · {task['deadline']} (D-{d})")
+            else:
+                lines.append(f"기한 · {task['deadline']}")
 
     return {
         "completed": [action],
@@ -283,27 +495,89 @@ def executor(state: AgentState) -> dict:
         "approval_decision": None,
         "current_action": None,
         "ledger": [entry],
-        "reply": (f"접수되었습니다. 접수번호 {result['receipt_no']}\n"
-                  "준비물 체크리스트를 이메일로 보냈습니다."),
+        "reply": "\n".join(lines),
         "ui_type": "none",
         "ui_payload": {},
     }
 
 
 def explainer(state: AgentState) -> dict:
-    """설명·안내. 여기가 LLM을 쓰는 자리다 (지금은 룰 기반 요약)."""
+    """자유 질문에 답하거나, 없으면 상황을 안내한다."""
     tasks = state.get("tasks") or []
+    locale = state.get("locale", "en")
+
+    # 자유 질문일 때만 법령 검색을 탄다. 슬롯 필링 답변은 질문이 아니다.
+    last = state.get("ask")
+
+    if last and last != state.get("last_qa") and qa.available():
+        got = qa.answer(last, profile=state.get("profile", {}),
+                        tasks=tasks, history=state.get("messages") or [],
+                        locale=locale)
+        if got:
+            reply = got["reply"]
+            if got["cites"]:
+                reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
+                         + " / ".join(got["cites"])
+            return {"reply": reply,
+                    "reply_locale": _written_locale(got["reply"], locale),
+                    "ui_type": "none", "last_qa": last, "ask": None}
+        base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
+                "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
+        return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
+
     if not tasks:
-        return {
-            "reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
-            "ui_type": "none",
-        }
-    return {"reply": summary(tasks), "ui_type": "none"}
+        return {"reply": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
+                "ui_type": "none"}
+
+    base = summary(tasks)
+
+    if llm.available():
+        nxt = _next_action(tasks)
+        spoken = llm.explain({
+            "available_count": sum(1 for t in tasks if t["status"] == "available"),
+            "next_action_label": nxt["label"] if nxt else None,
+            "next_action_agency": nxt.get("agency") if nxt else None,
+            "next_action_documents": nxt.get("required_docs") if nxt else [],
+            "d_day": nxt["d_day"] if nxt else None,
+            "blocked": [{"label": t["label"], "blocked_by": t["blocked_by"]}
+                        for t in tasks if t["status"] == "locked"][:3],
+            "evidence": nxt["evidence"] if nxt else [],
+            "call_to_action": (f'Tell the user to tap the "{nxt["label"]}" card to start.'
+                               if nxt else None),
+        }, locale=locale)
+        if spoken:
+            return {"reply": spoken,
+                    "reply_locale": _written_locale(spoken, locale),
+                    "ui_type": "none"}
+
+    return {"reply": base, "ui_type": "none"}
+
+# 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
+NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
+
+
+def _next_action(tasks: list[dict]) -> dict | None:
+    """지금 먼저 권할 액션. 우선순위에 없는 조건부 액션은 권하지 않는다."""
+    avail = [t for t in tasks if t["status"] == "available"]
+    return next((t for a in NEXT_PRIORITY for t in avail if t["id"] == a), None)
 
 
 def ledger_writer(state: AgentState) -> dict:
-    """Executor 이후 Task Graph를 다시 계산한다 (잠금 해제 반영)."""
-    return planner(state)
+    """Executor 이후 Task Graph를 다시 계산하고, 새로 열린 일을 알린다."""
+    out = planner(state)
+    tasks = out.get("tasks") or []
+
+    nxt = _next_action(tasks)
+    if not nxt:
+        return out
+
+    line = f"이제 '{nxt['label']}'을(를) 하실 수 있습니다."
+    if nxt.get("agency"):
+        line += f" 제출처는 {nxt['agency']}입니다."
+
+    out["reply"] = (state.get("reply") or "") + "\n\n" + line
+    out["ui_type"] = "none"
+    return out
 
 
 # ══════════════════════════════════════════════════════════
@@ -332,7 +606,10 @@ def build_graph(checkpointer=None):
     })
 
     g.add_edge("slot_filler", END)
-    g.add_edge("doc_builder", "approval_gate")
+    g.add_conditional_edges("doc_builder", route_from_doc, {
+        "approval_gate": "approval_gate",
+        END: END,
+    })
 
     g.add_conditional_edges("approval_gate", route_from_gate, {
         "executor": "executor",

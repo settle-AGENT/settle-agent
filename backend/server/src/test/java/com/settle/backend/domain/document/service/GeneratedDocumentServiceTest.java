@@ -18,6 +18,7 @@ import com.settle.backend.domain.member.entity.Member;
 import com.settle.backend.domain.member.repository.MemberRepository;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.ResponseEntity;
 
 @ExtendWith(MockitoExtension.class)
 class GeneratedDocumentServiceTest {
@@ -112,5 +114,42 @@ class GeneratedDocumentServiceTest {
         ArgumentCaptor<GeneratedDocument> documentCaptor = ArgumentCaptor.forClass(GeneratedDocument.class);
         verify(documentRepository, times(2)).save(documentCaptor.capture());
         assertThat(documentCaptor.getValue().getStatus()).isEqualTo(GeneratedDocumentStatus.FAILED);
+    }
+
+    @Test
+    void replacesAiDocumentReferencesWithStoredSpringReferences() {
+        UUID documentId = UUID.randomUUID();
+        GeneratedDocument document = new GeneratedDocument(
+                documentId,
+                new Member("member@example.com", "password-hash"),
+                MEMBER_ID.toString(),
+                "open_bank_account",
+                "계좌개설신청서",
+                "members/member/generated-documents/document.pdf"
+        );
+        document.markReady(List.of());
+        when(documentRepository.findAllByMember_IdAndSessionIdAndStatusOrderByCreatedAtDesc(
+                MEMBER_ID,
+                MEMBER_ID.toString(),
+                GeneratedDocumentStatus.READY
+        )).thenReturn(List.of(document));
+        ResponseEntity<Map<String, Object>> upstream = ResponseEntity.ok(Map.of(
+                "state", Map.of("documents", List.of(Map.of("id", "ai-document-id")))
+        ));
+
+        ResponseEntity<Map<String, Object>> result = service.withReadyReferences(
+                upstream,
+                MEMBER_ID,
+                MEMBER_ID.toString()
+        );
+
+        Map<?, ?> state = (Map<?, ?>) result.getBody().get("state");
+        List<?> documents = (List<?>) state.get("documents");
+        Map<?, ?> reference = (Map<?, ?>) documents.getFirst();
+        assertThat(reference.get("id")).isEqualTo(documentId.toString());
+        assertThat(reference.get("preview_url"))
+                .isEqualTo("/api/documents/%s/preview".formatted(documentId));
+        assertThat(reference.get("pdf_url"))
+                .isEqualTo("/api/documents/%s/download".formatted(documentId));
     }
 }

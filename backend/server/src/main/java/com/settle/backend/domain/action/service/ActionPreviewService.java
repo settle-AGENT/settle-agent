@@ -51,11 +51,14 @@ public class ActionPreviewService {
         DocumentPreviewPayload payload = new DocumentPreviewPayload(
                 documentId,
                 title,
-                previewUrl(documentId),
-                downloadUrl(documentId),
+                documentService.previewUrl(documentId),
+                documentService.downloadUrl(documentId),
                 warnings
         );
-        Map<String, Object> state = documentState(aiResponse.state(), documentService.listReady(memberId, sessionId));
+        Map<String, Object> state = documentState(
+                aiResponse.state(),
+                documentService.listReadyReferences(memberId, sessionId)
+        );
         return new AgentResponse(
                 aiResponse.schemaVersion(),
                 aiResponse.reply(),
@@ -103,31 +106,17 @@ public class ActionPreviewService {
                 response.schemaVersion(),
                 response.reply(),
                 response.ui(),
-                documentState(response.state(), documentService.listReady(memberId, sessionId))
+                documentState(response.state(), documentService.listReadyReferences(memberId, sessionId))
         );
     }
 
     private Map<String, Object> documentState(
             Map<String, Object> source,
-            List<GeneratedDocument> storedDocuments
+            List<Map<String, Object>> storedDocuments
     ) {
         Map<String, Object> state = new LinkedHashMap<>(source == null ? Map.of() : source);
-        List<Map<String, Object>> documents = storedDocuments.stream()
-                .map(this::documentReference)
-                .toList();
-        state.put("documents", documents);
+        state.put("documents", storedDocuments);
         return state;
-    }
-
-    private Map<String, Object> documentReference(GeneratedDocument document) {
-        Map<String, Object> reference = new LinkedHashMap<>();
-        reference.put("id", document.getId().toString());
-        reference.put("title", document.getTitle());
-        reference.put("action_id", document.getActionId());
-        reference.put("preview_url", previewUrl(document.getId()));
-        reference.put("pdf_url", downloadUrl(document.getId()));
-        reference.put("created_at", document.getCreatedAt());
-        return reference;
     }
 
     private Map<String, Object> pendingApproval(Map<String, Object> state) {
@@ -167,11 +156,4 @@ public class ActionPreviewService {
         return list.stream().filter(Objects::nonNull).map(String::valueOf).toList();
     }
 
-    private String previewUrl(UUID documentId) {
-        return "/api/documents/%s/preview".formatted(documentId);
-    }
-
-    private String downloadUrl(UUID documentId) {
-        return "/api/documents/%s/download".formatted(documentId);
-    }
 }

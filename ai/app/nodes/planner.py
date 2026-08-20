@@ -9,6 +9,39 @@ from datetime import date, datetime, timedelta
 from app.rules.loader import actions_for, evidence_labels, visa_spec
 
 # 화면 표시 순서 (매트릭스 정의 순서를 그대로 따르되, 명시하면 이 순서 우선)
+AGENCY_LABEL = {
+    "immigration": {"ko": "출입국·외국인청", "en": "Immigration Office"},
+    "bank": {"ko": "은행 영업점", "en": "Bank branch"},
+    "telecom": {"ko": "통신사 대리점", "en": "Mobile carrier store"},
+    "immigration_or_community_center": {
+        "ko": "출입국·외국인청 또는 주민센터",
+        "en": "Immigration Office or community service center"},
+}
+
+DOC_LABEL = {
+    "passport": {"ko": "여권", "en": "Passport"},
+    "photo": {"ko": "사진 1매", "en": "One photo"},
+    "arc": {"ko": "외국인등록증", "en": "Alien Registration Card"},
+    "enrollment_cert": {"ko": "재학증명서", "en": "Enrollment certificate"},
+    "residence_proof": {"ko": "체류지 증빙", "en": "Proof of residence"},
+    "employment_contract": {"ko": "근로계약서", "en": "Employment contract"},
+    "business_registration": {"ko": "사업자등록증", "en": "Business registration"},
+}
+
+
+def _pick(table: dict, key: str, locale: str, default: str = "") -> str:
+    """{ko, en} 테이블에서 locale 을 고른다. 모르는 키는 default."""
+    entry = table.get(key)
+    if not entry:
+        return default
+    return entry.get(locale) or entry["en"]
+
+
+def _field(spec: dict, base: str, locale: str) -> str | None:
+    """룰의 base_ko / base_en 중 locale 것. 영어가 없으면 한국어로 떨어뜨린다 —
+    빈 값을 내보내는 것보다 낫다."""
+    return spec.get(f"{base}_{locale}") or spec.get(f"{base}_ko")
+
 ORDER = [
     "alien_registration",
     "mobile_subscription",
@@ -16,7 +49,8 @@ ORDER = [
     "work_activity",
     "open_bank_account",
 ]
-
+# 프로필에 이 값이 있으면 이미 해결된 것으로 본다 (D2에 visa_matrix로 이관)
+SATISFIED_IF = {"mobile_subscription": "phone_kr"}
 
 def _as_date(v) -> date | None:
     if not v:
@@ -44,9 +78,12 @@ def _deadline(spec: dict, profile: dict, today: date) -> tuple[str | None, int |
 
 
 def _status(action_id: str, spec: dict, completed: set[str],
-            in_progress: set[str]) -> str:
+            in_progress: set[str], profile: dict | None = None) -> str:
     if action_id in completed:
         return "done"
+    key = SATISFIED_IF.get(action_id)
+    if key and (profile or {}).get(key):
+        return "done"                      # 이미 갖고 있음 → 시킬 이유가 없다
     if action_id in in_progress:
         return "in_progress"
     if all(p in completed for p in spec.get("prereq", [])):
@@ -59,6 +96,7 @@ def build_task_graph(
     completed: set[str] | None = None,
     in_progress: set[str] | None = None,
     today: date | None = None,
+    locale: str = "en",
 ) -> list[dict]:
     """profile + 룰 → tasks[]
 
@@ -73,7 +111,8 @@ def build_task_graph(
     if not actions:
         return []                              # 미지원 체류자격
 
-    labels = {aid: s.get("label_ko", aid) for aid, s in actions.items()}
+    labels = {aid: _field(s, "label", locale) or aid
+              for aid, s in actions.items()}
     ordered = [a for a in ORDER if a in actions] + \
               [a for a in actions if a not in ORDER]
 
@@ -83,7 +122,7 @@ def build_task_graph(
         if spec.get("allowed") is False:
             continue                           # 이 자격으로는 불가한 액션
 
-        status = _status(aid, spec, completed, in_progress)
+        status = _status(aid, spec, completed, in_progress, profile)
         prereq = spec.get("prereq", [])
         deadline, d_day = _deadline(spec, profile, today)
 
@@ -97,10 +136,19 @@ def build_task_graph(
             "deadline": deadline,
             "d_day": d_day,
             "evidence": evidence_labels(spec.get("evidence", [])),
+            # 화면에서 "어디에 뭘 들고 가야 하는지" 바로 보여주기 위한 값
+            "agency": _pick(AGENCY_LABEL, spec.get("agency", ""), locale),
+            "required_docs": [_pick(DOC_LABEL, d, locale, d)
+                              for d in spec.get("required_docs", [])],
+            "note": _field(spec, "note", locale) or _field(spec, "condition", locale),
         })
 
     # 기한이 임박한 것부터 위로, 그다음 원래 순서
-    tasks.sort(key=lambda t: (t["d_day"] is None, t["d_day"] if t["d_day"] is not None else 0))
+        # 진행 중 → 지금 가능 → 잠김 → 완료. 같은 그룹 안에서는 기한 임박순.
+    rank = {"in_progress": 0, "available": 1, "locked": 2, "done": 3}
+    tasks.sort(key=lambda t: (rank.get(t["status"], 9),
+                              t["d_day"] is None,
+                              t["d_day"] if t["d_day"] is not None else 0))
     return tasks
 
 
@@ -121,6 +169,15 @@ def missing_for_deadlines(profile: dict, tasks: list[dict] | None = None) -> lis
 
 def summary(tasks: list[dict]) -> str:
     """사용자에게 보여줄 한 줄 요약."""
+    over = [t for t in tasks
+            if t["status"] in ("available", "in_progress")
+            and t["d_day"] is not None and t["d_day"] < 0]
+    if over:
+        t = over[0]
+        return (f"{t['label']} 기한이 {abs(t['d_day'])}일 지났습니다. "
+                f"지연 사유서가 필요할 수 있으니 {t['agency'] or '담당 기관'}에 "
+                f"먼저 문의하세요.")
+
     urgent = next((t for t in tasks
                    if t["status"] == "available" and t["d_day"] is not None), None)
     avail = sum(1 for t in tasks if t["status"] == "available")

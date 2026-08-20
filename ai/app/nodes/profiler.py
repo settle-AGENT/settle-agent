@@ -6,21 +6,36 @@
 """
 import re
 
-from app.extractors.arc import extract_profile
+from app.extractors import arc as arc_ex
+from app.extractors import passport as pp_ex
 
+# 화면에 나가는 라벨. 닫힌 집합이라 LLM 번역을 태우지 않는다 —
+# llm.translate 에는 캐시가 없어 응답마다 API 호출이 붙는다.
 LABELS = {
-    "arc_no":      "Registration No.",
-    "name_en":     "Full name",
-    "nationality": "Nationality",
-    "birth_date":  "Date of birth",
-    "visa_type":   "Visa status",
-    "stay_expiry": "Stay expiry",
-    "addr_kr":     "Address",
-    "entry_date":  "Date of entry",
-    "org_name":    "School / Organization",
-    "phone_kr":    "Phone (KR)",
-    "purpose":     "Purpose",
+    "arc_no":      {"ko": "외국인등록번호",   "en": "Registration No."},
+    "name_en":     {"ko": "성명",             "en": "Full name"},
+    "nationality": {"ko": "국적",             "en": "Nationality"},
+    "birth_date":  {"ko": "생년월일",         "en": "Date of birth"},
+    "visa_type":   {"ko": "체류자격",         "en": "Visa status"},
+    "stay_expiry": {"ko": "체류기간 만료일",  "en": "Stay expiry"},
+    "addr_kr":     {"ko": "체류지",           "en": "Address"},
+    "entry_date":  {"ko": "입국일",           "en": "Date of entry"},
+    "org_name":    {"ko": "소속 학교·기관",   "en": "School / Organization"},
+    "phone_kr":    {"ko": "휴대전화",         "en": "Phone (KR)"},
+    "purpose":     {"ko": "사용 목적",        "en": "Purpose"},
+    "gender":          {"ko": "성별",           "en": "Sex"},
+    "passport_no":     {"ko": "여권번호",       "en": "Passport No."},
+    "passport_issue":  {"ko": "여권 발급일",    "en": "Passport issue date"},
+    "passport_expiry": {"ko": "여권 만료일",    "en": "Passport expiry"},
 }
+
+
+def label_of(key: str, locale: str = "en") -> str:
+    """LABELS 는 {ko, en} 이다. 모르는 locale 은 영어로 떨어뜨린다."""
+    entry = LABELS.get(key)
+    if not entry:
+        return key
+    return entry.get(locale) or entry["en"]
 
 # 응답에 내보낼 때 마스킹할 필드
 MASKED_FIELDS = {"arc_no"}
@@ -47,14 +62,15 @@ def public_profile(profile: dict) -> dict:
     }
 
 
-def profile_to_payload(profile: dict, confidence: dict, doc_type: str) -> dict:
+def profile_to_payload(profile: dict, confidence: dict, doc_type: str,
+                       locale: str = "en") -> dict:
     """ui.type = profile_confirm 의 payload"""
     return {
         "doc_type": doc_type,
         "fields": [
             {
                 "key": k,
-                "label": LABELS[k],
+                "label": label_of(k, locale),
                 "value": mask(k, v),
                 "confidence": round(float(confidence.get(k, 1.0)), 2),
                 "editable": k not in READONLY_FIELDS,
@@ -84,7 +100,8 @@ def apply_edits(state: dict, edits: dict) -> dict:
 
 def run(state: dict, image_bytes: bytes, doc_type: str, ext: str = "jpg") -> tuple[dict, dict]:
     """returns (state, ui_payload)"""
-    r = extract_profile(image_bytes, doc_type, ext=ext, use_llm=False)
+    mod = pp_ex if doc_type == "passport" else arc_ex
+    r = mod.extract_profile(image_bytes, doc_type, ext=ext, use_llm=False)
 
     state.setdefault("profile", {}).update(r["profile"])     # 평문 저장
     state.setdefault("confidence", {}).update(r["confidence"])

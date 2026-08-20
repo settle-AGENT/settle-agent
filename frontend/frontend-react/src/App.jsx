@@ -141,7 +141,7 @@ export default function App() {
   const documents = agentState?.documents || [];
 
   useEffect(() => {
-    if (step !== 9) return;
+    if (step !== 9 || !sessionId) return;
     let active = true;
     setLedgerLoading(true);
     setLedgerError("");
@@ -186,19 +186,19 @@ export default function App() {
     setPreviewLoading(true);
     setPreviewError("");
     try {
-      const response = await previewAction(actionId, sessionId);
-      setAgentState(response?.state || null);
-      const pendingApproval = response?.ui?.type === "approval"
-        ? response.ui.payload
-        : response?.state?.pending_approval;
-      setApproval(pendingApproval || null);
-      if (response?.ui?.type === "approval") {
+      const response = applyAgent(await previewAction(actionId, sessionId));
+      const responseUi = readUi(response);
+      if (responseUi.type === "question") {
+        go(4);
         return;
       }
-      if (response?.ui?.type !== "doc_preview") {
+      if (responseUi.type === "approval") {
+        return;
+      }
+      if (responseUi.type !== "doc_preview") {
         throw new Error(response?.reply || "PDF 미리보기 응답을 확인해 주세요.");
       }
-      const payload = response.ui.payload;
+      const payload = responseUi.payload;
       const blob = await fetchDocument(payload.preview_url);
       const nextBlobUrl = URL.createObjectURL(blob);
       setPreviewBlobUrl((current) => {
@@ -249,12 +249,7 @@ export default function App() {
     setApprovalLoading(true);
     setApprovalError("");
     try {
-      const response = await approveAction(approval.action_id, sessionId, approved);
-      setAgentState(response?.state || null);
-      const nextApproval = response?.ui?.type === "approval"
-        ? response.ui.payload
-        : response?.state?.pending_approval;
-      setApproval(nextApproval || null);
+      applyAgent(await approveAction(approval.action_id, sessionId, approved));
     } catch (error) {
       if (!handleAuthError(error)) setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
     } finally {
@@ -284,16 +279,39 @@ export default function App() {
     setAgentState(null);
     setUi({ type: "none", payload: {} });
     setMessages([]);
+    setApproval(null);
     setAuthMode("login");
     setAuthMessage(error.message || "로그인이 만료됐어요. 다시 로그인해 주세요.");
     go(-1);
     return true;
   };
 
+  const approvalModal = approval
+    ? <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />
+    : null;
+
+  const openCabinetFromHome = async () => {
+    if (sessionLoading) return;
+    setSessionLoading(true);
+    setToast("");
+    try {
+      const response = agentState?.session_id ? null : await createSession(lang);
+      if (response) applyAgent(response);
+      if (!(response?.state?.session_id || agentState?.session_id)) {
+        throw new Error("상담 세션을 확인하지 못했어요.");
+      }
+      go(9);
+    } catch (error) {
+      if (!handleAuthError(error)) setToast(error?.message || "서류함을 불러오지 못했어요.");
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
   // ── 0 스플래시 ──
   if (step === 0)
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
           <BridgeMark size={104} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
@@ -309,12 +327,21 @@ export default function App() {
           <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
             D-2 STUDENT VISA · BETA
           </div>
-          <div style={{ width: "100%" }}><PrimaryButton onClick={() => { setAuthMode("login"); go(-1); }}>시작하기</PrimaryButton></div>
+          <div style={{ width: "100%" }}>
+            <PrimaryButton onClick={() => {
+              if (isAuthenticated) go(1);
+              else {
+                setAuthMode("login");
+                go(-1);
+              }
+            }}>시작하기</PrimaryButton>
+          </div>
           {isAuthenticated && (
-            <div onClick={() => go(9)} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> 내 서류함 열기
+            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> {sessionLoading ? "서류함 불러오는 중…" : "내 서류함 열기"}
             </div>
           )}
+          {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
         </div>
       </Shell>
     );
@@ -351,7 +378,7 @@ export default function App() {
       }
     };
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title={signup ? "회원가입" : "로그인"} onBack={() => go(0)} />
         <div style={{ padding: "18px 26px 12px" }}>
           <BridgeMark size={56} />
@@ -399,7 +426,7 @@ export default function App() {
       }
     };
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <div style={{ paddingTop: 46 }}><Rail active={0} /></div>
         <div style={{ padding: "4px 26px 18px" }}>
           <h2 style={H2}>사용할 언어를 선택하세요</h2>
@@ -480,7 +507,7 @@ export default function App() {
     };
     const currentShot = shots[SCAN_PAGES[scan].key];
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="서류 촬영" onBack={() => go(1)} />
         <Rail active={1} />
         <div style={{ padding: "4px 24px 12px" }}>
@@ -580,7 +607,7 @@ export default function App() {
       }
     };
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="프로필 만들기" onBack={() => go(2)} />
         <Rail active={2} />
         <div style={{ padding: "4px 24px 14px" }}>
@@ -625,7 +652,7 @@ export default function App() {
     if (verdict) {
       const editAnswers = () => setVerdict(null);
       return (
-        <Shell>
+        <Shell modal={approvalModal}>
           <TopBar title="첫계좌 AI" onBack={editAnswers} right={<span className="review-status"><i />심사 완료</span>} />
           <Rail active={3} />
           <div className="scroll review-scroll">
@@ -690,7 +717,7 @@ export default function App() {
     };
 
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
         <Rail active={3} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -740,7 +767,7 @@ export default function App() {
       }
     };
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="할 일" onBack={() => go(4)} />
         <Rail active={3} />
         <div style={{ padding: "4px 24px 14px" }}>
@@ -789,7 +816,7 @@ export default function App() {
   // ── 6 준비 안내 ──
   if (step === 6 && verdict)
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="준비할 것" onBack={() => go(4)} />
         <Rail active={4} />
         <div style={{ padding: "4px 24px 16px" }}>
@@ -822,7 +849,7 @@ export default function App() {
   // ── 7 신청서 ──
   if (step === 7)
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="내 신청서" onBack={() => go(6)} />
         <div style={{ padding: "4px 24px 16px" }}>
           <Rail active={4} />
@@ -874,14 +901,13 @@ export default function App() {
           </PrimaryButton>
           <button type="button" onClick={() => go(9)} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>내 서류함 · 실행 이력</button>
         </div>
-        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
   // ── 9 내 서류함 / 실행 이력 ──
   if (step === 9)
     return (
-      <Shell>
+      <Shell modal={approvalModal}>
         <TopBar title="내 서류함 · 실행 이력" onBack={() => go(7)} />
         <div className="scroll" style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
           <section>
@@ -910,7 +936,6 @@ export default function App() {
                 <div key={`${entry.action || "action"}-${entry.approved_at || index}`} style={card}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || "실행 작업"}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
                   <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at)}</div>
-                  {entry.result?.receipt_no && <div style={{ marginTop: 8, fontSize: 12.5 }}>접수번호 {entry.result.receipt_no}</div>}
                   {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>근거 · {item}</div>)}
                 </div>
               ))}
@@ -918,14 +943,13 @@ export default function App() {
           </section>
         </div>
         {previewError && <div role="alert" className="capture-error" style={{ margin: "0 20px 12px" }}>{previewError}</div>}
-        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
   // ── PDF 뷰어 ──
   if (step === 10 && preview && previewBlobUrl)
     return (
-      <Shell dark>
+      <Shell modal={approvalModal} dark>
         <TopBar title={preview.title} onBack={() => go(9)} />
         {(preview.warnings || []).length > 0 && (
           <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
@@ -938,18 +962,17 @@ export default function App() {
         <div style={{ padding: "16px 20px 34px", display: "flex", gap: 9 }}>
           <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>PDF 다운로드</button>
         </div>
-        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
 
-  return <Shell><div style={{ padding: 40 }}>로딩 중…</div></Shell>;
+  return <Shell modal={approvalModal}><div style={{ padding: 40 }}>로딩 중…</div></Shell>;
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
-function Shell({ children, dark }) {
+function Shell({ children, dark, modal }) {
   return (
     <div className="app-shell">
-      <div className="phone" style={dark ? { background: "oklch(0.22 0.012 60)" } : undefined}>{children}</div>
+      <div className="phone" style={dark ? { background: "oklch(0.22 0.012 60)" } : undefined}>{children}{modal}</div>
     </div>
   );
 }

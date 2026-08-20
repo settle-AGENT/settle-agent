@@ -6,6 +6,7 @@ LangGraph 를 몰라도 이 파일의 invoke() 하나만 알면 된다.
 from __future__ import annotations
 
 import os
+import uuid
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
@@ -14,6 +15,7 @@ from app.agent.state import new_state
 from app.nodes.planner import summary
 from app.nodes.profiler import profile_to_payload, public_profile
 from app.nodes.profiler import run as profiler_run
+from app.tools import llm
 
 DocType = Literal["arc_front", "arc_back", "passport"]
 
@@ -67,7 +69,12 @@ def _graph():
 
 
 def is_persistent() -> bool:
-    """Postgres 에 붙었는지. /health 에서 노출하면 디버깅이 쉽다."""
+    """Checkpointer를 초기화하고 Postgres 연결 상태를 반환한다.
+
+    배포 직후에도 /health가 실제 RDS 연결을 검증해야 하므로,
+    첫 Agent 요청을 기다리지 않고 그래프를 여기서 초기화한다.
+    """
+    _graph()
     return _CONN is not None and not _CONN.closed
 
 
@@ -86,11 +93,58 @@ def _seen(session_id: str) -> bool:
 # ──────────────────────────────────────────────────────────
 # 응답 조립
 # ──────────────────────────────────────────────────────────
+def _localized(state: dict, reply: str | None, reply_locale: str | None) -> str:
+    """사용자 언어로 맞춘 reply.
+
+    노드와 이 모듈의 문구는 대부분 한국어 리터럴이다. 열 몇 군데에 번역을
+    흩어 놓는 대신 나가는 길목 한 곳에서 옮긴다. LLM 이 이미 사용자 언어로
+    쓴 문장만 reply_locale 이 찍혀 있어 번역을 건너뛴다 — 노드는 state 에,
+    이 모듈은 인자로 알린다.
+    """
+    locale = state.get("locale") or "en"
+    written = reply_locale if reply is not None else state.get("reply_locale")
+    text = reply if reply is not None else (state.get("reply") or "")
+    if not text or written == locale:
+        return text
+    return llm.translate(text, locale)      # locale==ko 이거나 LLM 없으면 원문
+
+
+def locale_of(session_id: str) -> str:
+    """세션의 표시 언어. 세션이 아직 없으면 앱 기본값."""
+    if not _seen(session_id):
+        return "en"
+    return _graph().get_state(_cfg(session_id)).values.get("locale") or "en"
+
+
+def localize_message(session_id: str, message: str) -> str:
+    """사용자에게 보이는 오류 문구를 세션 언어로 옮긴다.
+
+    reply 와 같은 규칙이다 — 문구는 한국어로 쓰고 나가는 길목에서 옮긴다.
+    """
+    locale = locale_of(session_id)
+    if not message or locale == "ko":
+        return message
+    return llm.translate(message, locale)
+
+
+def localize_error(session_id: str, detail: dict) -> dict:
+    """오류 detail 의 message 만 옮긴다.
+
+    error 코드와 details 는 기계가 읽으므로 건드리지 않는다.
+    """
+    message = detail.get("message") or ""
+    if not message:
+        return detail
+    return {**detail, "message": localize_message(session_id, message)}
+
+
 def _response(state: dict, reply: str | None = None,
-              ui_type: str | None = None, ui_payload: dict | None = None) -> dict:
+              ui_type: str | None = None, ui_payload: dict | None = None,
+              reply_locale: str | None = None) -> dict:
+    """reply_locale 은 reply 인자가 이미 어느 언어로 쓰였는지. 기본값은 한국어."""
     return {
         "schema_version": "1",
-        "reply": reply if reply is not None else (state.get("reply") or ""),
+        "reply": _localized(state, reply, reply_locale),
         "ui": {
             "type": ui_type or state.get("ui_type") or "none",
             "payload": ui_payload if ui_payload is not None
@@ -119,8 +173,13 @@ def _patch(session_id: str, extra: dict[str, Any]) -> dict:
 # ──────────────────────────────────────────────────────────
 # public API
 # ──────────────────────────────────────────────────────────
-def start_session(session_id: str, locale: str = "en") -> dict:
-    state = _graph().invoke(_patch(session_id, {"locale": locale}), _cfg(session_id))
+def start_session(session_id: str | None = None, locale: str = "en") -> dict:
+    """session_id 를 주면 그 세션을 이어받고, 없으면 새 세션을 만든다.
+
+    데모 대본용으로 고정 id 를 쓰고 싶으면 명시적으로 넘긴다.
+    """
+    sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
+    state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
     return _response(state)
 
 
@@ -139,7 +198,8 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
 
     # 누적된 전체 프로필 기준으로 확인 카드를 다시 만든다
     payload = profile_to_payload(state.get("profile", {}),
-                                 state.get("confidence", {}), doc_type)
+                                 state.get("confidence", {}), doc_type,
+                                 locale=state.get("locale") or "en")
 
     low = [f["key"] for f in payload["fields"] if f["confidence"] < 0.90]
     head = ("신분증을 확인했습니다." if not low else
@@ -161,15 +221,60 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
     return _response(state)
 
 
+# 슬롯 필링 필드의 의미와 허용값 (graph.QUESTIONS 와 짝)
+_FIELD_META = {
+    "birth_date":    ("Date of birth (YYYY-MM-DD)", None),
+    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
+    "entry_date":    ("Date of entry into Korea (YYYY-MM-DD)", None),
+    "org_name":      ("Name of the school or organization", None),
+    "phone_kr":      ("Phone number in Korea", None),
+    "purpose":       ("Purpose of the bank account",
+                      {"living_expense": 1, "tuition": 1, "salary": 1, "remittance": 1}),
+    "income_source": ("Source of funds",
+                      {"scholarship": 1, "family_support": 1, "part_time": 1, "savings": 1}),
+}
+
+
 def send_message(session_id: str, message: str) -> dict:
-    """대화 입력. 슬롯 필링 중이면 방금 물어본 필드에 값을 넣는다."""
+    """대화 입력.
+
+    슬롯 필링 중이면 LLM 이 자유 발화에서 값을 뽑는다.
+    추출 실패 시 프로필을 건드리지 않고 되묻는다 — 쓰레기 값이 서류로 가지 않는다.
+    """
     snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
     asked = snap.get("asked_field")
 
     extra: dict[str, Any] = {"messages": [{"role": "user", "content": message}]}
+
     if asked:
-        extra["profile"] = {asked: message}
+        value, failed, failed_locale = message.strip(), None, None
+        locale = snap.get("locale") or "en"
+
+        if llm.available():
+            label, enum = _FIELD_META.get(asked, (asked, None))
+            parsed = llm.parse_answer(asked, label=label, message=message,
+                                      enum=enum, locale=locale)
+            if parsed is None:
+                pass                                  # LLM 실패 → 원문 사용
+            elif parsed.get("ok") and parsed.get("value"):
+                value = parsed["value"]
+            elif parsed.get("reason"):
+                # reason 은 parse_answer 가 사용자 언어로 쓴다. 다시 번역하지 않는다.
+                failed, failed_locale = parsed["reason"].strip(), locale
+            else:
+                failed = "값을 알아듣지 못했습니다."
+
+        if failed:
+            # 같은 필드를 다시 묻는다. asked_field 를 유지한다.
+            state = _graph().get_state(_cfg(session_id)).values
+            return _response(state, failed, "question",
+                             state.get("ui_payload") or {},
+                             reply_locale=failed_locale)
+
+        extra["profile"] = {asked: value}
         extra["asked_field"] = None
+    else:
+        extra["ask"] = message          # 슬롯 필링 답변이 아니면 자유 질문이다
 
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
     return _response(state)
@@ -191,7 +296,52 @@ def start_action(session_id: str, action_id: str) -> dict:
     return _response(state)
 
 
+def preview_action(session_id: str, action_id: str) -> dict:
+    """서류를 생성하고 승인 대기 상태로 만든다.
+
+    start_action 과 나뉘어 있다 — start 는 액션을 열고 부족한 값을 묻는 단계,
+    preview 는 값이 다 모인 뒤 실제로 서류를 만드는 단계다. 백엔드는 이 응답의
+    ui.type == "doc_preview" 를 보고 PDF 를 내려받아 저장한다.
+
+    아직 답하지 않은 필드가 남아 있으면 서류를 만들지 않고 그 질문을 돌려준다.
+    이때 ui.type 은 "question" 이므로 백엔드는 저장 단계로 넘어가지 않는다.
+    """
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    task = next((t for t in snap.get("tasks", []) if t["id"] == action_id), None)
+
+    if task and task["status"] == "locked":
+        raise PrerequisiteMissing(action_id, task.get("blocked_by", []),
+                                  task.get("prereq", []))
+
+    # 이미 다른 액션이 승인을 기다리고 있으면 그래프가 그쪽 게이트로 빠진다.
+    # 요청한 액션의 서류를 만들러 왔으므로 대기 중인 것을 비우고 다시 세운다.
+    extra: dict[str, Any] = {
+        "current_action": action_id,
+        "in_progress": [action_id],
+    }
+    pending = snap.get("pending_approval") or {}
+    if pending and pending.get("action_id") != action_id:
+        extra["pending_approval"] = None
+        extra["approval_decision"] = None
+
+    state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    return _response(state)
+
+
 def approve(session_id: str, action_id: str, approved: bool = True) -> dict:
+    """승인은 대기 중인 바로 그 액션에만 적용된다.
+
+    path 의 action_id 를 검증하지 않으면 A 를 승인한 요청으로 B 가 실행된다.
+    승인 게이트가 "무엇을" 승인했는지 확인하지 않으면 게이트가 아니다.
+    """
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    pending = snap.get("pending_approval") or {}
+
+    if not pending:
+        raise NothingToApprove(action_id)
+    if pending.get("action_id") != action_id:
+        raise ApprovalMismatch(action_id, pending.get("action_id"))
+
     state = _graph().invoke(_patch(session_id, {
         "approval_decision": "approve" if approved else "reject",
     }), _cfg(session_id))
@@ -212,6 +362,37 @@ def get_state(session_id: str) -> dict:
 # ──────────────────────────────────────────────────────────
 # 예외
 # ──────────────────────────────────────────────────────────
+class NothingToApprove(Exception):
+    """승인 대기 중인 액션이 없다. 이미 처리됐거나 순서가 어긋났다."""
+
+    def __init__(self, action_id: str):
+        self.action_id = action_id
+        super().__init__(f"nothing pending approval: {action_id}")
+
+    def detail(self) -> dict:
+        return {
+            "error": "validation_failed",
+            "message": "승인을 기다리는 작업이 없습니다. 화면을 새로고침해주세요.",
+            "details": {"action_id": self.action_id},
+        }
+
+
+class ApprovalMismatch(Exception):
+    """승인 요청의 액션과 대기 중인 액션이 다르다."""
+
+    def __init__(self, requested: str, pending: str | None):
+        self.requested = requested
+        self.pending = pending
+        super().__init__(f"approval mismatch: requested={requested} pending={pending}")
+
+    def detail(self) -> dict:
+        return {
+            "error": "validation_failed",
+            "message": "승인 대상이 화면과 다릅니다. 화면을 새로고침해주세요.",
+            "details": {"requested": self.requested, "pending": self.pending},
+        }
+
+
 class PrerequisiteMissing(Exception):
     def __init__(self, action_id: str, blocked_by: list[str], prereq: list[str]):
         self.action_id = action_id

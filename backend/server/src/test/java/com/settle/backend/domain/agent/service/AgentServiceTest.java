@@ -10,6 +10,8 @@ import com.settle.backend.common.auth.SessionAccessDeniedException;
 import com.settle.backend.domain.agent.client.AiAgentClient;
 import com.settle.backend.domain.agent.dto.AgentMessageRequest;
 import com.settle.backend.domain.agent.dto.AgentSessionRequest;
+import com.settle.backend.domain.document.service.GeneratedDocumentService;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -19,10 +21,11 @@ import org.springframework.http.ResponseEntity;
 class AgentServiceTest {
     private static final UUID MEMBER_ID = UUID.randomUUID();
     private final AiAgentClient aiAgentClient = mock(AiAgentClient.class);
-    private final AgentService agentService = new AgentService(aiAgentClient);
+    private final GeneratedDocumentService documentService = mock(GeneratedDocumentService.class);
+    private final AgentService agentService = new AgentService(aiAgentClient, documentService);
 
     @Test
-    void forwardsChatResponseWithoutChangingAgentEnvelope() {
+    void addsStoredDocumentsWithoutChangingOtherChatFields() {
         AgentMessageRequest request = new AgentMessageRequest(MEMBER_ID.toString(), "고려대학교");
         ResponseEntity<Map<String, Object>> upstream = ResponseEntity.ok(Map.of(
                 "ui", Map.of("type", "comparison"),
@@ -30,8 +33,16 @@ class AgentServiceTest {
                 "reply", "은행별 요건을 비교했습니다."
         ));
         when(aiAgentClient.chat(request)).thenReturn(upstream);
+        when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "ui", Map.of("type", "comparison"),
+                        "state", Map.of("session_id", MEMBER_ID.toString(), "documents", List.of()),
+                        "reply", "은행별 요건을 비교했습니다."
+                )));
 
-        assertThat(agentService.chat(MEMBER_ID, request)).isSameAs(upstream);
+        Map<String, Object> body = agentService.chat(MEMBER_ID, request).getBody();
+        assertThat(body).isNotNull();
+        assertThat(((Map<?, ?>) body.get("state")).get("documents")).isEqualTo(List.of());
         verify(aiAgentClient).chat(request);
     }
 
@@ -44,6 +55,8 @@ class AgentServiceTest {
                         "message", "먼저 완료해야 합니다: 외국인등록"
                 )));
         when(aiAgentClient.startAction("open_account", request)).thenReturn(upstream);
+        when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
+                .thenReturn(upstream);
 
         assertThat(agentService.startAction(MEMBER_ID, "open_account", request)).isSameAs(upstream);
         verify(aiAgentClient).startAction("open_account", request);
@@ -52,11 +65,30 @@ class AgentServiceTest {
     @Test
     void createsStableSessionFromMemberId() {
         ResponseEntity<Map<String, Object>> upstream = ResponseEntity.ok(Map.of(
-                "state", Map.of("session_id", MEMBER_ID.toString())
+                "state", Map.of(
+                        "session_id", MEMBER_ID.toString(),
+                        "documents", List.of(Map.of(
+                                "id", "ai-document-id",
+                                "preview_url", "/api/documents/ai-document-id/preview"
+                        ))
+                )
+        ));
+        List<Map<String, Object>> storedDocuments = List.of(Map.of(
+                "id", "spring-document-id",
+                "preview_url", "/api/documents/spring-document-id/preview"
         ));
         when(aiAgentClient.createSession(MEMBER_ID.toString(), "ko")).thenReturn(upstream);
+        when(documentService.withReadyReferences(upstream, MEMBER_ID, MEMBER_ID.toString()))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "state", Map.of(
+                                "session_id", MEMBER_ID.toString(),
+                                "documents", storedDocuments
+                        )
+                )));
 
-        assertThat(agentService.createSession(MEMBER_ID, "ko")).isSameAs(upstream);
+        assertThat(agentService.createSession(MEMBER_ID, "ko").getBody())
+                .extracting(body -> ((Map<?, ?>) body.get("state")).get("documents"))
+                .isEqualTo(storedDocuments);
         verify(aiAgentClient).createSession(MEMBER_ID.toString(), "ko");
     }
 
