@@ -71,7 +71,7 @@ class LedgerEntry(TypedDict, total=False):
 class AgentState(TypedDict, total=False):
     # ── 식별 ──────────────────────────────────────────────
     session_id: str
-    locale: str                                   # ko | en | vi
+    locale: str                                   # ko | en
 
     # ── 사용자 (본체 1) ───────────────────────────────────
     profile: Annotated[dict[str, Any], merge_dict]        # 평문 저장
@@ -87,6 +87,8 @@ class AgentState(TypedDict, total=False):
     current_action: Annotated[Optional[str], replace]
     missing_fields: Annotated[list[str], replace]         # 슬롯 필링 대상
     asked_field: Annotated[Optional[str], replace]        # 방금 물어본 필드
+    ask: Annotated[Optional[str], replace]               # 이번 턴의 자유 질문
+    last_qa: Annotated[Optional[str], replace]           # 마지막으로 답한 질문
 
     # ── 산출물 ────────────────────────────────────────────
     documents: Annotated[list[dict], union_list]
@@ -104,6 +106,10 @@ class AgentState(TypedDict, total=False):
 
     # ── 이번 턴의 출력 (노드가 채우고 invoke가 꺼내 간다) ──
     reply: Annotated[Optional[str], replace]
+    # reply 가 실제로 쓰인 언어. 노드 대부분은 한국어 문구를 그대로 넣으므로
+    # 응답 조립 단계에서 locale 로 옮긴다. LLM 이 이미 사용자 언어로 쓴 문장만
+    # 이 값을 채워서 두 번 번역되지 않게 한다. planner 가 매 턴 초기화한다.
+    reply_locale: Annotated[Optional[str], replace]
     ui_type: Annotated[Optional[str], replace]
     ui_payload: Annotated[Optional[dict], replace]
 
@@ -149,4 +155,5 @@ def turn_output(state: AgentState) -> dict:
 
 def clear_turn(state: AgentState) -> dict:
     """다음 턴 시작 시 출력 필드를 비운다."""
-    return {"reply": None, "ui_type": "none", "ui_payload": {}}
+    return {"reply": None, "reply_locale": None,
+            "ui_type": "none", "ui_payload": {}}

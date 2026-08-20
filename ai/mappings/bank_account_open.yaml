@@ -1,0 +1,103 @@
+form: bank_account_open
+title_ko: 외국인 계좌개설 신청서 (표준)
+title_en: Account Opening Application for Foreign Residents
+template: bank_account_open.html
+source_note: "금융실명법·특정금융정보법·외국환거래규정의 요구 항목을 기준으로 재구성"
+
+variants:
+  default:
+    checkbox: 입출금이 자유로운 예금
+    checkbox_en: DEMAND DEPOSIT
+    fee: 0
+
+fields:
+  applicant_name_en:
+    from: profile.name_en
+    required: true
+    label_ko: 성명(영문)
+    label_en: Full name
+  arc_no:
+    from: profile.arc_no
+    required: true
+    label_ko: 외국인등록번호
+    label_en: Registration No.
+  nationality:
+    from: profile.nationality
+    required: true
+    label_ko: 국적
+    label_en: Nationality
+    transform: country_name
+  birth_date:
+    from: profile.birth_date
+    required: true
+    label_ko: 생년월일
+    label_en: Date of birth
+  visa_type:
+    from: profile.visa_type
+    required: true
+    label_ko: 체류자격
+    label_en: Status of stay
+  stay_expiry:
+    from: profile.stay_expiry
+    required: true
+    label_ko: 체류기간 만료일
+    label_en: Period of sojourn until
+  addr_kr:
+    from: profile.addr_kr
+    required: true
+    label_ko: 국내 주소
+    label_en: Address in Korea
+  phone_kr:
+    from: profile.phone_kr
+    required: true
+    label_ko: 연락처
+    label_en: Phone number
+  org_name:
+    from: profile.org_name
+    required: true
+    label_ko: 소속기관(학교)
+    label_en: School / Organization
+  residency_status:
+    from: rule.residency_status
+    required: true
+    computed: true
+    label_ko: 거주자 구분
+    label_en: Residency status
+    evidence: 외국환거래규정
+  purpose:
+    from: profile.purpose
+    required: true
+    label_ko: 거래목적
+    label_en: Purpose of transaction
+    enum:
+      living_expense: 생활비
+      tuition: 학비
+      salary: 급여수령
+      remittance: 해외송금
+    evidence: 특정금융정보법 제5조의2
+  income_source:
+    from: profile.income_source
+    required: true
+    label_ko: 자금출처
+    label_en: Source of funds
+    enum:
+      scholarship: 장학금
+      family_support: 가족 지원
+      part_time: 근로소득
+      savings: 예금
+    evidence: 특정금융정보법 제5조의2
+  account_type:
+    from: rule.account_type
+    computed: true
+    label_ko: 계좌 종류
+    label_en: Account type
+    enum:
+      limited: 금융거래한도계좌
+      normal: 일반 입출금계좌
+
+disclaimer_ko: >
+  본 서식은 법령상 요구 항목을 기준으로 재구성된 작성 보조 문서이며,
+  특정 금융기관의 공식 서식이 아닙니다. 실명확인과 최종 제출은 본인이 수행합니다.
+disclaimer_en: >
+  This form is a drafting aid and is not an official form of any financial
+  institution. Identity verification and final submission are performed by the applicant.
