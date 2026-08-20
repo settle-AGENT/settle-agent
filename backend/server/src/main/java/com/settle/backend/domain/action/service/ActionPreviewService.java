@@ -89,16 +89,24 @@ public class ActionPreviewService {
         if (!actionId.equals(pendingAction)) {
             throw new IllegalArgumentException("approval_action_mismatch");
         }
-        return withStoredDocuments(
-                aiActionClient.approve(actionId, sessionId, approved),
-                memberId,
-                sessionId
-        );
+        AgentResponse result = aiActionClient.approve(actionId, sessionId, approved);
+        if (approved) {
+            documentService.issueLatest(memberId, sessionId, actionId);
+        }
+        return withStoredDocuments(result, memberId, sessionId);
     }
 
     public List<Map<String, Object>> ledger(UUID memberId, String sessionId) {
         SessionOwnership.require(memberId, sessionId);
-        return aiActionClient.ledger(sessionId);
+        // 이전 버전은 승인 이력을 AI 체크포인터에만 남겼다. 남아 있는 레거시
+        // ledger를 읽어 영구 문서 상태로 한 번 승격한 뒤 DB를 진실의 원천으로 쓴다.
+        aiActionClient.ledger(sessionId).forEach(entry -> {
+            Object action = entry.get("action");
+            if (action instanceof String actionId && !actionId.isBlank()) {
+                documentService.issueLatest(memberId, sessionId, actionId);
+            }
+        });
+        return documentService.listIssuedHistory(memberId);
     }
 
     private AgentResponse withStoredDocuments(AgentResponse response, UUID memberId, String sessionId) {

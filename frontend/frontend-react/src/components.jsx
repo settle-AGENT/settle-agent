@@ -1,18 +1,10 @@
 // 여러 화면이 공유하는 작은 UI 조각들.
 import React from "react";
 
-export function BridgeMark({ size = 60, bg = "oklch(0.97 0.01 250)" }) {
+export function BridgeMark({ size = 60 }) {
   return (
-    <div style={{ width: size, height: size, borderRadius: size * 0.27, background: bg,
-      display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 96 96" fill="none">
-        <circle cx="24" cy="34" r="9" fill="oklch(0.7 0.13 45)" />
-        <circle cx="72" cy="34" r="9" fill="oklch(0.55 0.14 250)" />
-        <path d="M18 62c0-16.6 13.4-30 30-30s30 13.4 30 30" stroke="oklch(0.55 0.14 250)" strokeWidth="6.5" strokeLinecap="round" fill="none" />
-        <line x1="48" y1="32" x2="48" y2="62" stroke="oklch(0.55 0.14 250)" strokeWidth="6.5" strokeLinecap="round" />
-        <line x1="33" y1="42" x2="33" y2="62" stroke="oklch(0.55 0.14 250)" strokeWidth="5" strokeLinecap="round" />
-        <line x1="63" y1="42" x2="63" y2="62" stroke="oklch(0.55 0.14 250)" strokeWidth="5" strokeLinecap="round" />
-      </svg>
+    <div className="maite-wordmark" style={{ width: size * 1.65, height: size * 0.48 }}>
+      <img src="/assets/maite-wordmark.png" alt="MAITE" />
     </div>
   );
 }
@@ -82,7 +74,7 @@ export function TopBar({ title, onBack, right }) {
       {onBack && (
         <button type="button" onClick={onBack} aria-label="이전 화면" className="top-bar-back tap">‹</button>
       )}
-      <div style={{ fontSize: 13, fontWeight: 700 }}>{title}</div>
+      <div style={{ fontSize: 16, fontWeight: 800 }}>{title}</div>
       {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
     </div>
   );
@@ -101,7 +93,7 @@ export function Rail({ active, locale = "ko" }) {
           <div style={{ width: 10, height: 10, borderRadius: 99,
             background: i < active ? "var(--ok)" : i === active ? "var(--brand-2)" : "transparent",
             border: i > active ? "1.5px solid var(--line)" : "none" }} />
-          <div style={{ fontSize: 9.5, fontWeight: i === active ? 700 : 500,
+          <div style={{ fontSize: 11.5, fontWeight: i === active ? 800 : 600,
             color: i === active ? "oklch(0.5 0.1 45)" : i < active ? "oklch(0.4 0.012 60)" : "oklch(0.65 0.01 60)",
             fontFamily: "'Noto Sans KR',sans-serif", whiteSpace: "nowrap" }}>{label}</div>
         </div>
@@ -134,8 +126,8 @@ export function Field({ label, value, confidence, editable = false, dirty, error
     <div style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.8 0.1 80 / 0.16)" : "#fff",
       border: error ? "1.5px solid #b64b3d" : low ? "1.5px solid var(--warn)" : "1px solid var(--line)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 11.5, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
-        <span style={{ fontSize: 10.5, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
+        <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
           {error ? (en ? "Check required" : "확인 필요") : dirty ? (en ? "Edited" : "수정됨") : low ? (en ? "Check required" : "확인 필요") : !editable ? (en ? "Read only" : "수정 불가") : ""}
         </span>
       </div>
@@ -156,7 +148,7 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div>
         <b style={{ fontSize: 14.5, lineHeight: 1.45 }}>{label}</b>
-        {hint && <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)", lineHeight: 1.45 }}>{hint}</div>}
+        {hint && <div style={{ marginTop: 5, fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>{hint}</div>}
       </div>
 
       {choice ? (
@@ -164,7 +156,7 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
           {options.map((option) => (
             <button key={option.value} type="button" disabled={disabled}
               onClick={() => onSubmit(option.value)} className="tap"
-              style={{ minHeight: 44, padding: "0 14px", borderRadius: 11, fontSize: 13, fontWeight: 700,
+              style={{ minHeight: 48, padding: "0 15px", borderRadius: 11, fontSize: 15, fontWeight: 700,
                 border: "1px solid var(--line)", background: "#fff", color: "oklch(0.25 0.012 60)" }}>
               {option.label}
             </button>
@@ -179,7 +171,7 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
           <input className="profile-field-input" style={{ flex: 1 }} value={value} disabled={disabled}
             onChange={(event) => onChange(event.target.value)} placeholder={en ? "Enter your answer" : "답변을 입력하세요"} />
           <button type="submit" disabled={disabled || !value.trim()} className="tap"
-            style={{ minHeight: 44, padding: "0 16px", borderRadius: 11, border: 0, fontSize: 13, fontWeight: 700,
+            style={{ minHeight: 48, padding: "0 16px", borderRadius: 11, border: 0, fontSize: 15, fontWeight: 700,
               background: disabled || !value.trim() ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)",
               color: disabled || !value.trim() ? "oklch(0.55 0.01 60)" : "#fff" }}>{en ? "Send" : "보내기"}</button>
         </form>

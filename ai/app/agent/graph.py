@@ -151,6 +151,7 @@ def _written_locale(text: str, locale: str) -> str | None:
 # 액션별 필수 필드 (D2에 mappings/*.yaml 로 이관)
 ACTION_FIELDS: dict[str, list[str]] = {
     "alien_registration": ["birth_date", "entry_date", "org_name", "phone_kr"],
+    "mobile_subscription": ["phone_kr"],
     "residence_change": ["birth_date", "phone_kr"],
     "work_activity": ["org_name"],
     "open_bank_account": ["birth_date", "org_name", "phone_kr",
@@ -158,6 +159,8 @@ ACTION_FIELDS: dict[str, list[str]] = {
 }
 
 ACTION_TITLES: dict[str, dict] = {
+    "mobile_subscription": {"ko": "\uad6d\ub0b4 \ud1b5\uc2e0 \uac00\uc785",
+                            "en": "Mobile Subscription"},
     "alien_registration": {"ko": "외국인등록 신청서 제출",
                            "en": "Submit Alien Registration application"},
     "residence_change": {"ko": "체류지 변경신고 제출",
@@ -236,7 +239,7 @@ def route_from_router(state: AgentState) -> Literal[
         return "approval_gate"
 
     action = state.get("current_action")
-    if not action:
+    if not action or not state.get("action_authorized"):
         return "explainer"
 
     missing = _missing_fields(state, action)
@@ -325,13 +328,35 @@ def doc_builder(state: AgentState) -> dict:
 
     form = spec.get("form")
     if not form:
+        if action == "mobile_subscription" and profile.get("phone_kr"):
+            locale = state.get("locale") or "en"
+            title = _title(action, locale)
+            reply = (
+                "\uad6d\ub0b4 \ud1b5\uc2e0 \uac00\uc785\uc744 \uc644\ub8cc \ucc98\ub9ac\ud588\uc2b5\ub2c8\ub2e4."
+                if locale == "ko"
+                else "Your mobile subscription has been marked complete."
+            )
+            return {
+                "completed": [action],
+                "in_progress": [a for a in state.get("in_progress", []) if a != action],
+                "current_action": None,
+                "reply": reply,
+                "reply_locale": locale,
+                "ui_type": "task_complete",
+                "ui_payload": {
+                    "action_id": action,
+                    "title": title,
+                    "phone_kr": profile["phone_kr"],
+                },
+            }
         # 앱이 만들 서식이 없는 과제다(통신 가입 등). 여기까지 왔다는 것은
         # 어딘가에서 "시작할까요" 를 물었다는 뜻인데, 시작할 것이 없다.
         #
         # 예전에는 "이 단계는 서류 없이 진행됩니다" 한 줄만 돌려주고
         # current_action 을 남겨 두었다. 그러면 무슨 말을 하든 router 가
         # 다시 이 자리로 보내 같은 문장만 반복됐다 — 빠져나갈 수 없었다.
-        return {"current_action": None, "in_progress": [],
+        return {"current_action": None,
+                "in_progress": [a for a in state.get("in_progress", []) if a != action],
                 **_offline_guidance(state, action, spec)}
 
     try:
@@ -569,7 +594,7 @@ def executor(state: AgentState) -> dict:
 
     return {
         "completed": [action],
-        "in_progress": [],
+        "in_progress": [a for a in state.get("in_progress", []) if a != action],
         "pending_approval": None,
         "approval_decision": None,
         "current_action": None,
@@ -598,7 +623,8 @@ def explainer(state: AgentState) -> dict:
         got = None
         if RESEARCH_ENABLED and researcher.available():
             got = researcher.answer(last, profile=profile, tasks=tasks,
-                                    history=history, locale=locale)
+                                    history=history, locale=locale,
+                                    session_id=state.get("session_id") or "")
             if got and got.get("trace"):
                 print("[researcher] " + " → ".join(t["tool"] for t in got["trace"]))
 

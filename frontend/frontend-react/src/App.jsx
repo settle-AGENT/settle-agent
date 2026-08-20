@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { MaiteWordmark, MaiteAvatar, BankMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
+import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
   signUp, login, uploadAndExtract, confirmProfile, previewAction, approveAction, getLedger,
   fetchDocument, nationalityLabel,
-  createSession, sendChat, startAction, readUi, questionOptions, clearToken, readMemberId,
+  createSession, sendChatStream, startAction, readUi, questionOptions, clearToken, readMemberId,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
@@ -18,15 +18,15 @@ const APPLICATIONS = {
   work_activity: { ko: "통합신청서 · 체류자격외활동", en: "Integrated application · Activity permit" },
   open_bank_account: { ko: "계좌개설신청서", en: "Bank account application" },
 };
-// 목표 선택(step 8). 흐름도 개선안 — 프로필 확인 직후 "무엇을 하려고 하는지"를
-// 먼저 고르게 해서, 할 일(step 5)이 "고른 목표를 이루기 위한 단계"로 읽히게 한다.
-const GOALS = [
-  { id: "alien_registration", icon: "🪪", ko: ["외국인등록증 만들기", "통합신청서 · 외국인등록"], en: ["Register as a foreign resident", "Integrated application · Registration"] },
-  { id: "open_bank_account", icon: "🏦", ko: ["은행 계좌 만들기", "계좌개설신청서"], en: ["Open a bank account", "Bank account application"] },
-  { id: "residence_change", icon: "🏠", ko: ["체류지 변경 신고하기", "통합신청서 · 체류지 변경"], en: ["Report an address change", "Integrated application · Address change"] },
-  { id: "work_activity", icon: "💼", ko: ["아르바이트 허가 받기", "통합신청서 · 체류자격외활동"], en: ["Get an activity permit", "Integrated application · Activity permit"] },
-];
+const APPLICATION_GOALS = {
+  alien_registration: { ko: "목표: 외국인등록 · 출입국·외국인청 제출용", en: "Goal: Alien registration · for the immigration office" },
+  residence_change: { ko: "목표: 체류지 변경 신고 · 출입국·외국인청 제출용", en: "Goal: Address change · for the immigration office" },
+  work_activity: { ko: "목표: 체류자격외활동 허가 · 출입국·외국인청 제출용", en: "Goal: Activity permit · for the immigration office" },
+  open_bank_account: { ko: "목표: 계좌 개설 · 은행 영업점 제출용", en: "Goal: Open an account · for the bank branch" },
+};
 const ONBOARDING_PROGRESS_KEY = "settle_onboarding_progress_v1";
+const SESSION_DRAFTS_KEY = "settle_session_drafts_v1";
+const UI_LANGUAGE_VERSION = 2;
 const PROFILE_DRAFT_KEY = "settle_profile_draft_v1";
 const EMPTY_AUTH = { email: "", password: "", passwordConfirm: "" };
 const EMPTY_ANSWERS = { phone: null, cert: null, purposes: {} };
@@ -36,6 +36,7 @@ const PROFILE_LABELS = {
 };
 const GENDER_LABELS = { F: ["여성", "Female"], M: ["남성", "Male"] };
 const REUSABLE_PROFILE_KEYS = ["name_en", "arc_no", "nationality", "visa_type", "stay_expiry"];
+
 const EMAIL_PATTERN = /^(?=.{1,64}@)[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z]{2,63})+$/;
 
 function readOnboardingProgress() {
@@ -43,7 +44,7 @@ function readOnboardingProgress() {
     const progress = JSON.parse(window.localStorage.getItem(ONBOARDING_PROGRESS_KEY) || "null");
     if (!progress || typeof progress !== "object") return null;
     return {
-      lang: progress.lang === "ko" ? "ko" : "en",
+      lang: progress.uiLanguageVersion === UI_LANGUAGE_VERSION && progress.lang === "en" ? "en" : "ko",
       lastStep: Number.isInteger(progress.lastStep) ? progress.lastStep : 1,
       currentStep: Number.isInteger(progress.currentStep)
         ? progress.currentStep
@@ -56,10 +57,21 @@ function readOnboardingProgress() {
         : { ...EMPTY_ANSWERS },
       updatedAt: progress.updatedAt || null,
       memberId: typeof progress.memberId === "string" ? progress.memberId : "",
-      goal: typeof progress.goal === "string" && GOALS.some((goal) => goal.id === progress.goal) ? progress.goal : "",
+      sessionId: typeof progress.sessionId === "string" ? progress.sessionId : "",
     };
   } catch {
     return null;
+  }
+}
+
+function readSessionDrafts(expectedMemberId = "") {
+  try {
+    const drafts = JSON.parse(window.localStorage.getItem(SESSION_DRAFTS_KEY) || "[]");
+    if (!Array.isArray(drafts)) return [];
+    return drafts.filter((draft) => draft && typeof draft.sessionId === "string"
+      && (!expectedMemberId || draft.memberId === expectedMemberId));
+  } catch {
+    return [];
   }
 }
 
@@ -103,11 +115,11 @@ function extractionFromSession(response) {
 function passwordChecks(password, locale = "ko") {
   const en = locale === "en";
   return [
-    { label: en ? "At least 8 characters" : "8자 이상", met: password.length >= 8 && password.length <= 64 },
-    {
-      label: en ? "Includes letters, numbers, and symbols" : "영문·숫자·특수문자 포함",
-      met: /[A-Za-z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && /^[\x21-\x7E]+$/.test(password),
-    },
+    { label: en ? "8–64 characters" : "8~64자", met: password.length >= 8 && password.length <= 64 },
+    { label: en ? "Includes a letter" : "영문 포함", met: /[A-Za-z]/.test(password) },
+    { label: en ? "Includes a number" : "숫자 포함", met: /\d/.test(password) },
+    { label: en ? "Includes a special character" : "특수문자 포함", met: /[^A-Za-z0-9]/.test(password) },
+    { label: en ? "Letters, numbers, and symbols only" : "영문·숫자·특수문자만", met: /^[\x21-\x7E]+$/.test(password) },
   ];
 }
 
@@ -192,7 +204,7 @@ function savedProgressDetails(progress, locale = "ko") {
     5: ["서류 준비", "Document preparation", "진행 중인 서류 작업을 이어갈 차례예요", "Continue your document task"],
     6: ["심사 결과", "Review result", "확인하던 결과부터 이어갈 수 있어요", "Continue from your saved result"],
     7: ["서류 미리보기", "Document preview", "작성된 서류를 확인할 차례예요", "Review your prepared document"],
-    8: ["목표 선택", "Choose a goal", "무엇을 만들지 고를 차례예요", "Choose what you want to prepare"],
+    8: ["서류 완료", "Document ready", "완료된 서류를 확인할 수 있어요", "View your completed document"],
   };
   const stage = stages[targetStep];
   return stage ? { title: stage[en ? 1 : 0], stage: stage[en ? 3 : 2], targetStep } : null;
@@ -220,8 +232,10 @@ export default function App() {
     const progress = readOnboardingProgress();
     return progress?.memberId && memberId && progress.memberId !== memberId ? null : progress;
   });
-  const [lang, setLang] = useState(() => savedProgress?.lang || "en");
+  const [sessionDrafts, setSessionDrafts] = useState(() => readSessionDrafts(memberId));
+  const [lang, setLang] = useState(() => savedProgress?.lang || "ko");
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+  const [newDocumentConfirmOpen, setNewDocumentConfirmOpen] = useState(false);
 
   // ── 에이전트 단일 스토어 ──
   // 서버 state 가 진실의 원천이다. 부분 병합하지 않고 통째로 교체한다.
@@ -250,16 +264,14 @@ export default function App() {
   const [profileSubmitting, setProfileSubmitting] = useState(false);
 
   const [answers, setAnswers] = useState(() => savedProgress?.answers || { ...EMPTY_ANSWERS });
-  // 사용자가 고른 목표(서류). step 8에서 세팅되고 할 일·신청서 화면이 이를 따라간다.
-  const [goalId, setGoalId] = useState(() => savedProgress?.goal || "");
-  const [goalBusy, setGoalBusy] = useState("");
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [previewActionId, setPreviewActionId] = useState(() =>
-    savedProgress?.goal && APPLICATIONS[savedProgress.goal] ? savedProgress.goal : "open_bank_account");
+  const [previewActionId, setPreviewActionId] = useState("open_bank_account");
   const [previewBlobUrl, setPreviewBlobUrl] = useState("");
+  const [pdfPage, setPdfPage] = useState(1);
   const [approval, setApproval] = useState(null);
+  const [approvalVisible, setApprovalVisible] = useState(false);
   const [approvalLoading, setApprovalLoading] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const [ledger, setLedger] = useState([]);
@@ -412,18 +424,19 @@ export default function App() {
     const next = {
       ...previous,
       lang,
+      uiLanguageVersion: UI_LANGUAGE_VERSION,
+      sessionId,
       lastStep: Math.max(previous.lastStep || 1, step),
       currentStep: step,
       completedScans,
       answers,
-      goal: goalId,
       memberId,
       updatedAt: new Date().toISOString(),
     };
     progressRef.current = next;
     window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(next));
     setSavedProgress(next);
-  }, [answers, completedScans, goalId, isAuthenticated, lang, memberId, step]);
+  }, [answers, completedScans, isAuthenticated, lang, memberId, sessionId, step]);
 
   useEffect(() => {
     if (!memberId || step !== 3) return;
@@ -450,6 +463,13 @@ export default function App() {
     setStep(nextStep);
   };
 
+  const returnToChat = () => {
+    setUi((current) => current.type === "action_offer"
+      ? { type: "none", payload: {} }
+      : current);
+    go(4);
+  };
+
   const back = (fallback = 0) => {
     const previousStep = navigationHistoryRef.current.pop();
     setStep(previousStep ?? fallback);
@@ -457,18 +477,10 @@ export default function App() {
 
   const requestOnboardingExit = () => setExitConfirmOpen(true);
 
-  // 한/영 토글. lang 을 바꾸고, 렌더에 우선하는 agentState.locale 도 함께 덮어써
-  // 화면이 즉시 바뀌게 한다. 이후 서버 호출은 이 locale 로 나간다.
-  const changeLocale = (next) => {
-    if (next !== "ko" && next !== "en") return;
-    if (next === locale) return;
-    setLang(next);
-    setAgentState((current) => (current ? { ...current, locale: next } : current));
-  };
-
   const exitOnboarding = () => {
     stopCamera();
     setExitConfirmOpen(false);
+    setNewDocumentConfirmOpen(false);
     navigationHistoryRef.current = [];
     setStep(0);
   };
@@ -476,6 +488,7 @@ export default function App() {
   const openPdfPreview = async () => {
     if (previewLoading) return;
     setPreviewLoading(true);
+    setApprovalVisible(false);
     setPreviewError("");
     try {
       const response = applyAgent(await previewAction(previewActionId, sessionId, locale));
@@ -498,6 +511,7 @@ export default function App() {
         return nextBlobUrl;
       });
       setPreview(payload);
+      setPdfPage(1);
       go(10);
     } catch (error) {
       if (!handleAuthError(error)) setPreviewError(localizedError(error, locale, "PDF를 불러오지 못했어요.", "Could not load the PDF."));
@@ -516,6 +530,7 @@ export default function App() {
         return nextBlobUrl;
       });
       setPreview({ ...document, warnings: [] });
+      setPdfPage(1);
       go(10);
     } catch (error) {
       if (!handleAuthError(error)) setPreviewError(localizedError(error, locale, "PDF를 불러오지 못했어요.", "Could not load the PDF."));
@@ -542,6 +557,11 @@ export default function App() {
     setApprovalError("");
     try {
       applyAgent(await approveAction(approval.action_id, sessionId, approved, locale));
+      setApprovalVisible(false);
+      if (approved) {
+        setCabinetBackStep(7);
+        go(9);
+      }
     } catch (error) {
       if (!handleAuthError(error)) setApprovalError(localizedError(error, locale, "승인 요청을 처리하지 못했어요.", "Could not process the approval request."));
     } finally {
@@ -551,9 +571,29 @@ export default function App() {
 
   // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
   const applyAgent = (response) => {
-    if (response?.state) setAgentState(response.state);
-    setUi(readUi(response));
-    if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    if (response?.state) {
+      setAgentState(response.state);
+      if (memberId && response.state.session_id) {
+        const snapshot = {
+          memberId,
+          sessionId: response.state.session_id,
+          tasks: Array.isArray(response.state.tasks) ? response.state.tasks : [],
+          updatedAt: new Date().toISOString(),
+        };
+        const allDrafts = readSessionDrafts();
+        const nextDrafts = [snapshot, ...allDrafts.filter((draft) =>
+          !(draft.memberId === memberId && draft.sessionId === snapshot.sessionId))].slice(0, 20);
+        window.localStorage.setItem(SESSION_DRAFTS_KEY, JSON.stringify(nextDrafts));
+        setSessionDrafts(nextDrafts.filter((draft) => draft.memberId === memberId));
+      }
+    }
+    const responseUi = readUi(response);
+    setUi(responseUi);
+    const repeatedQuestion = responseUi.type === "question"
+      && response?.reply?.trim() === responseUi.payload?.label?.trim();
+    if (response?.reply && !repeatedQuestion) {
+      setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    }
     const nextApproval = response?.ui?.type === "approval"
       ? response.ui.payload
       : response?.state?.pending_approval;
@@ -572,7 +612,7 @@ export default function App() {
     setIsAuthenticated(false);
     setMemberId("");
     setSavedProgress(null);
-    setLang("en");
+    setLang("ko");
     setExitConfirmOpen(false);
     setAgentState(null);
     setUi({ type: "none", payload: {} });
@@ -593,8 +633,6 @@ export default function App() {
     setProfileErrors({});
     setProfileSubmitting(false);
     setAnswers({ ...EMPTY_ANSWERS });
-    setGoalId("");
-    setGoalBusy("");
     setVerdict(null);
     setChatLoading(false);
     setChatInput("");
@@ -604,6 +642,7 @@ export default function App() {
     setPreviewError("");
     setPreviewLoading(false);
     setApproval(null);
+    setApprovalVisible(false);
     setApprovalLoading(false);
     setApprovalError("");
     setLedger([]);
@@ -627,7 +666,7 @@ export default function App() {
     setSessionRestoreChecked(true);
     setSessionLoading(true);
     setToast("");
-    createSession(lang)
+    createSession(lang, !savedProgress, { sessionId: savedProgress?.sessionId })
       .then((response) => { if (active) applyAgent(response); })
       .catch((error) => {
         if (active && !handleAuthError(error)) {
@@ -656,7 +695,7 @@ export default function App() {
     try {
       const response = agentState?.session_id
         ? { state: agentState, ui }
-        : applyAgent(await createSession(lang));
+        : applyAgent(await createSession(lang, false, { sessionId: progressRef.current?.sessionId }));
       const restored = extractionFromSession(response);
       const privateDraft = readProfileDraft(resumeMemberId);
       const localProfile = privateDraft?.profileDraft || {};
@@ -686,10 +725,9 @@ export default function App() {
       const resumed = resumeDetails(response.state, responseUi, locale)
         || savedProgressDetails(progressRef.current, locale);
       let targetStep = resumed?.targetStep || 2;
-      // 목표를 아직 고르지 않았다면 할 일(5)·상담(4) 대신 목표 선택(8)부터 보여준다.
-      if (!resumed && tasks.length > 0) targetStep = goalId ? 5 : 8;
+      if (!resumed && tasks.length > 0) targetStep = 5;
       else if (!resumed && restoredFields.length > 0 && (allScansCompleted || !hasReusableProfile)) targetStep = 3;
-      else if (!resumed && hasReusableProfile) targetStep = goalId ? 4 : 8;
+      else if (!resumed && hasReusableProfile) targetStep = 4;
       if (targetStep === 2) {
         const nextScan = SCAN_PAGES.findIndex((page) => !completedScans.includes(page.key));
         setScan(nextScan < 0 ? 0 : nextScan);
@@ -702,12 +740,114 @@ export default function App() {
     }
   };
 
-  const approvalModal = approval && step >= 2
+  const startFreshDocumentSession = async () => {
+    if (sessionLoading) return;
+    setSessionLoading(true);
+    setToast("");
+    try {
+      const response = await createSession(lang, false, {
+        fresh: true,
+        sourceSessionId: sessionId,
+      });
+      const nextSessionId = response?.state?.session_id;
+      if (!nextSessionId) throw new Error(t("새 상담 세션을 만들지 못했어요.", "Could not create a new consultation session."));
+
+      stopCamera();
+      setMessages([]);
+      setShots({});
+      setSkippedShots({});
+      setCompletedScans([]);
+      setScan(0);
+      setCaptureError(null);
+      setExtract(null);
+      setProfileDraft({});
+      setDirtyFields({});
+      setProfileErrors({});
+      setAnswers({ ...EMPTY_ANSWERS });
+      setVerdict(null);
+      setPreview(null);
+      setPreviewError("");
+      setApproval(null);
+      setApprovalVisible(false);
+      setLedger([]);
+      setChatInput("");
+      setThinkingSteps([]);
+      applyAgent(response);
+
+      const hasMasterProfile = Object.keys(response?.state?.profile || {}).length > 0;
+      const targetStep = hasMasterProfile ? 4 : 2;
+      const nextProgress = {
+        lang,
+        uiLanguageVersion: UI_LANGUAGE_VERSION,
+        memberId,
+        sessionId: nextSessionId,
+        currentStep: targetStep,
+        lastStep: targetStep,
+        completedScans: [],
+        answers: { ...EMPTY_ANSWERS },
+        updatedAt: new Date().toISOString(),
+      };
+      progressRef.current = nextProgress;
+      window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(nextProgress));
+      setSavedProgress(nextProgress);
+      navigationHistoryRef.current = [];
+      setNewDocumentConfirmOpen(false);
+      setStep(targetStep);
+    } catch (error) {
+      if (!handleAuthError(error)) setToast(localizedError(error, locale, "새 상담을 시작하지 못했어요.", "Could not start a new consultation."));
+      setNewDocumentConfirmOpen(false);
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
+  const openSavedWork = async (draftSessionId, actionId) => {
+    if (sessionLoading) return;
+    if (draftSessionId === sessionId) {
+      setPreviewActionId(actionId);
+      go(7);
+      return;
+    }
+    setSessionLoading(true);
+    setToast("");
+    try {
+      setMessages([]);
+      const response = await createSession(lang, false, { sessionId: draftSessionId });
+      applyAgent(response);
+      setPreviewActionId(actionId);
+      const nextProgress = {
+        ...(progressRef.current || {}), memberId, lang,
+        uiLanguageVersion: UI_LANGUAGE_VERSION,
+        sessionId: draftSessionId,
+        currentStep: 7,
+        lastStep: Math.max(progressRef.current?.lastStep || 1, 7),
+        updatedAt: new Date().toISOString(),
+      };
+      progressRef.current = nextProgress;
+      window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(nextProgress));
+      setSavedProgress(nextProgress);
+      navigationHistoryRef.current = [];
+      setStep(7);
+    } catch (error) {
+      if (!handleAuthError(error)) setToast(localizedError(error, locale, "저장된 작업을 열지 못했어요.", "Could not open the saved work."));
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
+  const approvalModal = approval && approvalVisible && step === 10
     ? <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} locale={locale} />
     : null;
   const activeModal = exitConfirmOpen
     ? <ExitConfirmModal onContinue={() => setExitConfirmOpen(false)} onExit={exitOnboarding} locale={locale} />
-    : approvalModal;
+    : newDocumentConfirmOpen
+      ? <NewDocumentConfirmModal
+          loading={sessionLoading}
+          onContinue={() => setNewDocumentConfirmOpen(false)}
+          onStart={startFreshDocumentSession}
+          locale={locale}
+        />
+      : approvalModal;
 
   const openCabinetFromHome = async () => {
     if (sessionLoading) return;
@@ -734,97 +874,44 @@ export default function App() {
       const resumed = resumeDetails(agentState, ui, locale)
         || savedProgressDetails(savedProgress, locale);
       const hasProfile = Object.keys(agentState?.profile || {}).length > 0;
-      // 재방문 홈: 1) 이어할 작업 있음 2) 프로필만 있음 3) 프로필 없음 — 셋 중 하나만 보여준다.
-      if (isAuthenticated) {
-        const homeState = resumed ? "resume" : hasProfile ? "profile" : "start";
-        const progressByStep = { 2: 22, 3: 45, 8: 52, 4: 60, 5: 72, 6: 82, 7: 92 };
-        const progressPercent = resumed ? progressByStep[resumed.targetStep] || 22 : 0;
+      if (isAuthenticated && resumed) {
+        const progressByStep = { 2: 22, 3: 45, 4: 60, 5: 72, 6: 82, 7: 92, 8: 100 };
+        const progressPercent = progressByStep[resumed.targetStep] || 22;
         const savedDate = savedProgress?.updatedAt
           ? new Date(savedProgress.updatedAt).toLocaleDateString(locale === "en" ? "en-CA" : "ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/\. /g, ".").replace(/\.$/, "")
           : "";
-        const startNewDocument = () => {
-          if (hasProfile) go(8); // 새 서류 = 새 목표부터 고른다
-          else {
-            setScan(0);
-            setCompletedScans([]);
-            go(2);
-          }
-        };
         return (
           <Shell modal={activeModal}>
-            <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
             <div className="resume-home">
-              <div className="resume-home-center">
               <div className="resume-home-brand">
-                <BankMark size={78} />
-                <MaiteWordmark compact />
-                <span className="resume-service-name">{t("첫계좌", "First Account")}</span>
-                <div className="return-greeting">
-                  {homeState === "start" ? t("환영해요", "Welcome") : t("다시 오셨네요", "Welcome back")}
-                  <span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span>
-                </div>
+                <BridgeMark size={78} />
+                <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>
               </div>
-
-              {homeState === "resume" && (
-                <section className="resume-card resume-card--progress" aria-label={t("저장된 진행 상황", "Saved progress")}>
-                  <div className="resume-card-kicker">{t("이어서 하기", "Continue")}</div>
-                  <h2>{resumed.title}</h2>
-                  <p>{resumed.stage}</p>
-                  {savedDate && <time dateTime={savedProgress.updatedAt}>{t("마지막 저장", "Last saved")} · {savedDate}</time>}
-                  <div className="resume-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent}><span style={{ width: `${progressPercent}%` }} /></div>
-                  <button type="button" disabled={sessionLoading} onClick={resumeSession}>{sessionLoading ? t("불러오는 중…", "Loading…") : t("이어서 하기", "Continue")}</button>
-                </section>
-              )}
-              {homeState === "profile" && (
-                <section className="resume-card resume-card--profile" aria-label={t("마스터 프로필", "Master profile")}>
-                  <div className="resume-card-kicker">✓ {t("마스터 프로필 저장됨", "Master profile saved")}</div>
-                  <h2>{t("촬영·프로필 없이 바로 서류를 만들어요", "Skip capture and profile — create a document right away")}</h2>
-                  <p>{t("이름·비자·여권 정보 재사용", "Reuses your name, visa, and passport details")}</p>
-                </section>
-              )}
-              {homeState === "start" && (
-                <section className="resume-card resume-card--start" aria-label={t("시작 전", "Not started")}>
-                  <div className="resume-card-kicker">{t("시작 전", "Not started")}</div>
-                  <h2>{t("먼저 프로필을 만들어요", "Create your profile first")}</h2>
-                  <p>{t("외국인등록증을 촬영하면 정보를 자동으로 채워드려요.", "Scan your residence card and we'll fill in your details automatically.")}</p>
-                </section>
-              )}
-
-              {homeState === "resume" && (
-                <button type="button" className="resume-btn resume-btn-secondary" onClick={startNewDocument}>
-                  {t("새 서류 발급하기", "Prepare a new document")}
-                </button>
-              )}
-              {homeState === "profile" && (
-                <>
-                  <button type="button" className="resume-btn resume-btn-primary" onClick={startNewDocument}>
-                    {t("새 서류 발급하기", "Prepare a new document")}
-                  </button>
-                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}>
-                    <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}
-                  </button>
-                </>
-              )}
-              {homeState === "start" && (
-                <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={resumeSession}>
-                  {sessionLoading ? t("진행 내용 확인 중…", "Checking your progress…") : t("프로필 만들기", "Create profile")}
-                </button>
-              )}
-
-              {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
-              </div>
+              <section className="resume-progress-card" aria-label={t("저장된 진행 상황", "Saved progress")}>
+                <div className="resume-progress-kicker">{t("이어하기 · 임시저장", "Continue · Saved")}</div>
+                <h2>{resumed.title}</h2>
+                <p>{resumed.stage}</p>
+                {savedDate && <time dateTime={savedProgress.updatedAt}>{t("마지막 저장", "Last saved")} · {savedDate}</time>}
+                <div className="resume-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent}><span style={{ width: `${progressPercent}%` }} /></div>
+                <button type="button" disabled={sessionLoading} onClick={resumeSession}>{sessionLoading ? t("불러오는 중…", "Loading…") : t("이어서 하기", "Continue")}</button>
+              </section>
+              <button type="button" className="resume-new-document" onClick={() => setNewDocumentConfirmOpen(true)}>{t("새 서류 발급하기", "Prepare a new document")}</button>
+              <div className="resume-reuse-note">✓ {hasProfile
+                ? t("마스터 프로필 재사용 · 촬영·프로필 생략", "Reuse master profile · Skip capture and profile")
+                : t("진행 상황이 안전하게 저장됐어요", "Your progress is saved")}</div>
+              <button type="button" onClick={openCabinetFromHome} className="resume-cabinet"><span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}</button>
               <button type="button" onClick={resetUserUiState} className="text-action resume-logout">{t("로그아웃", "Sign out")}</button>
+              {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
             </div>
           </Shell>
         );
       }
       return (
       <Shell modal={activeModal}>
-        <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px var(--page-gutter)" }}>
-          <MaiteWordmark />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
+          <BridgeMark size={104} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            <div style={{ ...mono, fontSize: 12.5, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--muted)" }}>{t("외국인을 위한 생활 서류 도우미", "Your document companion in Korea")}</div>
+            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>}
           </div>
           <div style={{ width: 34, height: 1, background: "var(--line)" }} />
           <div style={{ fontSize: 15, lineHeight: 1.55, color: "oklch(0.45 0.012 60)", textAlign: "center", maxWidth: 250 }}>
@@ -835,16 +922,53 @@ export default function App() {
           <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
             D-2 STUDENT VISA · BETA
           </div>
+          {isAuthenticated && resumed && (
+            <div className="saved-progress-note" role="status">
+              <span aria-hidden="true">↗</span>
+              <div><b>{resumed.title}</b><small>{resumed.stage}</small></div>
+            </div>
+          )}
+          {isAuthenticated && !sessionLoading && !resumed && !hasProfile && (
+            <div className="saved-progress-note" role="status">
+              <span aria-hidden="true">＋</span>
+              <div><b>{t("프로필부터 만들어 볼까요?", "Let's create your profile")}</b><small>{t("서류 사진을 등록하면 필요한 절차를 안내해 드려요.", "Upload your documents to get personalized guidance.")}</small></div>
+            </div>
+          )}
           <div style={{ width: "100%" }}>
             <PrimaryButton disabled={sessionLoading} onClick={() => {
-              setAuthMode("login");
-              go(-1);
-            }}>{t("시작하기", "Get started")}</PrimaryButton>
+              if (isAuthenticated && resumed) resumeSession();
+              else if (isAuthenticated) resumeSession();
+              else {
+                setAuthMode("login");
+                go(-1);
+              }
+            }}>{sessionLoading
+              ? t("진행 내용 확인 중…", "Checking your progress…")
+              : resumed
+                ? t("이어서 하기", "Continue")
+                : isAuthenticated && hasProfile
+                  ? t("새 서류 준비하기", "Prepare a new document")
+                  : isAuthenticated
+                    ? t("프로필 만들기", "Create profile")
+                    : t("로그인", "Sign in")}</PrimaryButton>
           </div>
-          <button type="button" onClick={() => {
-            setAuthMode("signup");
-            go(-1);
-          }} className="text-action">{t("계정이 없나요? 회원가입", "Need an account? Sign up")}</button>
+          {!isAuthenticated && (
+            <button type="button" onClick={() => {
+              setAuthMode("signup");
+              go(-1);
+            }} className="text-action">{t("계정이 없나요? 회원가입", "Need an account? Sign up")}</button>
+          )}
+          {isAuthenticated && resumed && (
+            <button type="button" onClick={() => go(1)} className="text-action">{t("언어 설정부터 다시 보기", "Choose language again")}</button>
+          )}
+          {isAuthenticated && (
+            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
+            </div>
+          )}
+          {isAuthenticated && (
+            <button type="button" onClick={resetUserUiState} className="text-action">{t("로그아웃", "Sign out")}</button>
+          )}
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
         </div>
       </Shell>
@@ -857,8 +981,13 @@ export default function App() {
     const normalizedEmail = auth.email.trim();
     const validEmail = normalizedEmail.length <= 254 && EMAIL_PATTERN.test(normalizedEmail);
     const rules = passwordChecks(auth.password, locale);
-    const passwordEligible = rules.every((rule) => rule.met);
+    const validPassword = rules.every((rule) => rule.met);
+    const loginRules = [
+      { label: t("8자 이상", "At least 8 characters"), met: auth.password.length >= 8 },
+      { label: t("영문·숫자·특수문자 포함", "Includes letters, numbers, and symbols"), met: /[A-Za-z]/.test(auth.password) && /\d/.test(auth.password) && /[^A-Za-z0-9]/.test(auth.password) },
+    ];
     const passwordMatches = Boolean(auth.passwordConfirm) && auth.password === auth.passwordConfirm;
+    const passwordEligible = signup ? validPassword : loginRules.every((rule) => rule.met);
     const canSubmit = validEmail && passwordEligible && (signup ? passwordMatches : true);
     const clearAuthError = () => {
       if (authMessageType !== "error") return;
@@ -931,26 +1060,34 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} right={<LangToggle locale={locale} onChange={changeLocale} />} />
+        <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} />
         <div style={{ padding: "18px 26px 12px" }}>
-          <MaiteWordmark compact />
-          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("MAITE를 시작해요", "Create your MAITE profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
+          <BridgeMark size={56} />
+          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("시작해 볼까요?", "Let's get started") : t("반가워요!", "Welcome!")}</h2>
           <p style={SUB}>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
         </div>
         <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
           {authMessageType === "error" && authMessage && <div role="alert" className="auth-notice error">{authMessage}</div>}
-          <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} valid={validEmail} />
+          <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} />
           {auth.email && !validEmail && <FieldHint tone="error">{t("영문 이메일 형식으로 입력해 주세요. (예: name@example.com)", "Enter a valid email address, such as name@example.com.")}</FieldHint>}
-          {validEmail && <div className="auth-inline-hint">✓ {t("@ 포함 이메일 형식", "Valid email format")}</div>}
-          <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={signup && Boolean(auth.password) && !passwordEligible} valid={!signup && Boolean(auth.password) && passwordEligible} />
+          <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={signup && Boolean(auth.password) && !validPassword} />
           {!signup && authMessageType === "success" && authMessage && <div role="status" className="auth-notice success">{authMessage}</div>}
-          <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
-            <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
-          </div>
+          {!signup && (
+            <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+              <div>{loginRules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
+            </div>
+          )}
+          {signup && (
+            <div className="password-guide" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+              <strong>{t("비밀번호 조건", "Password requirements")}</strong>
+              <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "•"} {rule.label}</span>)}</div>
+            </div>
+          )}
           {signup && (
             <>
-              <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} valid={passwordMatches} indicator={t("일치", "Match")} />
+              <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} />
               {auth.passwordConfirm && !passwordMatches && <FieldHint tone="error">{t("입력한 비밀번호가 서로 일치하지 않아요.", "The passwords do not match.")}</FieldHint>}
+              {passwordMatches && <FieldHint tone="success">{t("비밀번호가 일치해요.", "The passwords match.")}</FieldHint>}
               <div className="visa-choice-group" role="group" aria-label={t("체류자격", "Visa status")}>
                 <b>{t("체류자격(비자)", "Visa status")}</b>
                 <button type="button" className="visa-choice selected" aria-pressed="true">
@@ -969,7 +1106,7 @@ export default function App() {
             </>
           )}
         </form>
-        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 26, paddingRight: 26 }}>
+        <div style={{ padding: "12px 26px 34px" }}>
           <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? t("처리 중…", "Processing…") : signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")}</PrimaryButton>
           <button type="button" onClick={switchAuthMode}
             style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
@@ -985,17 +1122,17 @@ export default function App() {
     return (
       <Shell modal={activeModal}>
         {isAuthenticated && <TopBar title={t("설정", "Settings")} onBack={() => back(0)} right={<ExitButton onClick={() => go(0)} locale={locale} />} />}
-        <div className="scroll" style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 28, padding: "0 26px" }}>
-          <div>
-            <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
-            <p style={SUB}>{t("앱을 열면 가장 먼저 나와요. 나중에 바꿀 수 있어요.", "It's the first thing you see when you open the app. You can change it later.")}</p>
-          </div>
+        <div style={{ padding: isAuthenticated ? "14px 26px 18px" : "52px 26px 18px" }}>
+          <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
+          <p style={SUB}>{t("안내와 서류 설명에 사용할 언어예요. 나중에 다시 바꿀 수 있어요.", "We will use it for guidance and document explanations. You can change it later.")}</p>
+        </div>
+        <div className="scroll" style={{ padding: "0 26px 20px" }}>
           <div className="language-list">
-            <LanguageChoice title="한국어" subtitle="Korean" selected={lang === "ko"} onClick={() => setLang("ko")} />
-            <LanguageChoice title="English" subtitle="영어" selected={lang === "en"} onClick={() => setLang("en")} />
+            <LanguageChoice code="KO" title="한국어" subtitle="Korean" selected={lang === "ko"} onClick={() => setLang("ko")} />
+            <LanguageChoice code="EN" title="English" subtitle="영어" selected={lang === "en"} onClick={() => setLang("en")} />
           </div>
         </div>
-        <div className="bottom-cta" style={{ paddingTop: 8, paddingLeft: 26, paddingRight: 26 }}>
+        <div style={{ padding: "8px 26px 34px" }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{toast}</div>}
           <PrimaryButton disabled={sessionLoading} onClick={() => go(0)}>
             {t("계속", "Continue")}
@@ -1012,7 +1149,7 @@ export default function App() {
       setCaptureLoading(true);
       try {
         const page = scanPages[scan];
-        const data = await uploadAndExtract(png, page.docType, locale);
+        const data = await uploadAndExtract(png, page.docType, sessionId, locale);
         const next = { ...shots, [page.key]: png };
         const nextSkipped = { ...skippedShots };
         const nextCompletedScans = [...new Set([...completedScans, page.key])];
@@ -1025,10 +1162,10 @@ export default function App() {
         setProfileDraft(Object.fromEntries((data.fields || []).map((field) => [field.key, field.value])));
         setDirtyFields({});
         setProfileErrors({});
-        const empty = scanPages.findIndex((page) => !next[page.key] && !nextSkipped[page.key]);
-        if (empty === -1) {
-          go((data.fields || []).length > 0 ? 3 : 4);
-        } else setScan(empty);
+        // Upload order is entirely up to the user. Move focus to another empty
+        // tab as a hint only; never leave capture until they press Complete.
+        const empty = scanPages.findIndex((candidate) => !next[candidate.key] && !nextSkipped[candidate.key]);
+        if (empty >= 0) setScan(empty);
       } catch (error) {
         if (!handleAuthError(error)) showCaptureError(error);
       } finally {
@@ -1078,13 +1215,28 @@ export default function App() {
       }
       go(3);
     };
+    const continueWithoutDocuments = () => {
+      if (captureLoading || cameraStarting) return;
+      stopCamera();
+      setCaptureError(null);
+      setSkippedShots(Object.fromEntries(scanPages.map((page) => [page.key, true])));
+      setCompletedScans(scanPages.map((page) => page.key));
+      go(4);
+    };
+    const completeCapture = () => {
+      if (captureLoading || cameraStarting) return;
+      stopCamera();
+      setCaptureError(null);
+      go((extract?.fields || []).length > 0 ? 3 : 4);
+    };
     const currentShot = shots[scanPages[scan].key];
+    const hasAnyShot = Object.keys(shots).length > 0;
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
+        <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
         <Rail active={1} locale={locale} />
         <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+          <h2 style={H2}>{t("필요한 서류만 촬영하세요", "Capture only the documents you have")}</h2>
         </div>
         <div style={{ padding: "0 24px 14px", display: "flex", gap: 8 }}>
           {scanPages.map((p, i) => {
@@ -1128,15 +1280,15 @@ export default function App() {
             setCaptureError(null);
             window.setTimeout(() => fileInputRef.current?.click(), 0);
           }} />
-        <div style={{ padding: "12px 24px 16px", display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ padding: "12px 24px var(--safe-bottom)", display: "flex", gap: 8, alignItems: "center" }}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
           <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
           <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="file-attach compact tap">
             {t("파일 첨부", "File upload")}
           </button>
-          <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="file-attach compact tap">
-            {t("건너뛰기", "Skip")}
+          <button type="button" disabled={captureLoading || cameraStarting} onClick={hasAnyShot ? completeCapture : continueWithoutDocuments} className="file-attach compact tap">
+            {hasAnyShot ? t("촬영 완료", "Complete") : t("AI 상담하기", "AI chat")}
           </button>
         </div>
       </Shell>
@@ -1174,9 +1326,8 @@ export default function App() {
           agentResponse: response,
         }));
         setDirtyFields({});
-        // 다음 UI 가 질문이면 상담 화면, 그 밖이면 목표 선택(8)으로 간다.
-        // 흐름도 개선안: 할 일보다 "사용자가 어떤 서류를 원하는지"가 먼저다.
-        go(readUi(response).type === "question" ? 4 : 8);
+        // 프로필 확인만으로 특정 신청을 시작하지 않는다.
+        go(4);
       } catch (error) {
         if (handleAuthError(error)) return;
         if (error?.status === 422 && error?.code === "validation_failed") {
@@ -1195,7 +1346,7 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
+        <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
         <Rail active={2} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
           <h2 style={H2}>{t("카드에서 만든 프로필", "Profile from your documents")}</h2>
@@ -1210,7 +1361,7 @@ export default function App() {
           ))}
           {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
         </div>
-        <div className="bottom-cta" style={{ paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{t("수정 불가 항목은 마스킹된 값으로 전송되지 않아요.", "Read-only masked values are not submitted.")}</div>
           <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
             {profileSubmitting ? t("확인 중…", "Checking…") : t("확인하고 계속", "Confirm and continue")}
@@ -1226,7 +1377,7 @@ export default function App() {
       const editAnswers = () => setVerdict(null);
       return (
         <Shell modal={activeModal}>
-          <TopBar title="MAITE AI" onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
+          <TopBar title={t("AI 상담", "AI consultation")} onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
           <Rail active={3} locale={locale} />
           <div className="scroll review-scroll">
             <section className="review-hero">
@@ -1260,36 +1411,58 @@ export default function App() {
       );
     }
 
-    const THINKING_LABELS = [
-      t("의도 파악 중…", "Understanding your question…"),
-      t("프로필 확인 중…", "Checking your profile…"),
-      t("규정 검토 중…", "Reviewing regulations…"),
-      t("응답 생성 중…", "Generating response…"),
-    ];
-
     const question = ui.type === "question" ? ui.payload : null;
+    const actionOffer = ui.type === "action_offer" ? ui.payload : null;
     const options = question ? questionOptions(question) : [];
+
+    const openOfferedAction = async () => {
+      if (chatLoading || !actionOffer?.action_id) return;
+      setChatLoading(true);
+      setToast("");
+      try {
+        const response = applyAgent(await startAction(sessionId, actionOffer.action_id, locale));
+        const nextUi = readUi(response);
+        if (nextUi.type === "document_route") {
+          setPreviewActionId(nextUi.payload?.action_id || actionOffer.action_id);
+          go(7);
+        } else if (nextUi.type === "doc_preview" || nextUi.type === "approval" || nextUi.type === "task_complete") {
+          setPreviewActionId(actionOffer.action_id);
+          go(nextUi.type === "task_complete" ? 5 : 7);
+        }
+      } catch (error) {
+        if (!handleAuthError(error)) setToast(localizedError(error, locale, "기능을 열지 못했어요.", "Could not open this feature."));
+      } finally {
+        setChatLoading(false);
+      }
+    };
 
     const answer = async (value) => {
       if (chatLoading || !value) return;
+      const displayValue = options.find((option) => option.value === value)?.label || value;
       setChatLoading(true);
       setToast("");
       setTypingText(null);
-      setMessages((current) => [...current, { from: "user", text: value }]);
+      // The submitted card belongs to the previous turn. Remove it before the
+      // user's answer is appended so it cannot appear below that answer while
+      // the next streamed response is still in flight.
+      setUi({ type: "none", payload: {} });
+      setMessages((current) => [...current, { from: "user", text: displayValue }]);
       setChatInput("");
 
-      let thinkIdx = 0;
-      setThinkingSteps([THINKING_LABELS[0]]);
-      const thinkTimer = setInterval(() => {
-        thinkIdx++;
-        if (thinkIdx < THINKING_LABELS.length) {
-          setThinkingSteps((prev) => [...prev, THINKING_LABELS[thinkIdx]]);
-        }
-      }, 800);
+      setThinkingSteps([]);
 
       try {
-        const response = applyAgent(await sendChat(sessionId, value, locale));
-        clearInterval(thinkTimer);
+        let response = await sendChatStream(sessionId, value, (label) => {
+          setThinkingSteps((current) => current.at(-1) === label ? current : [...current, label]);
+        }, locale);
+        if (readUi(response).type === "doc_preview") {
+          const actionId = response?.state?.pending_approval?.action_id;
+          if (actionId) response = await previewAction(actionId, sessionId, locale);
+        }
+        applyAgent(response);
+        if (question?.field === "phone_kr" && response?.state?.profile?.phone_kr) {
+          setAnswers((current) => ({ ...current, phone: "yes" }));
+        }
         setThinkingSteps([]);
 
         const reply = response?.reply || "";
@@ -1307,10 +1480,14 @@ export default function App() {
           }, 30);
         }
 
-        const next = readUi(response).type;
-        if (next !== "question" && next !== "none") go(5);
+        const nextUi = readUi(response);
+        if (nextUi.type === "document_route" && nextUi.payload?.action_id) {
+          setPreviewActionId(nextUi.payload.action_id);
+          go(7);
+        } else if (nextUi.type !== "question" && nextUi.type !== "none") {
+          go(5);
+        }
       } catch (error) {
-        clearInterval(thinkTimer);
         setThinkingSteps([]);
         if (!handleAuthError(error)) setToast(localizedError(error, locale, "메시지를 보내지 못했어요.", "Could not send the message."));
       } finally {
@@ -1320,16 +1497,26 @@ export default function App() {
 
     return (
       <Shell modal={activeModal}>
-        <TopBar title="MAITE AI" onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
+        <TopBar title={t("AI 상담", "AI consultation")} onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
         <Rail active={3} locale={locale} />
-        <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="scroll chat-scroll consultation-chat" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {messages.length === 0 && (
+            <ChatBubble avatar>
+              <strong>{t("\uc548\ub155\ud558\uc138\uc694! AI \uc0c1\ub2f4\uc774\uc5d0\uc694 \ud83d\ude4c", "Hello! I am your AI assistant \ud83d\ude4c")}</strong>
+              <span>{t("\ubb34\uc5c7\uc774 \uad81\uae08\ud55c\uc9c0 \ud3b8\ud558\uac8c \ub9d0\uc500\ud574 \uc8fc\uc138\uc694. \uc798 \ubaa8\ub974\uaca0\uc73c\uba74 \u2018\uba54\ub274 \ubcf4\uc5ec\uc918\u2019\ub77c\uace0 \ud558\uc154\ub3c4 \ub3fc\uc694.", "Ask anything. If you are unsure where to start, say 'Show me the menu.'")}</span>
+            </ChatBubble>
+          )}
           {messages.map((message, index) => {
             const isLastAgent = message.from === "agent" && (index === messages.length - 1 || messages.slice(index + 1).every((m) => m.from === "user"));
             const displayText = isLastAgent && typingText !== null ? typingText : message.text;
+            const lines = displayText ? displayText.split("\n") : [];
             return (
               <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
-                {displayText && displayText.split("\n").map((line, li) => (
-                  <span key={li}>{line}{li < displayText.split("\n").length - 1 && <br />}</span>
+                {message.from === "agent" && index === 0 && lines[0] && <strong>{lines[0]}</strong>}
+                {lines.slice(message.from === "agent" && index === 0 ? 1 : 0).map((line, li) => (
+                  /^(\uadfc\uac70|Sources?)\s*\u00b7/i.test(line)
+                    ? <CitationList key={li} line={line} locale={locale} />
+                    : <span key={li}>{line || "\u00a0"}</span>
                 ))}
               </ChatBubble>
             );
@@ -1340,6 +1527,15 @@ export default function App() {
               <QuestionCard payload={question} options={options} value={chatInput}
                 onChange={setChatInput} onSubmit={answer} disabled={chatLoading} locale={locale} />
             </ChatBubble>
+          )}
+
+          {actionOffer?.action_id && (
+            <div className="chat-action-offer">
+              <span>{t("앱에서 바로 진행할 수 있어요", "Available in the app")}</span>
+              <button type="button" disabled={chatLoading} onClick={openOfferedAction}>
+                {actionOffer.label || t("기능 열기", "Open feature")} <b aria-hidden="true">→</b>
+              </button>
+            </div>
           )}
 
           {chatLoading && thinkingSteps.length > 0 && (
@@ -1353,10 +1549,6 @@ export default function App() {
                 ))}
               </div>
             </ChatBubble>
-          )}
-
-          {!question && !chatLoading && messages.length > 0 && (
-            <button type="button" onClick={() => go(5)} className="chat-submit tap">{t("할 일 목록 보기", "View tasks")}</button>
           )}
 
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
@@ -1374,89 +1566,13 @@ export default function App() {
     );
   }
 
-  // ── 8 목표 선택 (프로필 직후 — 흐름도 개선안) ──
-  // "시스템이 정해준 할 일"보다 "사용자가 원하는 서류"를 먼저 묻는다.
-  // 선택이 startAction 으로 이어져 current_action 을 세팅하고, 잠긴 목표는
-  // 409(prerequisite_missing)를 만들지 않도록 호출 없이 할 일 목록에서 순서를 보여준다.
-  if (step === 8) {
-    const tasks = agentState?.tasks || [];
-    const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
-    const prereqLabel = (task) => (task?.blocked_by || [])
-      .map((id) => taskById[id]?.label || GOALS.find((goal) => goal.id === id)?.[locale]?.[0] || id)
-      .join(", ");
-    const chooseGoal = async (goal) => {
-      if (goalBusy) return;
-      setGoalId(goal.id);
-      if (APPLICATIONS[goal.id]) setPreviewActionId(goal.id);
-      setToast("");
-      const task = taskById[goal.id];
-      if (task && task.status === "locked") {
-        go(5); // 선행 과제부터 — 할 일 목록이 순서를 보여준다
-        return;
-      }
-      if (task && task.status === "done") {
-        go(7); // 이미 완료된 목표는 신청서 화면으로
-        return;
-      }
-      setGoalBusy(goal.id);
-      try {
-        const response = applyAgent(await startAction(sessionId, goal.id, locale));
-        go(readUi(response).type === "question" ? 4 : 5);
-      } catch (error) {
-        if (handleAuthError(error)) return;
-        if (error?.code === "prerequisite_missing") {
-          go(5);
-          return;
-        }
-        setToast(localizedError(error, locale, "목표를 시작하지 못했어요.", "Could not start this goal."));
-      } finally {
-        setGoalBusy("");
-      }
-    };
-    return (
-      <Shell modal={activeModal}>
-        <TopBar title={t("목표 선택", "Choose a goal")} onBack={() => back(3)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
-        <Rail active={3} locale={locale} />
-        <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>{t("무엇을 하려고 하세요?", "What would you like to do?")}</h2>
-          <p style={SUB}>{t("목표를 먼저 고르면 필요한 할 일과 서류만 순서대로 안내해 드려요.", "Pick a goal first and we will guide you through only the tasks and documents it needs.")}</p>
-        </div>
-        <div className="scroll" style={{ padding: "0 24px 8px" }}>
-          <div className="goal-list">
-            {GOALS.map((goal) => {
-              const task = taskById[goal.id];
-              const locked = task?.status === "locked";
-              const busy = goalBusy === goal.id;
-              const selected = goalId === goal.id;
-              return (
-                <button key={goal.id} type="button" disabled={Boolean(goalBusy) && !busy} onClick={() => chooseGoal(goal)}
-                  aria-pressed={selected} className={`goal-choice${selected ? " selected" : ""}${locked ? " locked" : ""} tap`}>
-                  <span className="goal-icon" aria-hidden="true">{goal.icon}</span>
-                  <span className="goal-copy">
-                    <b>{goal[locale][0]}</b>
-                    <small>{goal[locale][1]}</small>
-                    {locked && <small className="goal-order">{t("먼저 필요해요", "Complete first")} · {prereqLabel(task)}</small>}
-                  </span>
-                  <span className="goal-check" aria-hidden="true">{busy ? "…" : selected ? "✓" : "›"}</span>
-                </button>
-              );
-            })}
-          </div>
-          {toast && <div role="alert" className="capture-error" style={{ margin: "12px 0 0" }}>{toast}</div>}
-        </div>
-        <div className="bottom-cta" style={{ paddingTop: 10 }}>
-          <button type="button" onClick={() => go(4)} className="tap goal-undecided">
-            {t("아직 모르겠어요 — AI 상담으로 정할래요", "Not sure yet — decide with the AI counselor")}
-          </button>
-        </div>
-      </Shell>
-    );
-  }
-
   // ── 5 할 일 / 과제 선택 ──
   if (step === 5) {
     const tasks = agentState?.tasks || [];
-    const goal = GOALS.find((entry) => entry.id === goalId);
+    return <DocumentTaskFlow tasks={tasks} answers={answers} locale={locale}
+      modal={activeModal} onBack={() => back(4)} onReturnToChat={returnToChat} onOpen={(actionId) => { setPreviewActionId(actionId); go(7); }} />;
+
+    /* Legacy task list retained below until the next layout cleanup. */
     const startTask = async (task) => {
       if (taskBusy) return;
       setTaskBusy(task.id);
@@ -1475,23 +1591,13 @@ export default function App() {
     };
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("할 일", "Tasks")} onBack={() => back(8)} />
+        <TopBar title={t("할 일", "Tasks")} onBack={() => back(4)} />
         <Rail active={3} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
-          {goal && (
-            <div className="goal-banner">
-              <span aria-hidden="true">{goal.icon}</span>
-              <div>
-                <small>{t("선택한 목표", "Your goal")}</small>
-                <b>{goal[locale][0]}</b>
-              </div>
-              <button type="button" onClick={() => go(8)} className="tap">{t("변경", "Change")}</button>
-            </div>
-          )}
-          <h2 style={{ ...H2, marginTop: goal ? 14 : 0 }}>{t("지금 할 수 있는 일", "What you can do now")}</h2>
+          <h2 style={H2}>{t("지금 할 수 있는 일", "What you can do now")}</h2>
           <p style={SUB}>{t("잠긴 항목은 먼저 끝내야 하는 과제가 있어요.", "Locked tasks require another task to be completed first.")}</p>
         </div>
-        <div className="scroll task-scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
           {ui.type === "doc_preview" && ui.payload?.document_id && (
             <div style={{ ...card, display: "flex", gap: 13, borderColor: "var(--brand-2)" }}>
               <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
@@ -1505,6 +1611,21 @@ export default function App() {
               </div>
             </div>
           )}
+          {ui.type === "task_complete" && (
+            <div role="status" style={{ ...card, padding: 15, borderColor: "var(--ok)", background: "oklch(0.97 0.025 145)" }}>
+              <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--ok)" }}>
+                {t("\uc644\ub8cc", "Completed")}
+              </div>
+              <b style={{ display: "block", marginTop: 5, fontSize: 14.5 }}>
+                {ui.payload?.title || t("\ud560 \uc77c\uc744 \uc644\ub8cc\ud588\uc5b4\uc694.", "The task is complete.")}
+              </b>
+              {ui.payload?.phone_kr && (
+                <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)" }}>
+                  {t("\uad6d\ub0b4 \uc804\ud654\ubc88\ud638", "Mobile number")} · {ui.payload.phone_kr}
+                </div>
+              )}
+            </div>
+          )}
           {tasks.length === 0 && (
             <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
               {t("아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.", "No tasks yet. Continue the conversation to build your task list.")}
@@ -1514,8 +1635,9 @@ export default function App() {
             <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} locale={locale} />
           ))}
         </div>
-        <div className="bottom-cta task-footer" style={{ paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ padding: "10px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
+          <PrimaryButton onClick={returnToChat}>{t("상담으로 돌아가기", "Back to chat")}</PrimaryButton>
           {/* 화면 6~9(서류·승인·이력)로 들어가는 유일한 진입로다. */}
           <button type="button" onClick={() => go(7)} className="tap"
             style={{ width: "100%", minHeight: 46, borderRadius: 12, border: "1px solid var(--line)",
@@ -1523,10 +1645,6 @@ export default function App() {
             {t("내 신청서 · 서류함", "Applications · Documents")}
           </button>
         </div>
-        <button type="button" className="maite-chat-fab tap" onClick={() => go(4)} aria-label={t("MAITE AI 상담으로 돌아가기", "Return to MAITE AI chat")}>
-          <MaiteAvatar size={36} />
-          <span><small>MAITE AI</small>{t("상담으로 돌아가기", "Back to chat")}</span>
-        </button>
       </Shell>
     );
   }
@@ -1559,63 +1677,72 @@ export default function App() {
             <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{action.note}</div>
           </div>
         </div>
-        <div className="bottom-cta">
+        <div style={{ padding: "16px 24px 34px" }}>
           <PrimaryButton onClick={() => go(7)}>{t("내 신청서", "My applications")}</PrimaryButton>
         </div>
       </Shell>
     );
   }
 
-  // ── 7 신청서 ──
+  // ── 7 신청서 만들기 ──
   if (step === 7) {
     const taskApplicationIds = (agentState?.tasks || [])
       .map((task) => task.id)
       .filter((id) => APPLICATIONS[id]);
-    const applicationIds = taskApplicationIds.length > 0
-      ? [...new Set(taskApplicationIds)]
-      : ["alien_registration", "open_bank_account"];
+    const applicationIds = [...new Set(taskApplicationIds.length > 0 ? taskApplicationIds : [previewActionId])];
     if (!applicationIds.includes(previewActionId)) applicationIds.push(previewActionId);
     const selectedApplication = APPLICATIONS[previewActionId] || APPLICATIONS.open_bank_account;
+    const goal = APPLICATION_GOALS[previewActionId] || APPLICATION_GOALS.open_bank_account;
+    return <DocumentApplicationBuilder locale={locale} modal={activeModal} application={selectedApplication}
+      goal={goal} documents={documents} loading={previewLoading} error={previewError}
+      onBack={() => back(5)} onCreate={openPdfPreview} onOpenDocument={openStoredDocument} />;
+
+    /* Legacy builder retained below until the next layout cleanup. */
+    const alternatives = applicationIds.filter((actionId) => actionId !== previewActionId);
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("내 신청서", "My applications")} onBack={() => back(verdict ? 6 : 5)} />
-        <div style={{ padding: "4px 24px 16px" }}>
-          <Rail active={4} locale={locale} />
-          <h2 style={H2}>{t(`채워진 신청서 ${documents.length}종`, `${documents.length} completed application(s)`)}</h2>
-          <p style={SUB}>{t("인쇄하거나 창구에서 휴대폰으로 보여주세요.", "Print them or show them on your phone at the counter.")}</p>
+        <TopBar title={t("신청서 만들기", "Create application")} onBack={() => back(verdict ? 6 : 5)} />
+        <Rail active={4} locale={locale} />
+        <div style={{ padding: "4px 24px 14px" }}>
+          <h2 style={H2}>{t(`${selectedApplication.ko}를 만들게요`, `Let's create your ${selectedApplication.en.toLowerCase()}`)}</h2>
+          <p style={SUB}>{t("목표 선택에서 고른 서류예요. 다시 고를 필요 없어요.", "This is the document you chose with your goal. No need to pick again.")}</p>
         </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ ...card, padding: 13 }}>
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 9 }}>{t("생성할 신청서", "Application to generate")}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {applicationIds.map((actionId) => {
-                const application = APPLICATIONS[actionId];
-                const selected = previewActionId === actionId;
-                return (
-                  <button key={actionId} type="button" onClick={() => setPreviewActionId(actionId)} className="tap"
-                    aria-pressed={selected}
-                    style={{ minHeight: 42, padding: "9px 11px", borderRadius: 10,
-                      border: selected ? "1.5px solid var(--brand)" : "1px solid var(--line)",
-                      background: selected ? "oklch(0.55 0.14 250 / 0.07)" : "#fff",
-                      color: selected ? "var(--brand)" : "oklch(0.25 0.012 60)", textAlign: "left", fontWeight: 700 }}>
-                    {application[locale]}
-                  </button>
-                );
-              })}
+        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 11 }}>
+          <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--muted)" }}>
+            {t("만들 서류 · 목표에서 확정", "Document · confirmed by goal")}
+          </div>
+          <div style={{ ...card, padding: 15, borderWidth: 1.5, borderColor: "var(--brand-2)", background: "oklch(0.72 0.13 45 / 0.06)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+              <b style={{ fontSize: 15.5 }}>{selectedApplication[locale]}</b>
+              <span style={{ ...mono, fontSize: 10, fontWeight: 800, color: "var(--brand-2)", whiteSpace: "nowrap" }}>· {t("확정됨", "Confirmed")}</span>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{goal[locale]}</div>
+          </div>
+          <div style={{ ...card, padding: 13, background: "oklch(0.95 0.006 60)", display: "flex", gap: 9 }}>
+            <span aria-hidden="true" style={{ color: "var(--ok)", fontWeight: 800, fontSize: 12.5 }}>✓</span>
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: "oklch(0.4 0.012 60)" }}>
+              {t("필요한 정보 확인됨 — 부족하면 챗봇이 물어봐요.", "Required information checked — the chatbot asks if anything is missing.")}
             </div>
           </div>
-          {documents.length === 0 && (
-            <div style={{ ...card, display: "flex", gap: 13 }}>
-              <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
-              <div style={{ flex: 1 }}>
-                <b style={{ fontSize: 14.5 }}>{selectedApplication[locale]}</b>
-                <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>{t("미리보기를 누르면 AI가 신청서를 생성합니다.", "Select preview to generate the application.")}</div>
+          {alternatives.length > 0 && (
+            <details>
+              <summary style={{ fontSize: 11.5, color: "var(--brand-2)", fontWeight: 700, cursor: "pointer" }}>
+                {t("다른 서류 만들기", "Create a different document")}
+              </summary>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 7 }}>
+                {alternatives.map((actionId) => (
+                  <button key={actionId} type="button" onClick={() => setPreviewActionId(actionId)} className="tap"
+                    style={{ minHeight: 42, padding: "9px 11px", borderRadius: 10, border: "1px solid var(--line)",
+                      background: "#fff", color: "oklch(0.25 0.012 60)", textAlign: "left", fontWeight: 700 }}>
+                    {APPLICATIONS[actionId][locale]}
+                  </button>
+                ))}
               </div>
-            </div>
+            </details>
           )}
           {documents.map((d) => (
             <div key={d.id} style={{ ...card, display: "flex", gap: 13 }}>
-              <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
+              <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 14.5 }}>{d.title}</b>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{formatDate(d.created_at, locale)}</div>
@@ -1624,22 +1751,28 @@ export default function App() {
             </div>
           ))}
         </div>
-        <div className="bottom-cta">
+        <div style={{ padding: "16px 24px 34px" }}>
           {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
           <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
-            {previewLoading ? t("PDF 생성 중…", "Generating PDF…") : t(`${selectedApplication.ko} 미리보기`, `Preview ${selectedApplication.en}`)}
+            {previewLoading ? t("신청서 만드는 중…", "Creating application…") : t("신청서 만들기", "Create application")}
           </PrimaryButton>
-          <button type="button" onClick={() => { setCabinetBackStep(7); go(9); }} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{t("내 서류함 · 실행 이력", "Documents · History")}</button>
+          <button type="button" onClick={() => { setCabinetBackStep(7); go(9); }} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{t("내 서류함 · 발급 이력", "Documents · Issuance history")}</button>
         </div>
       </Shell>
     );
   }
-
-  // ── 9 내 서류함 / 실행 이력 ──
+  // ── 9 내 서류함 / 발급 이력 ──
   if (step === 9)
+    return <DocumentCabinet locale={locale} modal={activeModal} documents={documents} ledger={ledger}
+      loading={ledgerLoading} error={ledgerError} onBack={() => back(cabinetBackStep)}
+      tasks={agentState?.tasks || []} sessionDrafts={sessionDrafts} currentSessionId={sessionId}
+      onPreview={openStoredDocument} onDownload={downloadPdf} onStartChat={returnToChat}
+      onOpenTask={openSavedWork} />;
+
+  if (false && step === 9)
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("내 서류함 · 실행 이력", "Documents · History")} onBack={() => back(cabinetBackStep)} />
+        <TopBar title={t("내 서류함 · 발급 이력", "Documents · Issuance history")} onBack={() => back(cabinetBackStep)} />
         <div className="scroll" style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
           <section>
             <h2 style={{ ...H2, fontSize: 20 }}>{t("저장 문서", "Saved documents")}</h2>
@@ -1658,14 +1791,14 @@ export default function App() {
             </div>
           </section>
           <section>
-            <h2 style={{ ...H2, fontSize: 20 }}>{t("실행 이력", "Action history")}</h2>
+            <h2 style={{ ...H2, fontSize: 20 }}>{t("발급 이력", "Issuance history")}</h2>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
               {ledgerLoading && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("불러오는 중…", "Loading…")}</div>}
               {ledgerError && <div role="alert" className="capture-error" style={{ margin: 0 }}>{ledgerError}</div>}
-              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("아직 승인 후 실행된 작업이 없습니다.", "No approved actions yet.")}</div>}
+              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("아직 발급한 서류가 없어요.", "No issued documents yet.")}</div>}
               {ledger.map((entry, index) => (
                 <div key={`${entry.action || "action"}-${entry.approved_at || index}`} style={card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || t("실행 작업", "Action")}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || t("발급 서류", "Issued document")}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
                   <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at, locale)}</div>
                   {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>{t("근거", "Evidence")} · {item}</div>)}
                 </div>
@@ -1678,27 +1811,51 @@ export default function App() {
     );
 
   // ── PDF 뷰어 ──
-  if (step === 10 && preview && previewBlobUrl)
+  if (step === 10 && preview && previewBlobUrl) {
+    const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
+    const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
+    const dotStyle = (activeDot) => ({ width: 6, height: 6, borderRadius: 99, border: 0, padding: 0,
+      background: activeDot ? "var(--brand-2)" : "oklch(0.55 0.01 60)" });
+    const arrowStyle = { border: 0, background: "transparent", color: "oklch(0.78 0.01 60)", fontSize: 15, padding: "0 4px", lineHeight: 1 };
     return (
       <Shell modal={activeModal} dark>
-        <TopBar title={preview.title} onBack={() => back(9)} />
+        <TopBar title={preview.title} onBack={() => back(7)} />
         {(preview.warnings || []).length > 0 && (
           <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
             {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
           </div>
         )}
-        <div className="scroll" style={{ padding: "0 20px 20px" }}>
-          <iframe title={preview.title} src={previewBlobUrl} style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
+        <div className="scroll" style={{ padding: "0 20px 12px" }}>
+          <iframe title={preview.title} src={pageCount ? `${previewBlobUrl}#page=${page}` : previewBlobUrl}
+            style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
         </div>
-        <div className="bottom-cta" style={{ paddingLeft: 20, paddingRight: 20, display: "flex", gap: 9 }}>
-          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>{t("PDF 다운로드", "Download PDF")}</button>
+        {pageCount > 1 && (
+          <div style={{ padding: "0 20px 4px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button type="button" className="tap" style={arrowStyle} aria-label="Previous page"
+                disabled={page <= 1} onClick={() => setPdfPage(page - 1)}>‹</button>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                {Array.from({ length: pageCount }, (_, i) => (
+                  <button key={i} type="button" aria-label={`Page ${i + 1}`} aria-current={page === i + 1}
+                    className="tap" style={dotStyle(page === i + 1)} onClick={() => setPdfPage(i + 1)} />
+                ))}
+              </div>
+              <button type="button" className="tap" style={arrowStyle} aria-label="Next page"
+                disabled={page >= pageCount} onClick={() => setPdfPage(page + 1)}>›</button>
+            </div>
+            <div style={{ ...mono, fontSize: 11, color: "oklch(0.78 0.01 60)" }}>{page} / {pageCount}</div>
+          </div>
+        )}
+        <div style={{ padding: "12px 20px 34px", display: "flex", gap: 9 }}>
+          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, fontSize: 13 }}>{t("PDF 다운로드", "Download PDF")}</button>
+          {approval && <button type="button" onClick={() => setApprovalVisible(true)} className="tap" style={{ ...smallActionStyle, minHeight: 52, border: 0, fontSize: 14, color: "#fff", background: "var(--brand-2)" }}>{t("발급하기", "Issue")}</button>}
         </div>
       </Shell>
     );
-
+  }
   return (
     <Shell modal={activeModal}>
-      <TopBar title="MAITE" onBack={() => back(0)} />
+      <TopBar title={t("다시 연결", "Reconnect")} onBack={() => back(0)} />
       <div style={{ padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
         <h2 style={H2}>{t("화면을 다시 연결할게요", "Let's reconnect your screen")}</h2>
         <p style={SUB}>{t("진행 내용은 임시 저장되어 있어요. 이어하기를 눌러 안전하게 돌아가세요.", "Your progress is saved temporarily. Continue to return safely.")}</p>
@@ -1711,15 +1868,97 @@ export default function App() {
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
+function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToChat, onOpen }) {
+  const pick = (ko, en) => locale === "en" ? en : ko;
+  const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
+  const steps = [
+    { actionId: "alien_registration", title: pick("\ud1b5\ud569\uc2e0\uccad\uc11c", "Integrated application"), description: pick("\uc678\uad6d\uc778\ub4f1\ub85d \u2014 \uacc4\uc88c \uac1c\uc124\uc758 \uc120\ud589 \uc11c\ub958", "Alien registration \u2014 required before opening an account") },
+    { actionId: "open_bank_account", title: pick("\uacc4\uc88c\uac1c\uc124\uc2e0\uccad\uc11c", "Bank account application"), description: pick("\ucd5c\uc885 \ubaa9\ud45c \u2014 \uc740\ud589 \uc601\uc5c5\uc810 \uc81c\ucd9c\uc6a9", "Final goal \u2014 for submission at a bank branch") },
+  ];
+  return <Shell modal={modal}>
+    <TopBar title={pick("\ud560 \uc77c", "Tasks")} onBack={onBack} />
+    <Rail active={3} locale={locale} />
+    <div className="document-flow-head"><h2>{pick("\uacc4\uc88c \uac1c\uc124\uae4c\uc9c0 \uc11c\ub958 2\uac1c", "Two documents to open your account")}</h2><p>{pick("\uacc4\uc88c\ub97c \ub9cc\ub4e4\ub824\uba74 \uba3c\uc800 \uc678\uad6d\uc778\ub4f1\ub85d\uc774 \ub418\uc5b4 \uc788\uc5b4\uc57c \ud574\uc694. \uadf8\ub798\uc11c \ub450 \uc11c\ub958\ub97c \uc21c\uc11c\ub300\ub85c \ub9cc\ub4e4\uc5b4 \ub4dc\ub824\uc694.", "You need alien registration first. We will prepare both documents in order.")}</p></div>
+    <div className="scroll document-flow-list">
+      {steps.map((item, index) => { const status = taskById[item.actionId]?.status; const done = status === "done"; const active = status === "in_progress" || status === "available"; return <React.Fragment key={item.actionId}>
+        {index > 0 && <div className="document-flow-arrow">{"\u2193"}</div>}
+        <section className={`document-flow-card${active ? " active" : ""}`}><div className="document-flow-row"><span className="document-flow-number">{index + 1}</span><div><b>{item.title}</b><p>{item.description}</p></div><em>{done ? pick("\uc644\ub8cc", "Done") : status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div>{active && <button type="button" onClick={() => onOpen(item.actionId)}>{status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}{item.actionId === "open_bank_account" && <div className="document-card-requirements"><div className="document-ready-label">{pick("\uc0c1\ub2f4\uc5d0\uc11c \ud655\uc778\ud55c \uc900\ube44\ubb3c", "Items confirmed in chat")}</div><div className="document-ready-chips"><span className={answers.phone === "yes" ? "ready" : ""}>{answers.phone === "yes" ? "\u2713 " : ""}{pick("\ud734\ub300\ud3f0", "Mobile phone")}</span><span className={answers.cert === "yes" ? "ready" : ""}>{answers.cert === "yes" ? "\u2713 " : ""}{pick("\uc7ac\ud559\uc99d\uba85\uc11c", "Enrollment certificate")}</span></div></div>}</section>
+      </React.Fragment>; })}
+    </div>
+    <button type="button" className="task-chat-fab tap" onClick={onReturnToChat}
+      aria-label={pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}>
+      <span><b>{pick("AI \uc0c1\ub2f4", "AI chat")}</b><small>{pick("\uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to chat")}</small></span>
+      <img src="/assets/ma1te-mascot.svg" alt="" />
+    </button>
+  </Shell>;
+}
+
+function DocumentApplicationBuilder({ locale, modal, application, goal, documents, loading, error, onBack, onCreate, onOpenDocument }) {
+  const pick = (ko, en) => locale === "en" ? en : ko;
+  return <Shell modal={modal}>
+    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} /><Rail active={4} locale={locale} />
+    <div className="builder-head"><h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2><p>{pick("\uc800\uc7a5\ub41c \ud504\ub85c\ud544\ub85c \uc790\ub3d9 \uc791\uc131\ud574\uc694. \ub9cc\ub4e4\uae30\ub97c \ub204\ub974\uba74 \ubbf8\ub9ac\ubcf4\uae30\uac00 \ub098\uc640\uc694.", "We fill it automatically from your saved profile. Create it to see a preview.")}</p></div>
+    <div className="scroll builder-content"><section className="builder-selection"><div><b>{application[locale]}</b><span>✓ {pick("\ud655\uc815\ub428", "Confirmed")}</span></div><p>{goal[locale]}</p></section>{loading ? <DocumentWritingProgress locale={locale} title={application[locale]} /> : <div className="document-paper-preview"><i /><i /><i /><i /><i /><div /></div>}{documents.filter((doc) => doc.title === application[locale]).map((doc) => <button key={doc.id} type="button" className="stored-document-link" onClick={() => onOpenDocument(doc)}>{pick("\uc800\uc7a5\ub41c PDF \ubcf4\uae30", "View saved PDF")}</button>)}</div>
+    <div className="builder-actions">{error && <div role="alert" className="capture-error">{error}</div>}<button type="button" disabled={loading} onClick={onCreate}>{loading ? pick("\uc2e0\uccad\uc11c \ub9cc\ub4dc\ub294 \uc911\u2026", "Creating application\u2026") : pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")}</button></div>
+  </Shell>;
+}
+
+function DocumentCabinet({ locale, modal, documents, ledger, loading, error, tasks = [], sessionDrafts = [], currentSessionId, onBack, onPreview, onDownload, onStartChat, onOpenTask }) {
+  const pick = (ko, en) => locale === "en" ? en : ko;
+  const draftSources = [{ sessionId: currentSessionId, tasks }, ...sessionDrafts
+    .filter((draft) => draft.sessionId !== currentSessionId)];
+  const seenWorks = new Set();
+  const pendingWorks = draftSources.flatMap((draft) => (draft.tasks || []).map((task) => ({
+    ...task, sessionId: draft.sessionId,
+  }))).filter((task) => {
+    const key = `${task.sessionId}:${task.id}`;
+    if (!APPLICATIONS[task.id] || seenWorks.has(key)) return false;
+    seenWorks.add(key);
+    const hasDocument = documents.some((document) => document.action_id === task.id
+      && (!document.session_id || document.session_id === task.sessionId));
+    return !hasDocument && ["in_progress", "available", "locked"].includes(task.status);
+  });
+  return <Shell modal={modal}><TopBar title={pick("\ub0b4 \uc11c\ub958\ud568 \u00b7 \ubc1c\uae09 \uc774\ub825", "Documents \u00b7 Issuance history")} onBack={onBack} /><div className="scroll cabinet-content">
+    <section><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")} <small>{documents.length + pendingWorks.length}</small></h2>{documents.length === 0 && pendingWorks.length === 0 ? <div className="cabinet-zero"><img src="/assets/ma1te-mascot.svg" alt="" /><h3>{pick("\uc544\uc9c1 \uc800\uc7a5\ub41c \uc11c\ub958\uac00 \uc5c6\uc5b4\uc694", "No saved documents yet")}</h3><p>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \ud544\uc694\ud55c \uc11c\ub958\ub97c \ud655\uc778\ud558\uace0 \uc2e0\uccad\uc11c\ub97c \ub9cc\ub4e4\uc5b4 \ubcf4\uc138\uc694.", "Ask the AI what you need and create your first application.")}</p><button type="button" onClick={onStartChat}>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \uc2dc\uc791\ud558\uae30", "Start in AI chat")}</button></div> : <div className="cabinet-list saved-work-list">{pendingWorks.map((task, index) => <article key={`${task.sessionId}-${task.id}`}><div><span>{index + 1}</span><b>{APPLICATIONS[task.id][locale]}</b><em className={`work-status ${task.status}`}>{task.status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : task.status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div><p>{task.note || task.agency}</p>{task.status !== "locked" && <button type="button" className="saved-work-action" onClick={() => onOpenTask(task.sessionId, task.id)}>{task.status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}</article>)}{documents.map((doc, index) => <article key={doc.id}><div><span>{pendingWorks.length + index + 1}</span><b>{doc.title}</b><em className={`work-status ${doc.status === "issued" ? "issued" : "done"}`}>{doc.status === "issued" ? pick("\ubc1c\uae09 \uc644\ub8cc", "Issued") : pick("\uc791\uc131 \uc644\ub8cc", "Completed")}</em></div><p>{formatDate(doc.created_at, locale)}</p><div className="cabinet-buttons"><button type="button" onClick={() => onPreview(doc)}>{pick("\ubbf8\ub9ac\ubcf4\uae30", "Preview")}</button><button type="button" onClick={() => onDownload(doc)}>PDF {pick("\ub2e4\uc6b4\ub85c\ub4dc", "Download")}</button></div></article>)}</div>}</section>
+    <section><h2>{pick("\ubc1c\uae09 \ubb38\uc11c \u00b7 \uc774\ub825", "Issued documents \u00b7 History")}</h2>{loading && <div className="cabinet-empty">{pick("\ubd88\ub7ec\uc624\ub294 \uc911\u2026", "Loading\u2026")}</div>}{error && <div className="capture-error">{error}</div>}{!loading && !error && ledger.length === 0 ? <div className="history-zero"><span aria-hidden="true">✓</span><div><b>{pick("\uc544\uc9c1 \ubc1c\uae09\ud55c \ubb38\uc11c\uac00 \uc5c6\uc5b4\uc694", "No issued documents yet")}</b><p>{pick("\ubbf8\ub9ac\ubcf4\uae30 \ud6c4 \ucd5c\uc885 \ubc1c\uae09\uae4c\uc9c0 \uc2b9\uc778\ud55c \ubb38\uc11c\ub9cc \uc5ec\uae30\uc5d0 \ub0a8\uc544\uc694.", "Only documents you finally approve for issuance appear here.")}</p></div></div> : <div className="cabinet-list history-list">{ledger.map((entry, index) => <article key={`${entry.document_id || entry.action}-${entry.approved_at || index}`}><b>{entry.action || pick("\uc2e0\uccad\uc11c \ubc1c\uae09", "Application issued")}</b><p>{formatDate(entry.approved_at, locale)}</p><small>{pick("\ucd5c\uc885 \ubc1c\uae09 \uc644\ub8cc", "Issuance completed")}</small></article>)}</div>}</section>
+  </div></Shell>;
+}
+
+function DocumentWritingProgress({ locale = "ko", title }) {
+  const en = locale === "en";
+  const [phase, setPhase] = useState(0);
+  const phases = en
+    ? ["Checking your profile", "Filling the required fields", "Preparing the PDF preview"]
+    : ["마스터 프로필을 확인하고 있어요", "신청서 항목을 채우고 있어요", "PDF 미리보기를 준비하고 있어요"];
+  useEffect(() => {
+    const interval = window.setInterval(() => setPhase((current) => (current + 1) % phases.length), 1400);
+    return () => window.clearInterval(interval);
+  }, [phases.length]);
+  return <div className="document-writing-progress" role="status" aria-live="polite">
+    <div className="writing-paper" aria-hidden="true"><i /><i /><i /><i /><span /></div>
+    <b>{en ? `Creating ${title}` : `${title} 작성 중`}</b>
+    <p key={phase}>{phases[phase]}<i aria-hidden="true">...</i></p>
+    <small>{en ? "Please keep this screen open for a moment." : "잠시만 기다려 주세요. 완성되면 바로 미리보기를 열어드려요."}</small>
+  </div>;
+}
+
 function Shell({ children, dark, modal }) {
   return (
-    <div className="app-shell device-preview">
-      <div className="phone app-screen" style={dark ? { background: "oklch(0.22 0.012 60)" } : undefined}>{children}{modal}</div>
+    <div className="app-shell">
+      <div className={`phone${dark ? " dark" : ""}`}>{children}{modal}</div>
     </div>
   );
 }
 function Label({ children }) {
   return <div style={{ padding: "6px 0", ...mono, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)" }}>{children}</div>;
+}
+function CitationList({ line, locale }) {
+  const sourceText = line.replace(/^(\uadfc\uac70|Sources?)\s*\u00b7\s*/i, "");
+  const sources = sourceText.split(" / ").map((source) => source.trim()).filter(Boolean);
+  return <aside className="chat-citations" aria-label={locale === "en" ? "Sources" : "근거 자료"}>
+    <b><span aria-hidden="true">§</span>{locale === "en" ? "Sources" : "확인한 근거"}</b>
+    <ul>{sources.map((source, index) => <li key={`${source}-${index}`}>{source}</li>)}</ul>
+  </aside>;
 }
 function ImagePreview({ file, alt }) {
   const [url, setUrl] = useState("");
@@ -1754,15 +1993,12 @@ function CaptureProgress({ locale = "ko" }) {
     </div>
   );
 }
-function AuthInput({ label, type = "text", value, onChange, placeholder, valid, indicator = "✓", ...inputProps }) {
+function AuthInput({ label, type = "text", value, onChange, placeholder, ...inputProps }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
       <span style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</span>
-      <span style={{ position: "relative", display: "block" }}>
-        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
-          style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: valid ? "0 46px 0 15px" : "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
-        {valid && <span className="auth-input-indicator" aria-hidden="true">{indicator}</span>}
-      </span>
+      <input className="auth-input" type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
+        style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
     </label>
   );
 }
@@ -1772,7 +2008,7 @@ function FieldHint({ children, tone = "info" }) {
 function ChatBubble({ children, mine, avatar, wide }) {
   return (
     <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}`}>
-      {avatar && <MaiteAvatar size={34} />}
+      {avatar && <div className="chat-avatar" aria-hidden="true"><img src="/assets/ma1te-mascot.svg" alt="" /></div>}
       <div className="chat-bubble">{children}</div>
     </div>
   );
@@ -1789,29 +2025,12 @@ function AccountCard({ title, subtitle, account }) {
 function ExitButton({ onClick, locale = "ko" }) {
   return <button type="button" onClick={onClick} className="exit-button">{locale === "en" ? "Exit" : "나가기"}</button>;
 }
-// Exit 옆 한/영 세그먼트 토글.
-function LangToggle({ locale = "ko", onChange }) {
-  return (
-    <div className="lang-toggle" role="group" aria-label={locale === "en" ? "Language" : "언어 선택"}>
-      <button type="button" className={locale === "ko" ? "on" : ""} aria-pressed={locale === "ko"} onClick={() => onChange("ko")}>한</button>
-      <button type="button" className={locale === "en" ? "on" : ""} aria-pressed={locale === "en"} onClick={() => onChange("en")}>EN</button>
-    </div>
-  );
-}
-// Exit 자리에 한/영 토글 + 나가기 버튼을 함께 올린다.
-function TopActions({ locale, onLocale, onExit }) {
-  return (
-    <div className="top-actions">
-      <LangToggle locale={locale} onChange={onLocale} />
-      <ExitButton onClick={onExit} locale={locale} />
-    </div>
-  );
-}
-function LanguageChoice({ title, subtitle, selected, onClick }) {
+function LanguageChoice({ code, title, subtitle, selected, onClick }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={selected} className={`language-choice${selected ? " selected" : ""}`}>
-      <b>{title}</b>
-      <span className="language-sub">{subtitle}</span>
+      <span className="language-code" aria-hidden="true">{code}</span>
+      <span className="language-copy"><b>{title}</b><small>{subtitle}</small></span>
+      <span className="language-check" aria-hidden="true">{selected ? "✓" : ""}</span>
     </button>
   );
 }
@@ -1867,27 +2086,67 @@ function ExitConfirmModal({ onContinue, onExit, locale = "ko" }) {
     </div>
   );
 }
-function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) {
+function NewDocumentConfirmModal({ onContinue, onStart, loading, locale = "ko" }) {
   const en = locale === "en";
   return (
-    <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"} style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
-      <div style={{ width: "100%", padding: "22px 20px calc(30px + var(--safe-bottom))", borderRadius: "24px 24px 0 0", background: "#fff" }}>
-        <div style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em" }}>APPROVAL · {approval.risk_level || "L2"}</div>
-        <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || (en ? "Action approval" : "실행 승인")}</h3>
-        {(approval.summary || []).map((item) => <div key={item} style={{ padding: "7px 0", fontSize: 12.5 }}>· {item}</div>)}
-        {(approval.evidence || []).length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Evidence" : "근거"}</div>}
-        {(approval.evidence || []).map((item) => <div key={item} style={{ padding: "4px 0", fontSize: 11.5, color: "var(--muted)" }}>· {item}</div>)}
-        <p style={{ margin: "12px 0", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5 }}>{en ? "No external reservation or submission has been made yet." : "아직 외부 예약이나 제출은 실행되지 않았습니다."}</p>
-        {error && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{error}</div>}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
-          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Processing…" : "처리 중…") : (en ? "Confirm" : "확인")}</button>
+    <div role="dialog" aria-modal="true" aria-labelledby="new-document-title" className="modal-backdrop">
+      <div className="exit-dialog new-document-dialog">
+        <div className="exit-dialog-icon" aria-hidden="true">↻</div>
+        <h3 id="new-document-title">{en ? "Prepare another document?" : "다른 서류도 준비할까요?"}</h3>
+        <p>{en
+          ? "Your current work will be paused, not deleted. You can return later and continue from the remaining question."
+          : "현재 작업은 삭제되지 않고 작성 중으로 저장돼요. 나중에 다시 열면 남은 질문부터 이어할 수 있어요."}</p>
+        <div className="new-document-preserved"><span aria-hidden="true">✓</span><div><b>{en ? "Progress saved" : "진행 상태 저장"}</b><small>{en ? "Answers · Profile · Issued documents" : "작성한 답변 · 프로필 · 발급 서류"}</small></div></div>
+        <div className="exit-dialog-actions">
+          <button type="button" disabled={loading} onClick={onContinue} className="tap">{en ? "Continue current work" : "기존 작업 이어하기"}</button>
+          <button type="button" disabled={loading} onClick={onStart} className="tap primary">{loading ? (en ? "Starting…" : "새 상담 여는 중…") : (en ? "Start new consultation" : "새 상담 시작")}</button>
         </div>
       </div>
     </div>
   );
 }
-
+function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) {
+  const en = locale === "en";
+  const label = approval.title || (en ? "this action" : "이 작업");
+  return (
+    <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"}
+      className="approval-backdrop" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 22px" }}>
+      <div className="approval-sheet" style={{ width: "100%", padding: "20px 20px 18px", borderRadius: 20, background: "#fff", boxShadow: "0 18px 44px oklch(0.2 0.012 60 / 0.28)" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 99, background: "oklch(0.72 0.13 45 / 0.12)" }}>
+          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--brand-2)" }} />
+          <span style={{ fontSize: 10.5, fontWeight: 800, color: "var(--brand-2)" }}>
+            {en ? "Now: confirm issuance" : "지금: 발급 확인"}
+          </span>
+        </div>
+        <h3 style={{ margin: "12px 0 10px", fontSize: 19, lineHeight: 1.32 }}>
+          {en ? `Issue your ${label.toLowerCase()}?` : `${label}를 발급할까요?`}
+        </h3>
+        <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: "oklch(0.35 0.012 60)" }}>
+          {en
+            ? <>The preview above is an already generated PDF. Issuing it saves the document to your document box.</>
+            : <>위 미리보기는 <b>이미 작성된 PDF</b>예요. 발급을 누르면 서류함에 확정 저장돼요.</>}
+        </p>
+        {(approval.summary || []).map((item) => (
+          <div key={item} style={{ marginTop: 7, fontSize: 12, color: "oklch(0.35 0.012 60)" }}>· {item}</div>
+        ))}
+        {(approval.evidence || []).map((item) => (
+          <div key={item} style={{ marginTop: 5, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Evidence" : "근거"} · {item}</div>
+        ))}
+        <p style={{ margin: "12px 0 0", fontSize: 12.5, lineHeight: 1.5, color: "oklch(0.35 0.012 60)" }}>
+          {en ? "This app prepares the document for you. Submit the printed copy yourself at the bank or immigration office." : "이 앱은 서류를 만들어 드려요. 은행·출입국관리소 제출은 직접 해야 해요."}
+        </p>
+        <p style={{ margin: "8px 0 0", fontSize: 11.5, color: "var(--muted)" }}>
+          {en ? "You can issue it again at any time." : "언제든 다시 발급할 수 있어요."}
+        </p>
+        {error && <div role="alert" className="capture-error" style={{ margin: "12px 0 0" }}>{error}</div>}
+        <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Issuing…" : "발급 중…") : (en ? "Issue" : "발급하기")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 const smallActionStyle = { flex: 1, minHeight: 38, borderRadius: 10, border: "1px solid var(--line)", background: "#fff", fontSize: 11.5, fontWeight: 700 };
 
 function formatDate(value, locale = "ko") {

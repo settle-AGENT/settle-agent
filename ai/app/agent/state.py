@@ -85,6 +85,7 @@ class AgentState(TypedDict, total=False):
 
     # ── 현재 진행 중인 액션 ───────────────────────────────
     current_action: Annotated[Optional[str], replace]
+    action_authorized: Annotated[bool, replace]
     missing_fields: Annotated[list[str], replace]         # 슬롯 필링 대상
     asked_field: Annotated[Optional[str], replace]        # 방금 물어본 필드
     ask_tries: Annotated[Optional[int], replace]          # 같은 필드를 못 읽은 횟수
@@ -137,6 +138,7 @@ def new_state(session_id: str, locale: str = "en") -> AgentState:
         completed=[],
         in_progress=[],
         current_action=None,
+        action_authorized=False,
         missing_fields=[],
         asked_field=None,
         pending_offer=None,

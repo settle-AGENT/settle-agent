@@ -25,6 +25,7 @@ from app.nodes.profiler import (
 )
 from app.nodes.profiler import run as profiler_run
 from app.tools import llm
+from app.tools import progress as progress_events
 
 DocType = Literal["arc_front", "arc_back", "passport"]
 
@@ -151,13 +152,14 @@ def _response(state: dict, reply: str | None = None,
               ui_type: str | None = None, ui_payload: dict | None = None,
               reply_locale: str | None = None) -> dict:
     """reply_locale 은 reply 인자가 이미 어느 언어로 쓰였는지. 기본값은 한국어."""
+    resolved_type = ui_type or state.get("ui_type") or "none"
+    resolved_payload = ui_payload if ui_payload is not None else (state.get("ui_payload") or {})
     return {
         "schema_version": "1",
         "reply": _localized(state, reply, reply_locale),
         "ui": {
-            "type": ui_type or state.get("ui_type") or "none",
-            "payload": ui_payload if ui_payload is not None
-            else (state.get("ui_payload") or {}),
+            "type": resolved_type,
+            "payload": resolved_payload,
         },
         "state": {
             "session_id": state.get("session_id", ""),
@@ -182,13 +184,32 @@ def _patch(session_id: str, extra: dict[str, Any]) -> dict:
 # ──────────────────────────────────────────────────────────
 # public API
 # ──────────────────────────────────────────────────────────
-def start_session(session_id: str | None = None, locale: str = "en") -> dict:
+def start_session(session_id: str | None = None, locale: str = "en",
+                  source_session_id: str | None = None) -> dict:
     """session_id 를 주면 그 세션을 이어받고, 없으면 새 세션을 만든다.
 
     데모 대본용으로 고정 id 를 쓰고 싶으면 명시적으로 넘긴다.
     """
     sid = session_id or f"s-{uuid.uuid4().hex[:10]}"
-    state = _graph().invoke(_patch(sid, {"locale": locale}), _cfg(sid))
+    patch = {"locale": locale}
+    if not _seen(sid) and source_session_id and _seen(source_session_id):
+        source = _graph().get_state(_cfg(source_session_id)).values
+        # 새 상담은 대화·작업 상태를 공유하지 않는다. 사용자가 확정한 마스터
+        # 프로필만 복사해 촬영과 프로필 확인을 다시 하지 않게 한다.
+        for key in ("profile", "confidence"):
+            if source.get(key):
+                patch[key] = source[key]
+    if _seen(sid):
+        snap = _graph().get_state(_cfg(sid)).values
+        if snap.get("current_action") and not snap.get("action_authorized"):
+            patch.update({
+                "current_action": None,
+                "asked_field": None,
+                "missing_fields": [],
+                "pending_approval": None,
+                "approval_decision": None,
+            })
+    state = _graph().invoke(_patch(sid, patch), _cfg(sid))
 
     # 첫 화면의 말문. 여기서 무엇을 할 수 있는지 알려주지 않으면 사용자는
     # 빈 입력창 앞에서 아무 말도 못 한다. 이어받은 세션은 인사하지 않는다 —
@@ -197,6 +218,22 @@ def start_session(session_id: str | None = None, locale: str = "en") -> dict:
         return _response(state, _pick(GREETING, "new", locale), "none", {},
                          reply_locale=locale)
     return _response(state)
+
+
+def reset_session(session_id: str, locale: str = "ko") -> dict:
+    """Keep reusable user data, but discard the active conversation/workflow."""
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
+    preserved = {
+        key: snap.get(key)
+        for key in ("profile", "confidence", "documents", "ledger")
+        if snap.get(key)
+    }
+    _graph().checkpointer.delete_thread(session_id)
+    base = dict(new_state(session_id, locale))
+    base.update(preserved)
+    state = _graph().invoke(base, _cfg(session_id))
+    return _response(state, _pick(GREETING, "new", locale), "none", {},
+                     reply_locale=locale)
 
 
 def extract(session_id: str, image: bytes, doc_type: DocType,
@@ -251,7 +288,16 @@ def apply_profile_edits(session_id: str, edits: dict) -> dict:
     clean = {k: v for k, v in (edits or {}).items()
              if v not in (None, "") and not masked.search(str(v))}
 
-    state = _graph().invoke(_patch(session_id, {"profile": clean}), _cfg(session_id))
+    state = _graph().invoke(_patch(session_id, {
+        "profile": clean,
+        "current_action": None,
+        "action_authorized": False,
+        "asked_field": None,
+        "missing_fields": [],
+        "pending_offer": None,
+        "pending_approval": None,
+        "approval_decision": None,
+    }), _cfg(session_id))
     return _response(state)
 
 
@@ -267,6 +313,18 @@ _FIELD_META = {
                       {"living_expense": 1, "tuition": 1, "salary": 1, "remittance": 1}),
     "income_source": ("Source of funds",
                       {"scholarship": 1, "family_support": 1, "part_time": 1, "savings": 1}),
+}
+
+_FIELD_REASONS = {
+    "org_name": {
+        "ko": "학교명은 D-2 체류자의 재학 정보를 확인하고, 통합신청서나 계좌개설신청서의 소속 기관 항목을 자동으로 채우는 데 필요해요. 재학증명서에 적힌 정식 학교명으로 알려주세요.",
+        "en": "Your school name is used to confirm D-2 enrollment details and fill the organization field in supported application forms. Please enter the official name shown on your enrollment certificate.",
+    },
+    "birth_date": {"ko": "생년월일은 신청서의 본인 확인 항목을 채우는 데 필요해요.", "en": "Your date of birth is needed for the identity section of the application."},
+    "entry_date": {"ko": "입국일은 체류 관련 신청 요건과 신청서 항목을 확인하는 데 필요해요.", "en": "Your entry date is needed to check stay-related requirements and complete the application."},
+    "phone_kr": {"ko": "국내 연락처는 신청서의 연락 가능한 전화번호 항목을 채우는 데 필요해요.", "en": "Your Korean phone number is needed for the contact field on the application."},
+    "purpose": {"ko": "계좌 사용 목적은 은행의 거래 목적 확인 항목을 작성하는 데 필요해요.", "en": "The account purpose is needed for the bank's transaction-purpose check."},
+    "income_source": {"ko": "자금 출처는 은행의 고객확인 절차와 신청서 항목을 작성하는 데 필요해요.", "en": "Your source of funds is needed for the bank's customer verification and application fields."},
 }
 
 
@@ -327,6 +385,48 @@ def _pick(table: dict, key: str, locale: str) -> str:
     return table[key].get(locale) or table[key]["en"]
 
 
+SUPPORTED_DOCUMENT_FORMS = {"integrated_application", "bank_account_open"}
+DOCUMENT_INTENT_TERMS = {
+    "open_bank_account": (
+        "\uacc4\uc88c\uac1c\uc124\uc2e0\uccad\uc11c", "\uacc4\uc88c\uac1c\uc124", "\uc740\ud589\uacc4\uc88c", "\ud1b5\uc7a5",
+        "bankaccountapplication", "openabankaccount",
+    ),
+    "residence_change": (
+        "\uccb4\ub958\uc9c0\ubcc0\uacbd", "\uc8fc\uc18c\ubcc0\uacbd\uc2e0\uace0", "changeofresidence",
+    ),
+    "work_activity": (
+        "\uccb4\ub958\uc790\uaca9\uc678\ud65c\ub3d9", "\uc2dc\uac04\uc81c\ucde8\uc5c5\ud5c8\uac00", "activitypermit",
+    ),
+    "alien_registration": (
+        "\uc678\uad6d\uc778\ub4f1\ub85d", "\ud1b5\ud569\uc2e0\uccad\uc11c", "alienregistration", "integratedapplication",
+    ),
+}
+
+
+def _document_intent(message: str, profile: dict, tasks: list[dict]) -> str | None:
+    """Map supported form-related chat to a document action deterministically."""
+    compact = "".join(message.lower().split())
+    task_ids = {task["id"] for task in tasks}
+    specs = actions_for(profile.get("visa_type"))
+
+    for action_id, terms in DOCUMENT_INTENT_TERMS.items():
+        spec = specs.get(action_id) or {}
+        if action_id not in task_ids or spec.get("form") not in SUPPORTED_DOCUMENT_FORMS:
+            continue
+        if not any(term in compact for term in terms):
+            continue
+        if "\ud1b5\ud569\uc2e0\uccad\uc11c" in compact:
+            candidates = [
+                task for task in tasks
+                if (specs.get(task["id"]) or {}).get("form") == "integrated_application"
+            ]
+            rank = {"in_progress": 0, "available": 1, "locked": 2, "done": 3}
+            if candidates:
+                return min(candidates, key=lambda task: rank.get(task["status"], 9))["id"]
+        return action_id
+    return None
+
+
 def _task(tasks: list[dict], action_id: str) -> dict | None:
     return next((t for t in tasks if t["id"] == action_id), None)
 
@@ -373,7 +473,7 @@ def _blocking(tasks: list[dict], task: dict) -> dict:
     return task
 
 
-def send_message(session_id: str, message: str) -> dict:
+def send_message(session_id: str, message: str, emit=None) -> dict:
     """대화 입력.
 
     슬롯 필링 중이면 LLM 이 자유 발화에서 값을 뽑는다.
@@ -382,14 +482,33 @@ def send_message(session_id: str, message: str) -> dict:
     snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
     asked = snap.get("asked_field")
     tasks = snap.get("tasks") or []
+    progress = emit or (lambda _step, _label: None)
+    if emit:
+        progress_events.set_emitter(session_id, progress)
+    locale = snap.get("locale") or "en"
+    excerpt = " ".join(message.strip().split())[:24]
+    field_names = {
+        "birth_date": "생년월일", "entry_date": "입국일", "org_name": "소속 기관",
+        "phone_kr": "국내 연락처", "purpose": "계좌 사용 목적", "income_source": "자금 출처",
+    }
 
     extra: dict[str, Any] = {"messages": [{"role": "user", "content": message}]}
 
     if asked:
+        field_name = field_names.get(asked, asked)
+        slot_intent = llm.classify(message, asked_field=asked) if llm.available() else None
+        if (slot_intent or {}).get("intent") == "question":
+            reason = (_FIELD_REASONS.get(asked) or {}).get(locale)
+            if reason:
+                state = _graph().get_state(_cfg(session_id)).values
+                return _response(state, reason, "question",
+                                 state.get("ui_payload") or {},
+                                 reply_locale=locale)
+        progress("answer", f"{field_name} 답변을 확인하고 있어요")
         value, failed, failed_locale = message.strip(), None, None
-        locale = snap.get("locale") or "en"
 
         if llm.available():
+            progress("extract", f"‘{excerpt}’에서 {field_name} 값을 읽고 있어요")
             label, enum = _FIELD_META.get(asked, (asked, None))
             parsed = llm.parse_answer(asked, label=label, message=message,
                                       enum=enum, locale=locale)
@@ -439,17 +558,23 @@ def send_message(session_id: str, message: str) -> dict:
 
         extra["profile"] = {asked: value}
         extra["asked_field"] = None
+        progress("profile", f"확인한 {field_name}을 프로필에 반영하고 있어요")
         state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
         return _response(state)
 
     # ── 자유 발화 ──────────────────────────────────────────
-    locale = snap.get("locale") or "en"
     offer = snap.get("pending_offer") or {}
 
     # 메뉴에서 고른 값은 그대로 돌아온다. 확실한 것을 LLM 에 물을 이유가 없다.
     picked = message.strip()
     if offer.get("kind") == "menu" and picked in (offer.get("options") or []):
         return _guide(session_id, extra, tasks, picked, locale,
+                      snap.get("profile") or {})
+    document_action = _document_intent(message, snap.get("profile") or {}, tasks)
+    if document_action:
+        task_label = next((t.get("label") for t in tasks if t.get("id") == document_action), document_action)
+        progress("document", f"{task_label} 작성 가능 여부를 확인하고 있어요")
+        return _guide(session_id, extra, tasks, document_action, locale,
                       snap.get("profile") or {})
 
     intent = llm.classify(
@@ -458,6 +583,18 @@ def send_message(session_id: str, message: str) -> dict:
         offer=_OFFER_TEXT.get(offer.get("kind")) if offer else None,
     ) or {}
     kind = intent.get("intent")
+    if kind == "action" and intent.get("action_id"):
+        action_label = next((t.get("label") for t in tasks if t.get("id") == intent["action_id"]), intent["action_id"])
+        progress("classify", f"{action_label} 요청으로 이해했어요")
+    elif kind == "menu":
+        progress("classify", "현재 진행할 수 있는 업무를 확인하고 있어요")
+    elif kind == "confirm":
+        progress("classify", "직전 안내에 대한 답변으로 이해했어요")
+    elif kind == "other":
+        progress("classify", "일상 대화로 이해했어요")
+    else:
+        topic = (intent.get("topic") or excerpt).strip()
+        progress("classify", f"‘{topic}’ 정보를 묻는 질문으로 이해했어요")
 
     # 1. 물어둔 제안에 대한 대답
     if offer and kind == "confirm":
@@ -496,9 +633,20 @@ def send_message(session_id: str, message: str) -> dict:
         return _menu(session_id, extra, locale)
 
     # 4. 나머지는 질의응답으로 보낸다
+    if kind == "other":
+        progress("compose", "대화 맥락에 맞는 답변을 준비하고 있어요")
+    else:
+        topic = (intent.get("topic") or excerpt).strip()
+        progress("research", f"‘{topic}’ 답변에 필요한 정보를 확인하고 있어요")
     extra["ask"] = message
     extra["pending_offer"] = None
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+    offer = state.get("pending_offer") or {}
+    if offer.get("kind") == "start_action":
+        return _response(state, ui_type="action_offer", ui_payload={
+            "action_id": offer.get("action_id"),
+            "label": offer.get("label") or offer.get("action_id"),
+        })
     return _response(state)
 
 
@@ -605,6 +753,26 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
         state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
         return _response(state)
 
+    profile = profile or {}
+    spec = actions_for(profile.get("visa_type")).get(action_id) or {}
+    form = spec.get("form")
+    if form in SUPPORTED_DOCUMENT_FORMS:
+        extra["pending_offer"] = {
+            "kind": "start_action", "action_id": action_id,
+            "label": task["label"],
+        }
+        state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
+        reply = (
+            "\uc774 \uc2e0\uccad\uc11c\ub294 \uc571\uc5d0\uc11c \ubc14\ub85c \uc791\uc131\ud560 \uc218 \uc788\uc5b4\uc694. \uc544\ub798 \ubc84\ud2bc\uc744 \ub204\ub974\uba74 \uc791\uc131 \ud654\uba74\uc73c\ub85c \uc774\ub3d9\ud574\uc694."
+            if locale == "ko"
+            else "This application is available in the app. Tap the button below to open it."
+        )
+        return _response(state, reply, "action_offer", {
+            "action_id": action_id,
+            "form": form,
+            "label": task["label"],
+        }, reply_locale=locale)
+
     if task["status"] == "done":
         extra["pending_offer"] = None
         state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
@@ -621,14 +789,19 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
 
     extra["pending_offer"] = offer
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
-    return _response(state, reply, "none", {})
+    return _response(state, reply, "action_offer", {
+        "action_id": offer["action_id"],
+        "label": offer["label"],
+    })
 
 
 def _begin(session_id: str, extra: dict, action_id: str, locale: str) -> dict:
     """승낙받은 과제를 연다. 여기서 실행되는 것은 없다 — 부족한 값을 묻기 시작할 뿐이다."""
+    snap = _graph().get_state(_cfg(session_id)).values if _seen(session_id) else {}
     extra.update({
         "current_action": action_id,
-        "in_progress": [action_id],
+        "action_authorized": True,
+        "in_progress": list(dict.fromkeys([*(snap.get("in_progress") or []), action_id])),
         "pending_offer": None,
     })
     state = _graph().invoke(_patch(session_id, extra), _cfg(session_id))
@@ -646,7 +819,8 @@ def start_action(session_id: str, action_id: str) -> dict:
 
     state = _graph().invoke(_patch(session_id, {
         "current_action": action_id,
-        "in_progress": [action_id],
+        "action_authorized": True,
+        "in_progress": list(dict.fromkeys([*(snap.get("in_progress") or []), action_id])),
     }), _cfg(session_id))
     return _response(state)
 
@@ -672,7 +846,8 @@ def preview_action(session_id: str, action_id: str) -> dict:
     # 요청한 액션의 서류를 만들러 왔으므로 대기 중인 것을 비우고 다시 세운다.
     extra: dict[str, Any] = {
         "current_action": action_id,
-        "in_progress": [action_id],
+        "action_authorized": True,
+        "in_progress": list(dict.fromkeys([*(snap.get("in_progress") or []), action_id])),
     }
     pending = snap.get("pending_approval") or {}
     if pending and pending.get("action_id") != action_id:

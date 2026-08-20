@@ -68,7 +68,8 @@ public class GeneratedDocumentService {
 
     public DocumentFile loadPdf(UUID memberId, UUID documentId) {
         GeneratedDocument document = documentRepository.findByIdAndMember_Id(documentId, memberId)
-                .filter(candidate -> candidate.getStatus() == GeneratedDocumentStatus.READY)
+                .filter(candidate -> candidate.getStatus() == GeneratedDocumentStatus.READY
+                        || candidate.getStatus() == GeneratedDocumentStatus.ISSUED)
                 .orElseThrow(() -> new ResourceNotFoundException("문서를 찾을 수 없습니다: " + documentId));
         S3FileGateway.StoredFile stored = s3.download(document.getObjectKey());
         validatePdf(stored.bytes());
@@ -76,11 +77,32 @@ public class GeneratedDocumentService {
     }
 
     public List<GeneratedDocument> listReady(UUID memberId, String sessionId) {
-        return documentRepository.findAllByMember_IdAndSessionIdAndStatusOrderByCreatedAtDesc(
+        // 서류함은 상담 세션이 아니라 회원 소유 자산이다. 새 문서 상담을 열어도
+        // 이전 세션에서 만든 문서와 이력이 사라져 보이면 안 된다.
+        return documentRepository.findAllByMember_IdAndStatusInOrderByCreatedAtDesc(
                 memberId,
-                sessionId,
-                GeneratedDocumentStatus.READY
+                List.of(GeneratedDocumentStatus.READY, GeneratedDocumentStatus.ISSUED)
         );
+    }
+
+    public void issueLatest(UUID memberId, String sessionId, String actionId) {
+        documentRepository.findFirstByMember_IdAndSessionIdAndActionIdAndStatusOrderByCreatedAtDesc(
+                memberId, sessionId, actionId, GeneratedDocumentStatus.READY
+        ).ifPresent(document -> {
+            document.markIssued();
+            documentRepository.save(document);
+        });
+    }
+
+    public List<Map<String, Object>> listIssuedHistory(UUID memberId) {
+        return documentRepository.findAllByMember_IdAndStatusOrderByCreatedAtDesc(
+                memberId, GeneratedDocumentStatus.ISSUED
+        ).stream().map(document -> Map.<String, Object>of(
+                "action", document.getTitle(),
+                "action_id", document.getActionId(),
+                "document_id", document.getId().toString(),
+                "approved_at", document.getUpdatedAt()
+        )).toList();
     }
 
     public List<Map<String, Object>> listReadyReferences(UUID memberId, String sessionId) {
@@ -113,6 +135,8 @@ public class GeneratedDocumentService {
         reference.put("id", document.getId().toString());
         reference.put("title", document.getTitle());
         reference.put("action_id", document.getActionId());
+        reference.put("session_id", document.getSessionId());
+        reference.put("status", document.getStatus() == GeneratedDocumentStatus.ISSUED ? "issued" : "draft");
         reference.put("preview_url", previewUrl(document.getId()));
         reference.put("pdf_url", downloadUrl(document.getId()));
         reference.put("created_at", document.getCreatedAt());

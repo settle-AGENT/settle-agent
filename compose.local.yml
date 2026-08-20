@@ -1,0 +1,74 @@
+name: fsai-local
+
+x-defaults: &defaults
+  restart: unless-stopped
+  init: true
+  networks: [app]
+
+services:
+  db:
+    <<: *defaults
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: settle
+      POSTGRES_PASSWORD: settle
+      POSTGRES_DB: settle
+    ports: ["5433:5432"]
+    volumes: ["pgdata-local:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U settle -d settle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ai:
+    <<: *defaults
+    build:
+      context: ./ai
+    env_file: [./.env.local]
+    environment:
+      OCR_CACHE_DIR: /tmp/ocr_cache
+    ports: ["8001:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    <<: *defaults
+    build:
+      context: ./backend
+    env_file: [./.env.local]
+    environment:
+      SERVER_PORT: 8080
+      AI_BASE_URL: http://ai:8000
+    ports: ["8080:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    <<: *defaults
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    expose: ["3000"]
+
+  gateway:
+    <<: *defaults
+    image: caddy:2-alpine
+    ports: ["8081:80"]
+    environment:
+      PUBLIC_DOMAIN: ":80"
+      FRONTEND_CONTAINER_PORT: 3000
+      BACKEND_CONTAINER_PORT: 8080
+      AI_CONTAINER_PORT: 8000
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [frontend, backend, ai]
+
+networks:
+  app:
+    driver: bridge
+volumes:
+  pgdata-local:

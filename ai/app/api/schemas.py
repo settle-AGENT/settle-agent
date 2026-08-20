@@ -16,6 +16,9 @@ UiType = Literal[
     "comparison",       # 은행 요건 비교
     "doc_preview",      # 서류 미리보기
     "approval",         # 승인 요청
+    "task_complete",
+    "document_route",
+    "action_offer",     # 구현된 기능으로 이동하는 명시적 버튼
 ]
 
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">MAITE AI</title>
+  <desc id="desc">MAITE 로고의 연결 모티프를 활용한 AI 상담 캐릭터</desc>
+  <path fill="#171615" d="M16 8h62c6.6 0 12 5.4 12 12v46c0 5.3-3.4 9.8-8.2 11.4L88 86l-15-8H16C9.4 78 4 72.6 4 66V20C4 13.4 9.4 8 16 8Z"/>
+  <path fill="#fff" d="M18 20h25v9h6v7h-6v7h6v7h-6v7h6v9H18c-3.3 0-6-2.7-6-6V26c0-3.3 2.7-6 6-6Z"/>
+  <path fill="#fff" d="M53 20h24c3.3 0 6 2.7 6 6v34c0 3.3-2.7 6-6 6H53v-9h-6v-7h6v-7h-6v-7h6v-7h-6v-9h6Z"/>
+  <rect x="25" y="36" width="7" height="13" rx="3.5" fill="#171615"/>
+  <rect x="64" y="36" width="7" height="13" rx="3.5" fill="#171615"/>
+  <path d="M62 54c3 4 8 4 11 0" fill="none" stroke="#e98252" stroke-width="3.5" stroke-linecap="round"/>
+  <path fill="#171615" d="M27 78h42v12H57V84l-9 8-9-8v6H27V78Z"/>
+</svg>
