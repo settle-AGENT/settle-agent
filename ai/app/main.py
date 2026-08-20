@@ -31,6 +31,7 @@ from app.agent import service as agent
 from app.extractors.arc import OcrFailed  # noqa: E402
 from app.agent.service import (  # noqa: E402
     ApprovalMismatch,
+    IdentityMismatch,
     NothingToApprove,
     PrerequisiteMissing,
 )
@@ -89,6 +90,11 @@ async def extract_upload(
         ext = "jpg"
     try:
         return agent.extract(session_id, image, doc_type, ext=ext)
+
+    except IdentityMismatch as exc:
+        # 다른 사람의 서류다. 재촬영이 아니라 서류를 다시 고르게 해야 한다.
+        raise HTTPException(422, detail=agent.localize_error(session_id,
+                                                             exc.detail()))
 
     except OcrFailed as exc:
         # 예상된 실패 — 사용자가 다시 촬영하면 해결된다. 422 로 안내한다.

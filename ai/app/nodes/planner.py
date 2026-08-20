@@ -152,6 +152,42 @@ def build_task_graph(
     return tasks
 
 
+MENU_TITLE = {"ko": "무엇을 도와드릴까요?", "en": "What can I help you with?"}
+_MENU_NOTE = {
+    "locked": {"ko": "{}\u00a0후 가능", "en": "after {}"},
+    "dday":   {"ko": "D-{}", "en": "D-{}"},
+    "over":   {"ko": "{}일 지남", "en": "{} days overdue"},
+}
+
+
+def menu_options(tasks: list[dict], locale: str = "en") -> list[dict]:
+    """할 수 있는 일 목록. select 옵션 형태로 돌려준다.
+
+    고정 목록이 아니다 — 체류자격에 따라 항목이 달라지고, 끝낸 과제는 빠지며,
+    잠긴 과제는 무엇 때문에 잠겼는지 라벨에 실린다. 화면에 보이는 것이 곧
+    지금 이 사람의 상태다.
+    """
+    def note(t: dict) -> str | None:
+        if t["status"] == "locked" and t.get("blocked_by"):
+            return _MENU_NOTE["locked"][locale].format(t["blocked_by"][0])
+        d = t.get("d_day")
+        if d is None:
+            return None
+        key = "over" if d < 0 else "dday"
+        return _MENU_NOTE[key][locale].format(abs(d))
+
+    out = []
+    for t in tasks:
+        if t["status"] == "done":
+            continue                       # 끝난 일을 다시 권하지 않는다
+        tail = note(t)
+        out.append({
+            "value": t["id"],
+            "label": f"{t['label']} · {tail}" if tail else t["label"],
+        })
+    return out
+
+
 def missing_for_deadlines(profile: dict, tasks: list[dict] | None = None) -> list[str]:
     """기한 계산에 필요한데 프로필에 없는 필드. 잠긴 액션은 제외한다."""
     tasks = tasks if tasks is not None else build_task_graph(profile)

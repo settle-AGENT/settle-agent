@@ -149,20 +149,58 @@ def _fmt_date(m: re.Match) -> str:
     return f"{y}-{int(mo):02d}-{int(d):02d}"
 
 
+# 외국인등록번호·국내거소신고번호의 성별코드는 5·6·7·8 이다.
+# 주민등록번호는 1·2·3·4(1900년대) 또는 9·0(1800년대)를 쓴다.
+# 형식(\d{6}-\d{7})은 둘이 같으므로 이 자리가 유일한 구분점이다.
+_FOREIGN_SEX_CODES = {"5": ("19", "M"), "6": ("19", "F"),
+                      "7": ("20", "M"), "8": ("20", "F")}
+
+
+class WrongDocument(OcrFailed):
+    """읽히긴 했으나 요구한 종류의 증명서가 아니다. 재촬영으로는 해결되지 않는다."""
+
+
+def is_foreign_registration(arc: str | None) -> bool:
+    """외국인등록번호 형태인가. 주민등록번호를 걸러내는 유일한 관문이다."""
+    if not arc or not re.fullmatch(r"\d{6}-\d{7}", arc):
+        return False
+    return arc.split("-")[1][0] in _FOREIGN_SEX_CODES
+
+
 def derive_from_arc(arc: str | None) -> dict:
     """등록번호에서 생년월일·성별을 계산한다."""
-    if not arc or not re.fullmatch(r"\d{6}-\d{7}", arc):
+    if not is_foreign_registration(arc):
         return {}
     front, back = arc.split("-")
-    code = back[0]
-    century = {"5": "19", "6": "19", "7": "20", "8": "20"}.get(code)
-    gender = {"5": "M", "6": "F", "7": "M", "8": "F"}.get(code)
-    if not century:
-        return {}
+    century, gender = _FOREIGN_SEX_CODES[back[0]]
     return {
         "birth_date": f"{century}{front[0:2]}-{front[2:4]}-{front[4:6]}",
-        "sex": gender,
+        # 키 이름은 gender 다. 나머지 코드가 전부 그 이름으로 읽는다 —
+        # sex 로 넣으면 서식에도 안 실리고 여권 값과 대조도 되지 않는다.
+        "gender": gender,
     }
+
+
+# ──────────────────────────────────────────────── 서류 식별
+# parse_rules 의 규칙은 전부 위치·문맥과 무관한 패턴 매칭이다. 텍스트가 많은
+# 사진이면 영수증 번호가 등록번호로, 어딘가의 국가명이 국적으로, 대문자 두
+# 낱말이 성명으로 걸린다. 값이 원문에 있는지 보는 verify() 로는 못 막는다 —
+# 원문에서 뽑았으니 당연히 통과한다.
+#
+# 그래서 뽑기 전에 "이 서류가 등록증인가" 를 먼저 묻는다. 아래는 카드에 크게
+# 인쇄돼 OCR 이 안정적으로 읽는 표제어들이고, 다른 서류에는 나오지 않는다.
+_SIGNATURE = {
+    "arc_front": ("외국인등록증", "외국인등록번호", "RESIDENCECARD",
+                  "ALIENREGISTRATION", "REGISTRATIONNO"),
+    "arc_back":  ("체류기간", "SOJOURN", "CHANGEOFRESIDENCE",
+                  "일련번호", "SERIALNO", "안전칩", "발행국"),
+}
+
+
+def signature_hits(texts: list[str], doc_type: DocType) -> list[str]:
+    """읽힌 텍스트에서 발견된 등록증 표제어."""
+    blob = _squash(" ".join(texts))
+    return [w for w in _SIGNATURE.get(doc_type, ()) if _squash(w) in blob]
 
 
 def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
@@ -319,6 +357,14 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
     """
     texts = clean_texts(extract_texts(call_clova(image_bytes, ext)))
 
+    # 값을 뽑기 전에 서류부터 확인한다. 여기서 막지 않으면 무관한 사진의
+    # 숫자·낱말이 그대로 프로필이 된다.
+    if not signature_hits(texts, doc_type):
+        side = "앞면" if doc_type == "arc_front" else "뒷면"
+        raise WrongDocument(
+            f"외국인등록증 {side}으로 보이지 않습니다. 등록증이 맞는지 "
+            f"확인하시고, 카드 전체가 화면에 들어오도록 다시 촬영해 주세요.")
+
     profile, confidence = parse_rules(texts, doc_type)
 
     # 규칙으로 못 잡은 것만 LLM에 맡긴다
@@ -332,12 +378,20 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
 
     profile, dropped = verify(profile, texts)
 
+    # 읽어낸 등록번호가 외국인등록번호가 아니면 다른 증명서다.
+    # 여기서 막지 않으면 주민등록증이 그대로 프로필이 되고, 뒤에서
+    # 여권 생년월일과 어긋나 보이지 않는 오류로 남는다.
+    arc_no = profile.get("arc_no")
+    if arc_no and not is_foreign_registration(arc_no):
+        raise WrongDocument(
+            "외국인등록증이 아닌 것 같습니다. 등록번호가 외국인등록번호 형식이 "
+            "아닙니다. 외국인등록증을 촬영해 주세요.")
+
     if doc_type == "arc_front":
-        profile.update(derive_from_arc(profile.get("arc_no")))
-        confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
-    if doc_type == "arc_front":
-        profile.update(derive_from_arc(profile.get("arc_no")))
-        confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
+        derived = derive_from_arc(arc_no)
+        profile.update(derived)
+        if derived:
+            confidence.setdefault("birth_date", confidence.get("arc_no", 0.9))
 
     if profile.get("addr_kr"):                    # LLM 폴백 경로도 한 번 거른다
         profile["addr_kr"] = _trim_addr(profile["addr_kr"])

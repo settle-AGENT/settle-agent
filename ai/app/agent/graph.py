@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Literal
@@ -15,7 +16,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from app.agent.state import AgentState, clear_turn, new_state
-from app.nodes import qa
+from app.nodes import qa, researcher
 from app.nodes.planner import AGENCY_LABEL, DOC_LABEL, _pick, build_task_graph, summary
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import label_of as _label_of
@@ -23,6 +24,10 @@ from app.rules.loader import actions_for, evidence_labels
 from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
+
+# 도구 루프를 끌 수 있게 둔다. 데모에서 응답이 느리거나 API 가 불안정하면
+# 이 값만 내려 기존 단발 RAG 로 돌아간다.
+RESEARCH_ENABLED = os.getenv("RESEARCH_ENABLED", "1") not in ("0", "false", "False")
 
 
 def _now() -> str:
@@ -510,17 +515,37 @@ def explainer(state: AgentState) -> dict:
     last = state.get("ask")
 
     if last and last != state.get("last_qa") and qa.available():
-        got = qa.answer(last, profile=state.get("profile", {}),
-                        tasks=tasks, history=state.get("messages") or [],
-                        locale=locale)
+        profile = state.get("profile", {})
+        history = state.get("messages") or []
+
+        # 도구 루프를 먼저 태운다. 모델이 무엇을 몇 번 조회할지 스스로 정하므로
+        # 과제 상태와 법령을 함께 봐야 하는 질문에 강하다. 실패하면 아래
+        # 단발 RAG 로 내려간다 — 대화가 끊기지 않는 게 우선이다.
+        got = None
+        if RESEARCH_ENABLED and researcher.available():
+            got = researcher.answer(last, profile=profile, tasks=tasks,
+                                    history=history, locale=locale)
+            if got and got.get("trace"):
+                print("[researcher] " + " → ".join(t["tool"] for t in got["trace"]))
+
+        if got is None:
+            got = qa.answer(last, profile=profile,
+                            tasks=tasks, history=history,
+                            locale=locale)
         if got:
             reply = got["reply"]
             if got["cites"]:
                 reply += f"\n\n{CITE_LABEL.get(locale, CITE_LABEL['en'])} · " \
                          + " / ".join(got["cites"])
-            return {"reply": reply,
-                    "reply_locale": _written_locale(got["reply"], locale),
-                    "ui_type": "none", "last_qa": last, "ask": None}
+            out = {"reply": reply,
+                   "reply_locale": _written_locale(got["reply"], locale),
+                   "ui_type": "none", "last_qa": last, "ask": None}
+            # 모델이 "시작할까요" 로 끝냈으면 다음 턴의 "ㅇㅇ" 이 붙을 자리를
+            # 남겨 둔다. 없으면 승낙이 새 질문으로 흘러간다.
+            offer = got.get("offer") or _implied_offer(got["reply"], tasks)
+            if offer:
+                out["pending_offer"] = offer
+            return out
         base = ("제가 가진 법령 자료로는 확인이 어렵습니다. "
                 "출입국·외국인종합안내센터(1345)나 은행 창구에 확인해주세요.")
         return {"reply": base, "ui_type": "none", "last_qa": last, "ask": None}
@@ -554,6 +579,24 @@ def explainer(state: AgentState) -> dict:
 
 # 사용자의 목표를 우선한다. 조건부 액션(체류지 변경 등)은 스스로 권하지 않는다.
 NEXT_PRIORITY = ["open_bank_account", "alien_registration", "mobile_subscription"]
+
+
+def _implied_offer(reply: str, tasks: list[dict]) -> dict | None:
+    """모델이 물음표로 끝냈는데 offer_to_start 를 부르지 않았을 때의 안전망.
+
+    프롬프트로 도구 호출을 강제해 봤지만 모델이 종종 빠뜨린다. 그러면 사용자의
+    "ㅇㅇ" 이 붙을 자리가 없어 대화가 막힌다. 물음표로 끝났다는 것은 무언가를
+    물었다는 뜻이므로, 지금 시작할 수 있는 과제를 붙여 둔다.
+
+    틀려도 열리는 것은 과제뿐이다 — 부작용이 없고 되돌릴 수 있다. 실행은
+    여전히 approval_gate 를 지난다.
+    """
+    if not reply.rstrip().endswith(("?", "？")):
+        return None
+    nxt = _next_action(tasks)
+    if not nxt:
+        return None
+    return {"kind": "start_action", "action_id": nxt["id"], "label": nxt["label"]}
 
 
 def _next_action(tasks: list[dict]) -> dict | None:

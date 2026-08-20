@@ -1,24 +1,120 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
 import {
-  signUp, login, uploadAndExtract, confirmProfile, getVerdict, previewAction, approveAction, getLedger,
+  signUp, login, uploadAndExtract, confirmProfile, previewAction, approveAction, getLedger,
   fetchDocument, nationalityLabel,
-  createSession, sendChat, startAction, readUi, questionOptions, clearToken,
+  createSession, sendChat, startAction, readUi, questionOptions, clearToken, readMemberId,
 } from "./api.js";
 import { captureVideoFrameAsPng, convertImageToPng } from "./image.js";
 
-const PURPOSES = ["등록금 납부", "아르바이트 급여", "본국 송금", "생활비", "장학금"];
 const SCAN_PAGES = [
-  { key: "arcFront", docType: "arc_front", label: "외국인등록증 앞면", sub: "앞면" },
-  { key: "arcBack", docType: "arc_back", label: "외국인등록증 뒷면", sub: "뒷면" },
-  { key: "passport", docType: "passport", label: "여권", sub: "여권 사진면" },
+  { key: "arcFront", docType: "arc_front", ko: ["외국인등록증 앞면", "앞면"], en: ["Residence card front", "Front"] },
+  { key: "arcBack", docType: "arc_back", ko: ["외국인등록증 뒷면", "뒷면"], en: ["Residence card back", "Back"] },
+  { key: "passport", docType: "passport", ko: ["여권", "여권 사진면"], en: ["Passport", "Photo page"] },
 ];
-// 신청서 종류. action_id 가 서버의 문서 생성 경로를 가른다.
-const FORM_TYPES = [
-  { id: "alien_registration", title: "통합신청서(신고서)", sub: "외국인등록 · 체류지 변경 · 자격외활동" },
-  { id: "open_bank_account", title: "계좌개설신청서", sub: "은행 영업점 제출용" },
-];
-const DEFAULT_FORM_TYPE = FORM_TYPES[0].id;
+const APPLICATIONS = {
+  alien_registration: { ko: "통합신청서 · 외국인등록", en: "Integrated application · Registration" },
+  residence_change: { ko: "통합신청서 · 체류지 변경", en: "Integrated application · Address change" },
+  work_activity: { ko: "통합신청서 · 체류자격외활동", en: "Integrated application · Activity permit" },
+  open_bank_account: { ko: "계좌개설신청서", en: "Bank account application" },
+};
+const ONBOARDING_PROGRESS_KEY = "settle_onboarding_progress_v1";
+const PROFILE_DRAFT_KEY = "settle_profile_draft_v1";
+const EMPTY_AUTH = { email: "", password: "", passwordConfirm: "" };
+const EMPTY_ANSWERS = { phone: null, cert: null, purposes: {} };
+const PROFILE_LABELS = {
+  name_en: "이름", arc_no: "등록번호", nationality: "국적", visa_type: "체류자격",
+  stay_expiry: "체류기간", addr_kr: "체류지", birth_date: "생년월일", gender: "성별",
+};
+const GENDER_LABELS = { F: ["여성", "Female"], M: ["남성", "Male"] };
+const REUSABLE_PROFILE_KEYS = ["name_en", "arc_no", "nationality", "visa_type", "stay_expiry"];
+const EMAIL_PATTERN = /^(?=.{1,64}@)[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z]{2,63})+$/;
+
+function readOnboardingProgress() {
+  try {
+    const progress = JSON.parse(window.localStorage.getItem(ONBOARDING_PROGRESS_KEY) || "null");
+    if (!progress || typeof progress !== "object") return null;
+    return {
+      lang: progress.lang === "ko" ? "ko" : "en",
+      lastStep: Number.isInteger(progress.lastStep) ? progress.lastStep : 1,
+      completedScans: Array.isArray(progress.completedScans)
+        ? progress.completedScans.filter((key) => SCAN_PAGES.some((page) => page.key === key))
+        : [],
+      answers: progress.answers && typeof progress.answers === "object"
+        ? { ...EMPTY_ANSWERS, ...progress.answers, purposes: progress.answers.purposes || {} }
+        : { ...EMPTY_ANSWERS },
+      updatedAt: progress.updatedAt || null,
+      memberId: typeof progress.memberId === "string" ? progress.memberId : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readProfileDraft(expectedMemberId = "") {
+  try {
+    const draft = JSON.parse(window.sessionStorage.getItem(PROFILE_DRAFT_KEY) || "null");
+    if (!draft || typeof draft !== "object") return null;
+    if (expectedMemberId && draft.memberId && draft.memberId !== expectedMemberId) return null;
+    return {
+      profileDraft: draft.profileDraft && typeof draft.profileDraft === "object" ? draft.profileDraft : {},
+      dirtyFields: draft.dirtyFields && typeof draft.dirtyFields === "object" ? draft.dirtyFields : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractionFromSession(response) {
+  const profile = response?.state?.profile || {};
+  const responseFields = response?.ui?.type === "profile_confirm"
+    ? response.ui.payload?.fields || []
+    : [];
+  const fields = responseFields.length
+    ? responseFields
+    : Object.entries(profile)
+        .filter(([, value]) => ["string", "number"].includes(typeof value))
+        .map(([key, value]) => ({
+          key,
+          label: PROFILE_LABELS[key] || key,
+          value,
+          editable: key !== "arc_no",
+        }));
+  return {
+    profile,
+    fields,
+    state: response?.state || {},
+    agentResponse: response,
+  };
+}
+
+function passwordChecks(password, locale = "ko") {
+  const en = locale === "en";
+  return [
+    { label: en ? "8–64 characters" : "8~64자", met: password.length >= 8 && password.length <= 64 },
+    { label: en ? "Includes a letter" : "영문 포함", met: /[A-Za-z]/.test(password) },
+    { label: en ? "Includes a number" : "숫자 포함", met: /\d/.test(password) },
+    { label: en ? "Includes a special character" : "특수문자 포함", met: /[^A-Za-z0-9]/.test(password) },
+    { label: en ? "Letters, numbers, and symbols only" : "영문·숫자·특수문자만", met: /^[\x21-\x7E]+$/.test(password) },
+  ];
+}
+
+function authErrorMessage(error, locale = "ko") {
+  const en = locale === "en";
+  if (error?.code === "EMAIL_ALREADY_EXISTS") {
+    return en ? "This email is already registered. Sign in or use another email." : "이미 가입된 이메일이에요. 로그인하거나 다른 이메일을 사용해 주세요.";
+  }
+  if (error?.code === "INVALID_CREDENTIALS") {
+    return en ? "Check your email and password." : "이메일 또는 비밀번호를 확인해 주세요.";
+  }
+  const validationReasons = Array.isArray(error?.details)
+    ? [...new Set(error.details.map((detail) => detail?.reason).filter(Boolean))]
+    : [];
+  if (error?.code === "validation_failed" && validationReasons.length) {
+    return en ? "Check the information you entered." : validationReasons.join(" ");
+  }
+  return localizedError(error, locale, "인증 요청을 처리하지 못했어요.", "Could not process the authentication request.");
+}
 
 const card = {
   padding: 15, borderRadius: 14, border: "1px solid var(--line)", background: "#fff",
@@ -30,12 +126,18 @@ const mono = { fontFamily: "'IBM Plex Mono',monospace" };
 export default function App() {
   const [step, setStep] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(window.localStorage.getItem("settle_access_token")));
+  const [memberId, setMemberId] = useState(readMemberId);
   const [authMode, setAuthMode] = useState("login");
-  const [auth, setAuth] = useState({ email: "", password: "", passwordConfirm: "", passcode: "" });
+  const [auth, setAuth] = useState(() => ({ ...EMPTY_AUTH }));
   const [authMessage, setAuthMessage] = useState("");
+  const [authMessageType, setAuthMessageType] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
-  const [lang, setLang] = useState("en");
-  const [nat, setNat] = useState(null);
+  const [savedProgress, setSavedProgress] = useState(() => {
+    const progress = readOnboardingProgress();
+    return progress?.memberId && memberId && progress.memberId !== memberId ? null : progress;
+  });
+  const [lang, setLang] = useState(() => savedProgress?.lang || "en");
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
 
   // ── 에이전트 단일 스토어 ──
   // 서버 state 가 진실의 원천이다. 부분 병합하지 않고 통째로 교체한다.
@@ -47,20 +149,25 @@ export default function App() {
 
   const [scan, setScan] = useState(0);
   const [shots, setShots] = useState({});
-  const [captureError, setCaptureError] = useState("");
+  const [skippedShots, setSkippedShots] = useState({});
+  const [completedScans, setCompletedScans] = useState(() => savedProgress?.completedScans || []);
+  // 문자열이 아니라 { message, code, details }. code 가 있어야 재촬영으로
+  // 풀리는 오류와 그렇지 않은 오류(validation_failed)를 가를 수 있다.
+  const [captureError, setCaptureError] = useState(null);
   const [captureLoading, setCaptureLoading] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [extract, setExtract] = useState(null);
-  const [profileDraft, setProfileDraft] = useState({});
-  const [dirtyFields, setDirtyFields] = useState({});
+  const [profileDraft, setProfileDraft] = useState(() => readProfileDraft(memberId)?.profileDraft || {});
+  const [dirtyFields, setDirtyFields] = useState(() => readProfileDraft(memberId)?.dirtyFields || {});
   const [profileErrors, setProfileErrors] = useState({});
   const [profileSubmitting, setProfileSubmitting] = useState(false);
 
-  const [answers, setAnswers] = useState({ phone: null, cert: null, purposes: {} });
+  const [answers, setAnswers] = useState(() => savedProgress?.answers || { ...EMPTY_ANSWERS });
   const [verdict, setVerdict] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [previewActionId, setPreviewActionId] = useState("open_bank_account");
   const [previewBlobUrl, setPreviewBlobUrl] = useState("");
   const [approval, setApproval] = useState(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
@@ -68,25 +175,45 @@ export default function App() {
   const [ledger, setLedger] = useState([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState("");
+  const [cabinetBackStep, setCabinetBackStep] = useState(7);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [taskBusy, setTaskBusy] = useState("");
-  const [docs, setDocs] = useState(null);
-  const [openDoc, setOpenDoc] = useState(null);
-  const [formType, setFormType] = useState(DEFAULT_FORM_TYPE);
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const nativeCameraInputRef = useRef(null);
   const videoRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const cameraRequestRef = useRef(false);
-  const pastedImageHandlerRef = useRef(null);
+  const navigationHistoryRef = useRef([]);
+  const progressRef = useRef(savedProgress);
+  const locale = (agentState?.locale || lang) === "ko" ? "ko" : "en";
+  const t = (ko, en) => locale === "en" ? en : ko;
+  // 문자열(카메라·브라우저 오류)과 AgentError(서버 계약) 양쪽을 받는다.
+  const showCaptureError = (source) => setCaptureError(typeof source === "string"
+    ? { message: source, code: "", details: {} }
+    : { message: captureMessage(source, locale), code: source?.code || "", details: source?.details || {} });
+  const scanPages = SCAN_PAGES.map((page) => ({
+    ...page,
+    label: page[locale][0],
+    sub: page[locale][1],
+  }));
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  const stopCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    setCameraOpen(false);
+  };
 
   const startCamera = async (allowNativeFallback = true) => {
     if (cameraRequestRef.current || cameraStreamRef.current) return;
     cameraRequestRef.current = true;
-    setCaptureError("");
+    setCaptureError(null);
     setCameraStarting(true);
     let timeoutId;
     let timedOut = false;
@@ -94,21 +221,21 @@ export default function App() {
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         if (allowNativeFallback) nativeCameraInputRef.current?.click();
-        else setCaptureError("이 브라우저는 웹 카메라를 지원하지 않아요. 기기 카메라로 열기를 눌러 주세요.");
+        else showCaptureError(t("이 브라우저는 웹 카메라를 지원하지 않아요. 기기 카메라로 열기를 눌러 주세요.", "This browser does not support the web camera. Use the device camera instead."));
         return;
       }
       streamRequest = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
       const timeout = new Promise((_, reject) => {
         timeoutId = window.setTimeout(() => {
           timedOut = true;
-          reject(new Error("브라우저가 카메라 요청에 응답하지 않았어요. Chrome를 완전히 종료한 뒤 다시 실행해 주세요."));
+          reject(new Error(t("브라우저가 카메라 요청에 응답하지 않았어요. Chrome를 완전히 종료한 뒤 다시 실행해 주세요.", "The browser did not respond to the camera request. Fully close Chrome and try again.")));
         }, 8000);
       });
       cameraStreamRef.current = await Promise.race([streamRequest, timeout]);
       setCameraOpen(true);
     } catch (error) {
       if (timedOut) streamRequest?.then((stream) => stream.getTracks().forEach((track) => track.stop())).catch(() => {});
-      setCaptureError(error?.name === "NotAllowedError" ? "카메라 권한을 허용해 주세요." : error instanceof Error ? error.message : "카메라를 열지 못했어요.");
+      showCaptureError(error?.name === "NotAllowedError" ? t("카메라 권한을 허용해 주세요.", "Allow camera access to continue.") : error instanceof Error ? error.message : t("카메라를 열지 못했어요.", "Could not open the camera."));
     } finally {
       window.clearTimeout(timeoutId);
       cameraRequestRef.current = false;
@@ -125,7 +252,7 @@ export default function App() {
   useEffect(() => {
     if (cameraOpen && videoRef.current && cameraStreamRef.current) {
       videoRef.current.srcObject = cameraStreamRef.current;
-      videoRef.current.play().catch(() => setCaptureError("카메라 미리보기를 시작하지 못했어요."));
+      videoRef.current.play().catch(() => showCaptureError(t("카메라 미리보기를 시작하지 못했어요.", "Could not start the camera preview.")));
     }
   }, [cameraOpen]);
 
@@ -147,14 +274,13 @@ export default function App() {
     setLedgerError("");
     getLedger(sessionId)
       .then((entries) => { if (active) setLedger(Array.isArray(entries) ? entries : []); })
-      .catch((error) => { if (active) setLedgerError(error instanceof Error ? error.message : "실행 이력을 불러오지 못했어요."); })
+      .catch((error) => { if (active) setLedgerError(localizedError(error, locale, "실행 이력을 불러오지 못했어요.", "Could not load the action history.")); })
       .finally(() => { if (active) setLedgerLoading(false); });
     return () => { active = false; };
   }, [step, sessionId]);
 
   useEffect(() => {
     if (step !== 2) return;
-    startCamera(false);
     return () => {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
@@ -164,29 +290,67 @@ export default function App() {
   }, [step]);
 
   useEffect(() => {
-    if (step !== 2) return;
-    const pasteImage = (event) => {
-      const imageItem = [...(event.clipboardData?.items || [])].find((item) => item.type.startsWith("image/"));
-      const image = imageItem?.getAsFile();
-      if (!image) {
-        setCaptureError("클립보드에 이미지가 없어요. 이미지를 복사한 뒤 다시 붙여넣어 주세요.");
-        return;
-      }
-      event.preventDefault();
-      pastedImageHandlerRef.current?.(image);
+    if (!isAuthenticated || !memberId || step < 1 || step > 9) return;
+    const previous = progressRef.current || {};
+    const next = {
+      ...previous,
+      lang,
+      lastStep: Math.max(previous.lastStep || 1, step),
+      completedScans,
+      answers,
+      memberId,
+      updatedAt: new Date().toISOString(),
     };
-    window.addEventListener("paste", pasteImage);
-    return () => window.removeEventListener("paste", pasteImage);
-  }, [step]);
+    progressRef.current = next;
+    window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(next));
+    setSavedProgress(next);
+  }, [answers, completedScans, isAuthenticated, lang, memberId, step]);
 
-  const go = (n) => setStep(n);
+  useEffect(() => {
+    if (!memberId || step !== 3) return;
+    window.sessionStorage.setItem(PROFILE_DRAFT_KEY, JSON.stringify({
+      memberId,
+      profileDraft,
+      dirtyFields,
+    }));
+  }, [dirtyFields, memberId, profileDraft, step]);
 
-  const openPdfPreview = async (actionId = formType) => {
+  useEffect(() => {
+    if (!isAuthenticated || step < 1 || step > 5) return undefined;
+    const confirmRefresh = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", confirmRefresh);
+    return () => window.removeEventListener("beforeunload", confirmRefresh);
+  }, [isAuthenticated, step]);
+
+  const go = (nextStep, { replace = false } = {}) => {
+    if (nextStep === step) return;
+    if (!replace) navigationHistoryRef.current.push(step);
+    setStep(nextStep);
+  };
+
+  const back = (fallback = 0) => {
+    const previousStep = navigationHistoryRef.current.pop();
+    setStep(previousStep ?? fallback);
+  };
+
+  const requestOnboardingExit = () => setExitConfirmOpen(true);
+
+  const exitOnboarding = () => {
+    stopCamera();
+    setExitConfirmOpen(false);
+    navigationHistoryRef.current = [];
+    setStep(0);
+  };
+
+  const openPdfPreview = async () => {
     if (previewLoading) return;
     setPreviewLoading(true);
     setPreviewError("");
     try {
-      const response = applyAgent(await previewAction(actionId, sessionId));
+      const response = applyAgent(await previewAction(previewActionId, sessionId, locale));
       const responseUi = readUi(response);
       if (responseUi.type === "question") {
         go(4);
@@ -196,7 +360,7 @@ export default function App() {
         return;
       }
       if (responseUi.type !== "doc_preview") {
-        throw new Error(response?.reply || "PDF 미리보기 응답을 확인해 주세요.");
+        throw new Error(response?.reply || t("PDF 미리보기 응답을 확인해 주세요.", "Check the PDF preview response."));
       }
       const payload = responseUi.payload;
       const blob = await fetchDocument(payload.preview_url);
@@ -208,7 +372,7 @@ export default function App() {
       setPreview(payload);
       go(10);
     } catch (error) {
-      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(localizedError(error, locale, "PDF를 불러오지 못했어요.", "Could not load the PDF."));
     } finally {
       setPreviewLoading(false);
     }
@@ -226,7 +390,7 @@ export default function App() {
       setPreview({ ...document, warnings: [] });
       go(10);
     } catch (error) {
-      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 불러오지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(localizedError(error, locale, "PDF를 불러오지 못했어요.", "Could not load the PDF."));
     }
   };
 
@@ -240,7 +404,7 @@ export default function App() {
       link.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      if (!handleAuthError(error)) setPreviewError(error instanceof Error ? error.message : "PDF를 다운로드하지 못했어요.");
+      if (!handleAuthError(error)) setPreviewError(localizedError(error, locale, "PDF를 다운로드하지 못했어요.", "Could not download the PDF."));
     }
   };
 
@@ -249,9 +413,9 @@ export default function App() {
     setApprovalLoading(true);
     setApprovalError("");
     try {
-      applyAgent(await approveAction(approval.action_id, sessionId, approved));
+      applyAgent(await approveAction(approval.action_id, sessionId, approved, locale));
     } catch (error) {
-      if (!handleAuthError(error)) setApprovalError(error instanceof Error ? error.message : "승인 요청을 처리하지 못했어요.");
+      if (!handleAuthError(error)) setApprovalError(localizedError(error, locale, "승인 요청을 처리하지 못했어요.", "Could not process the approval request."));
     } finally {
       setApprovalLoading(false);
     }
@@ -261,12 +425,11 @@ export default function App() {
   const applyAgent = (response) => {
     if (response?.state) setAgentState(response.state);
     setUi(readUi(response));
-    // 승인 대기는 어느 응답에나 실려 온다. 여기서 한 번에 받아야 화면마다 유실되지 않는다.
-    const pendingApproval = response?.ui?.type === "approval"
+    if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    const nextApproval = response?.ui?.type === "approval"
       ? response.ui.payload
       : response?.state?.pending_approval;
-    setApproval(pendingApproval || null);
-    if (response?.reply) setMessages((current) => [...current, { from: "agent", text: response.reply }]);
+    setApproval(nextApproval || null);
     return response;
   };
 
@@ -276,33 +439,82 @@ export default function App() {
     if (error?.status !== 401 && error?.status !== 403) return false;
     clearToken();
     setIsAuthenticated(false);
+    setMemberId("");
     setAgentState(null);
     setUi({ type: "none", payload: {} });
     setMessages([]);
     setApproval(null);
     setAuthMode("login");
-    setAuthMessage(error.message || "로그인이 만료됐어요. 다시 로그인해 주세요.");
-    go(-1);
+    setAuthMessage(localizedError(error, locale, "로그인이 만료됐어요. 다시 로그인해 주세요.", "Your login has expired. Please sign in again."));
+    setAuthMessageType("error");
+    navigationHistoryRef.current = [];
+    go(-1, { replace: true });
     return true;
   };
 
+  const resumeSession = async () => {
+    if (sessionLoading) return;
+    setSessionLoading(true);
+    setToast("");
+    try {
+      const response = applyAgent(await createSession(lang));
+      const restored = extractionFromSession(response);
+      const restoredProfile = restored.profile || {};
+      const restoredFields = restored.fields || [];
+      if (restoredFields.length > 0) {
+        const privateDraft = readProfileDraft(memberId);
+        const serverDraft = Object.fromEntries(
+          restoredFields.map((field) => [field.key, field.value ?? restoredProfile[field.key] ?? ""])
+        );
+        setExtract(restored);
+        setProfileDraft({ ...serverDraft, ...(privateDraft?.profileDraft || {}) });
+        setDirtyFields(privateDraft?.dirtyFields || {});
+        setProfileErrors({});
+      }
+
+      const lastStep = progressRef.current?.lastStep || 1;
+      const responseUi = readUi(response);
+      const hasReusableProfile = REUSABLE_PROFILE_KEYS.every((key) => restoredProfile[key]);
+      const allScansCompleted = SCAN_PAGES.every((page) => completedScans.includes(page.key));
+      if (hasReusableProfile && completedScans.length === 0) {
+        setCompletedScans(SCAN_PAGES.map((page) => page.key));
+      }
+      const tasks = response?.state?.tasks || [];
+      const storedDocuments = response?.state?.documents || [];
+      let targetStep = 2;
+      if (lastStep >= 7 && storedDocuments.length > 0) targetStep = 7;
+      else if (lastStep >= 5 && tasks.length > 0) targetStep = 5;
+      else if (responseUi.type === "question" || (lastStep >= 4 && hasReusableProfile)) targetStep = 4;
+      else if (restoredFields.length > 0 && (lastStep >= 3 || allScansCompleted || hasReusableProfile)) targetStep = 3;
+      go(targetStep);
+    } catch (error) {
+      if (!handleAuthError(error)) setToast(localizedError(error, locale, "이전 진행 내용을 불러오지 못했어요.", "Could not restore your previous progress."));
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
   const approvalModal = approval
-    ? <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />
+    ? <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} locale={locale} />
     : null;
+  const activeModal = exitConfirmOpen
+    ? <ExitConfirmModal onContinue={() => setExitConfirmOpen(false)} onExit={exitOnboarding} locale={locale} />
+    : approvalModal;
 
   const openCabinetFromHome = async () => {
     if (sessionLoading) return;
     setSessionLoading(true);
+    setCabinetBackStep(0);
     setToast("");
     try {
       const response = agentState?.session_id ? null : await createSession(lang);
       if (response) applyAgent(response);
       if (!(response?.state?.session_id || agentState?.session_id)) {
-        throw new Error("상담 세션을 확인하지 못했어요.");
+        throw new Error(t("상담 세션을 확인하지 못했어요.", "Could not find your consultation session."));
       }
       go(9);
     } catch (error) {
-      if (!handleAuthError(error)) setToast(error?.message || "서류함을 불러오지 못했어요.");
+      if (!handleAuthError(error)) setToast(localizedError(error, locale, "서류함을 불러오지 못했어요.", "Could not open your documents."));
     } finally {
       setSessionLoading(false);
     }
@@ -311,7 +523,7 @@ export default function App() {
   // ── 0 스플래시 ──
   if (step === 0)
     return (
-      <Shell modal={approvalModal}>
+      <Shell modal={activeModal}>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
           <BridgeMark size={104} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
@@ -320,25 +532,35 @@ export default function App() {
           </div>
           <div style={{ width: 34, height: 1, background: "var(--line)" }} />
           <div style={{ fontSize: 15, lineHeight: 1.55, color: "oklch(0.45 0.012 60)", textAlign: "center", maxWidth: 250 }}>
-            은행은 한 번만 가세요.<br />서류는 저희가 먼저 준비해요.
+            {t("은행은 한 번만 가세요.", "Visit the bank only once.")}<br />{t("서류는 저희가 먼저 준비해요.", "We prepare your documents first.")}
           </div>
         </div>
         <div style={{ padding: "0 30px 40px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
           <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
             D-2 STUDENT VISA · BETA
           </div>
+          {isAuthenticated && savedProgress && (
+            <div className="saved-progress-note" role="status">
+              <span aria-hidden="true">✓</span>
+              <div><b>{t("진행 내용이 임시 저장되어 있어요", "Your progress is saved")}</b><small>{t("마지막 진행 단계와 선택 내용을 안전하게 불러옵니다.", "We will safely restore your last step and selections.")}</small></div>
+            </div>
+          )}
           <div style={{ width: "100%" }}>
-            <PrimaryButton onClick={() => {
-              if (isAuthenticated) go(1);
+            <PrimaryButton disabled={sessionLoading} onClick={() => {
+              if (isAuthenticated && savedProgress) resumeSession();
+              else if (isAuthenticated) go(1);
               else {
                 setAuthMode("login");
                 go(-1);
               }
-            }}>시작하기</PrimaryButton>
+            }}>{sessionLoading ? t("이전 진행 불러오는 중…", "Restoring progress…") : isAuthenticated && savedProgress ? t("이어서 하기", "Continue") : t("시작하기", "Get started")}</PrimaryButton>
           </div>
+          {isAuthenticated && savedProgress && (
+            <button type="button" onClick={() => go(1)} className="text-action">{t("언어 설정부터 다시 보기", "Choose language again")}</button>
+          )}
           {isAuthenticated && (
             <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> {sessionLoading ? "서류함 불러오는 중…" : "내 서류함 열기"}
+              <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
             </div>
           )}
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
@@ -349,60 +571,94 @@ export default function App() {
   // ── 인증 ──
   if (step === -1) {
     const signup = authMode === "signup";
-    const passwordMatches = auth.password && auth.password === auth.passwordConfirm;
-    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(auth.email.trim());
+    const normalizedEmail = auth.email.trim();
+    const validEmail = normalizedEmail.length <= 254 && EMAIL_PATTERN.test(normalizedEmail);
+    const rules = passwordChecks(auth.password, locale);
+    const validPassword = rules.every((rule) => rule.met);
+    const passwordMatches = Boolean(auth.passwordConfirm) && auth.password === auth.passwordConfirm;
     const canSubmit = signup
-      ? validEmail && auth.password.length >= 8 && passwordMatches
-      : validEmail && auth.password.length >= 8 && /^\d{4}$/.test(auth.passcode);
-    const updateAuth = (key) => (e) => setAuth((value) => ({ ...value, [key]: e.target.value }));
+      ? validEmail && validPassword && passwordMatches
+      : validEmail && auth.password.length >= 8;
+    const clearAuthError = () => {
+      if (authMessageType !== "error") return;
+      setAuthMessage("");
+      setAuthMessageType("");
+    };
+    const updateAuth = (key) => (e) => {
+      setAuth((value) => ({ ...value, [key]: e.target.value }));
+      clearAuthError();
+    };
+    const switchAuthMode = () => {
+      setAuthMode(signup ? "login" : "signup");
+      setAuth({ ...EMPTY_AUTH });
+      setAuthMessage("");
+      setAuthMessageType("");
+    };
     const submitAuth = async (e) => {
       e.preventDefault();
       if (!canSubmit || authLoading) return;
       setAuthLoading(true);
       setAuthMessage("");
+      setAuthMessageType("");
       try {
         if (signup) {
           await signUp(auth);
           setAuthMode("login");
-          setAuth((value) => ({ ...value, password: "", passwordConfirm: "", passcode: "" }));
-          setAuthMessage("회원가입이 완료됐어요. 로그인해 주세요.");
+          setAuth({ ...EMPTY_AUTH });
+          setAuthMessage(t("회원가입이 완료됐어요. 새 계정으로 로그인해 주세요.", "Your account is ready. Sign in with your new account."));
+          setAuthMessageType("success");
           return;
         }
-        await login(auth);
+        const response = await login(auth);
+        const nextMemberId = String(response?.memberId || readMemberId());
+        if (progressRef.current?.memberId && progressRef.current.memberId !== nextMemberId) {
+          progressRef.current = null;
+          window.localStorage.removeItem(ONBOARDING_PROGRESS_KEY);
+          setSavedProgress(null);
+          setCompletedScans([]);
+          setAnswers({ ...EMPTY_ANSWERS });
+          window.sessionStorage.removeItem(PROFILE_DRAFT_KEY);
+        }
+        setMemberId(nextMemberId);
         setIsAuthenticated(true);
         go(1);
       } catch (error) {
-        setAuthMessage(error instanceof Error ? error.message : "인증 요청을 처리하지 못했어요.");
+        setAuthMessage(authErrorMessage(error, locale));
+        setAuthMessageType("error");
       } finally {
         setAuthLoading(false);
       }
     };
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title={signup ? "회원가입" : "로그인"} onBack={() => go(0)} />
+      <Shell modal={activeModal}>
+        <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} />
         <div style={{ padding: "18px 26px 12px" }}>
           <BridgeMark size={56} />
-          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? "첫계좌를 시작해요" : "다시 만나서 반가워요"}</h2>
-          <p style={SUB}>{signup ? "사용할 이메일과 8자리 이상 비밀번호를 입력해 주세요." : "이메일과 비밀번호, 4자리 Passcode를 입력해 주세요."}</p>
+          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("첫계좌를 시작해요", "Create your First Account profile") : t("다시 만나서 반가워요", "Welcome back")}</h2>
+          <p style={SUB}>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
         </div>
         <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-          {authMessage && <div role="status" style={{ padding: "11px 13px", borderRadius: 11, background: "oklch(.55 .14 150/.09)", color: "oklch(.42 .12 150)", fontSize: 12.5, lineHeight: 1.45 }}>{authMessage}</div>}
-          <AuthInput label="이메일" type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" />
-          <AuthInput label="비밀번호" type="password" value={auth.password} onChange={updateAuth("password")} placeholder="비밀번호를 입력하세요" autoComplete={signup ? "new-password" : "current-password"} />
-          {signup ? (
+          {authMessage && <div role={authMessageType === "error" ? "alert" : "status"} className={`auth-notice ${authMessageType}`}>{authMessage}</div>}
+          <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} />
+          {auth.email && !validEmail && <FieldHint tone="error">{t("영문 이메일 형식으로 입력해 주세요. (예: name@example.com)", "Enter a valid email address, such as name@example.com.")}</FieldHint>}
+          <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={signup && Boolean(auth.password) && !validPassword} />
+          {signup && (
             <>
-              <AuthInput label="비밀번호 확인" type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder="비밀번호를 다시 입력하세요" autoComplete="new-password" />
-              {auth.passwordConfirm && !passwordMatches && <div style={{ marginTop: -8, color: "#b64b3d", fontSize: 11.5 }}>비밀번호가 일치하지 않아요.</div>}
+              <div className="password-guide" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+                <strong>{t("비밀번호 조건", "Password requirements")}</strong>
+                <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "•"} {rule.label}</span>)}</div>
+              </div>
+              <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} />
+              {auth.passwordConfirm && !passwordMatches && <FieldHint tone="error">{t("입력한 비밀번호가 서로 일치하지 않아요.", "The passwords do not match.")}</FieldHint>}
+              {passwordMatches && <FieldHint tone="success">{t("비밀번호가 일치해요.", "The passwords match.")}</FieldHint>}
             </>
-          ) : (
-            <AuthInput label="Passcode" type="password" value={auth.passcode} onChange={(e) => setAuth((value) => ({ ...value, passcode: e.target.value.replace(/\D/g, "").slice(0, 4) }))} placeholder="4자리 숫자" inputMode="numeric" maxLength={4} autoComplete="one-time-code" />
           )}
         </form>
         <div style={{ padding: "12px 26px 34px" }}>
-          <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? "처리 중…" : signup ? "회원가입" : "로그인"}</PrimaryButton>
-          <button type="button" onClick={() => { setAuthMode(signup ? "login" : "signup"); setAuthMessage(""); }}
+          <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? t("처리 중…", "Processing…") : signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")}</PrimaryButton>
+          <button type="button" onClick={switchAuthMode}
             style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
-            {signup ? "이미 계정이 있나요? 로그인" : "계정이 없나요? 회원가입"}
+            {signup ? t("이미 계정이 있나요? 로그인", "Already have an account? Sign in") : t("계정이 없나요? 회원가입", "Need an account? Sign up")}
           </button>
         </div>
       </Shell>
@@ -411,37 +667,25 @@ export default function App() {
 
   // ── 1 언어 선택 ──
   if (step === 1) {
-    // 언어를 고르는 순간이 세션의 시작점이다. locale 은 세션 생성 시 함께 넘긴다.
-    const beginSession = async () => {
-      if (sessionLoading) return;
-      setSessionLoading(true);
-      setToast("");
-      try {
-        applyAgent(await createSession(lang));
-        go(2);
-      } catch (error) {
-        if (!handleAuthError(error)) setToast(error?.message || "세션을 시작하지 못했어요.");
-      } finally {
-        setSessionLoading(false);
-      }
-    };
     return (
-      <Shell modal={approvalModal}>
-        <div style={{ paddingTop: 46 }}><Rail active={0} /></div>
+      <Shell modal={activeModal}>
+        <TopBar title={t("설정", "Settings")} onBack={requestOnboardingExit} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
+        <Rail active={0} locale={locale} />
         <div style={{ padding: "4px 26px 18px" }}>
-          <h2 style={H2}>사용할 언어를 선택하세요</h2>
-          <p style={SUB}>안내와 서류 설명에 사용할 언어예요. 나중에 다시 바꿀 수 있어요.</p>
+          <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
+          <p style={SUB}>{t("안내와 서류 설명에 사용할 언어예요. 나중에 다시 바꿀 수 있어요.", "We will use it for guidance and document explanations. You can change it later.")}</p>
         </div>
         <div className="scroll" style={{ padding: "0 26px 20px" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Pick on={lang === "ko"} onClick={() => setLang("ko")}><span style={{ width: "100%", textAlign: "left", padding: "0 4px" }}>한국어 <small style={{ float: "right", color: "var(--muted)", fontWeight: 500 }}>Korean</small></span></Pick>
-            <Pick on={lang === "en"} onClick={() => setLang("en")}><span style={{ width: "100%", textAlign: "left", padding: "0 4px" }}>English <small style={{ float: "right", color: "var(--muted)", fontWeight: 500 }}>영어</small></span></Pick>
+          <div className="language-list">
+            <LanguageChoice code="KO" title="한국어" subtitle="Korean" selected={lang === "ko"} onClick={() => setLang("ko")} />
+            <LanguageChoice code="EN" title="English" subtitle="영어" selected={lang === "en"} onClick={() => setLang("en")} />
           </div>
+          <div className="resume-help">{t("같은 계정에 저장된 프로필이 있으면 사진을 다시 등록하지 않고 이어서 진행해요.", "If this account has a saved profile, you can continue without uploading the photos again.")}</div>
         </div>
         <div style={{ padding: "8px 26px 34px" }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{toast}</div>}
-          <PrimaryButton disabled={sessionLoading} onClick={beginSession}>
-            {sessionLoading ? "세션을 여는 중…" : "계속"}
+          <PrimaryButton disabled={sessionLoading} onClick={resumeSession}>
+            {sessionLoading ? t("진행 내용 확인 중…", "Checking your progress…") : t("계속", "Continue")}
           </PrimaryButton>
         </div>
       </Shell>
@@ -450,31 +694,30 @@ export default function App() {
 
   // ── 2 촬영 ──
   if (step === 2) {
-    const stopCamera = () => {
-      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-      setCameraOpen(false);
-    };
     const uploadPng = async (png) => {
-      setCaptureError("");
+      setCaptureError(null);
       setCaptureLoading(true);
       try {
-        const page = SCAN_PAGES[scan];
-        const data = await uploadAndExtract(png, page.docType);
+        const page = scanPages[scan];
+        const data = await uploadAndExtract(png, page.docType, locale);
         const next = { ...shots, [page.key]: png };
+        const nextSkipped = { ...skippedShots };
+        const nextCompletedScans = [...new Set([...completedScans, page.key])];
+        delete nextSkipped[page.key];
         setShots(next);
+        setCompletedScans(nextCompletedScans);
+        setSkippedShots(nextSkipped);
         setExtract(data);
         if (data.agentResponse) applyAgent(data.agentResponse);
         setProfileDraft(Object.fromEntries((data.fields || []).map((field) => [field.key, field.value])));
         setDirtyFields({});
         setProfileErrors({});
-        setNat(data?.profile?.nationality || null);
-        const empty = SCAN_PAGES.findIndex((page) => !next[page.key]);
+        const empty = scanPages.findIndex((page) => !next[page.key] && !nextSkipped[page.key]);
         if (empty === -1) {
-          go(3);
+          go((data.fields || []).length > 0 ? 3 : 4);
         } else setScan(empty);
       } catch (error) {
-        if (!handleAuthError(error)) setCaptureError(captureMessage(error));
+        if (!handleAuthError(error)) showCaptureError(error);
       } finally {
         setCaptureLoading(false);
       }
@@ -483,49 +726,84 @@ export default function App() {
       const source = event.target.files?.[0];
       event.target.value = "";
       if (!source) return;
+      setCaptureLoading(true);
       try {
         await uploadPng(await convertImageToPng(source));
       } catch (error) {
-        setCaptureError(captureMessage(error));
-      }
-    };
-    pastedImageHandlerRef.current = async (source) => {
-      try {
-        await uploadPng(await convertImageToPng(source));
-      } catch (error) {
-        setCaptureError(captureMessage(error));
+        showCaptureError(error);
+      } finally {
+        setCaptureLoading(false);
       }
     };
     const takePhoto = async () => {
       try {
-        const png = await captureVideoFrameAsPng(videoRef.current, `${SCAN_PAGES[scan].key}.png`);
+        const png = await captureVideoFrameAsPng(videoRef.current, `${scanPages[scan].key}.png`);
         stopCamera();
         await uploadPng(png);
       } catch (error) {
-        setCaptureError(captureMessage(error));
+        showCaptureError(error);
       }
     };
-    const currentShot = shots[SCAN_PAGES[scan].key];
+    const attachFile = () => {
+      stopCamera();
+      fileInputRef.current?.click();
+    };
+    const skipCurrentDocument = async () => {
+      if (captureLoading) return;
+      stopCamera();
+      setCaptureError("");
+      const page = scanPages[scan];
+      const nextSkipped = page.docType === "passport"
+        ? { ...skippedShots, [page.key]: true }
+        : { ...skippedShots, arcFront: true, arcBack: true };
+      setSkippedShots(nextSkipped);
+      const skippedKeys = page.docType === "passport" ? [page.key] : ["arcFront", "arcBack"];
+      setCompletedScans((current) => [...new Set([...current, ...skippedKeys])]);
+      const empty = scanPages.findIndex((item) => !shots[item.key] && !nextSkipped[item.key]);
+      if (empty !== -1) {
+        setScan(empty);
+        return;
+      }
+      if (Object.keys(shots).length > 0 && (extract?.fields || []).length > 0) {
+        go(3);
+        return;
+      }
+      setCaptureLoading(true);
+      try {
+        applyAgent(await confirmProfile(sessionId, {}, locale));
+        go(4);
+      } catch (error) {
+        if (!handleAuthError(error)) setCaptureError(localizedError(error, locale, "상담을 시작하지 못했어요.", "Could not start the consultation."));
+      } finally {
+        setCaptureLoading(false);
+      }
+    };
+    const currentShot = shots[scanPages[scan].key];
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="서류 촬영" onBack={() => go(1)} />
-        <Rail active={1} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
+        <Rail active={1} locale={locale} />
         <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>3장을 촬영하세요</h2>
-          <p style={SUB}>외국인등록증 앞면·뒷면, 여권 사진면. 카드를 눌러 전환하세요.</p>
+          <h2 style={H2}>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+          <p style={SUB}>{t("외국인등록증 앞면·뒷면, 여권 사진면. 카드를 눌러 전환하세요.", "Residence card front and back, plus the passport photo page. Tap a card to switch.")}</p>
         </div>
         <div style={{ padding: "0 24px 14px", display: "flex", gap: 8 }}>
-          {SCAN_PAGES.map((p, i) => {
-            const done = shots[p.key], active = scan === i;
+          {scanPages.map((p, i) => {
+            const done = shots[p.key], skipped = skippedShots[p.key], active = scan === i;
             return (
               <div key={p.key} onClick={() => setScan(i)} className="tap"
+                role="button" tabIndex={0} aria-current={active ? "step" : undefined}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setScan(i); }}
                 style={{ flex: 1, minHeight: 56, padding: "10px 11px", borderRadius: 12,
-                  background: active ? "oklch(0.7 0.13 45 / 0.08)" : done ? "oklch(0.55 0.14 150 / 0.1)" : "oklch(0.95 0.008 60)",
-                  border: active ? "1.5px solid var(--brand-2)" : done ? "1px solid oklch(0.55 0.14 150 / 0.4)" : "1px solid var(--line)" }}>
-                <div style={{ fontSize: 11.5, fontWeight: 800, color: active ? "oklch(0.5 0.1 45)" : done ? "oklch(0.42 0.12 150)" : "var(--muted)" }}>
+                  background: done ? "oklch(0.55 0.14 150 / 0.1)" : skipped ? "oklch(0.93 0.008 60)" : active ? "oklch(0.55 0.14 250 / 0.07)" : "oklch(0.95 0.008 60)",
+                  border: done ? "1.5px solid oklch(0.55 0.14 150 / 0.52)" : active ? "1.5px solid var(--brand)" : "1px solid var(--line)",
+                  boxShadow: active ? `0 0 0 2px ${done ? "oklch(0.55 0.14 150 / 0.13)" : "oklch(0.55 0.14 250 / 0.11)"}` : "none" }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: done ? "oklch(0.42 0.12 150)" : active ? "var(--brand)" : "var(--muted)" }}>
                   {done ? "✓ " : ""}{p.label}
                 </div>
-                <div style={{ fontSize: 10.5, ...mono, color: "var(--muted)", marginTop: 3 }}>{p.sub}</div>
+                <div style={{ fontSize: 10.5, ...mono, color: done ? "oklch(0.42 0.08 150)" : "var(--muted)", marginTop: 3 }}>
+                  {done ? t("업로드 완료", "Uploaded") : skipped ? t("없음", "Not available") : p.sub}
+                </div>
               </div>
             );
           })}
@@ -534,24 +812,32 @@ export default function App() {
           {currentShot && (
             <div style={{ width: 40, height: 40, borderRadius: 99, background: "var(--ok)", color: "#fff", fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
           )}
-          <div className="scan-preview">
-            {cameraStarting
-              ? <div className="camera-starting" role="status">카메라 권한을 확인하는 중이에요.<small>브라우저 팝업에서 ‘허용’을 눌러 주세요.</small></div>
+          <div className={`scan-preview${captureLoading ? " loading" : ""}`}>
+            {captureLoading
+              ? <CaptureProgress locale={locale} />
               : cameraOpen
-              ? <video ref={videoRef} autoPlay playsInline muted aria-label={`${SCAN_PAGES[scan].label} 카메라 미리보기`} />
+              ? <video ref={videoRef} autoPlay playsInline muted aria-label={`${scanPages[scan].label} ${t("카메라 미리보기", "camera preview")}`} />
               : currentShot
-              ? <ImagePreview file={currentShot} alt={`${SCAN_PAGES[scan].label} 촬영 미리보기`} />
-              : <div style={{ ...mono, fontSize: 11, color: "oklch(0.7 0.01 60)", textAlign: "center" }}>{SCAN_PAGES[scan].label}</div>}
+              ? <ImagePreview file={currentShot} alt={`${scanPages[scan].label} ${t("촬영 미리보기", "preview")}`} />
+              : <div style={{ ...mono, fontSize: 11, color: "oklch(0.7 0.01 60)", textAlign: "center" }}>{scanPages[scan].label}</div>}
           </div>
-          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {cameraStarting ? "카메라 권한 대기 중" : cameraOpen ? "카메라 준비됨" : currentShot ? "PNG 변환 완료" : "카드를 안내선 안에 맞춰 주세요"}</div>
+          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("카드를 안내선 안에 맞춰 주세요", "Align the document inside the guide")}</div>
         </div>
-        {captureError && <div role="alert" className="capture-error">{captureError} <button type="button" onClick={() => nativeCameraInputRef.current?.click()}>기기 카메라로 열기</button></div>}
-        <div style={{ margin: "12px 24px 0", padding: "10px 13px", borderRadius: 12, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.5, color: "var(--muted)" }}>이미지를 복사했다면 <b>Cmd+V</b> 또는 <b>Ctrl+V</b>로 붙여넣을 수 있어요.<br />재학증명서는 사진 촬영 없이 종이 원본만 준비하면 돼요.</div>
-        <div style={{ padding: "16px 24px 34px", display: "flex", gap: 12 }}>
+        <CaptureAlert error={captureError} locale={locale}
+          onDeviceCamera={() => nativeCameraInputRef.current?.click()}
+          onReviewEarlier={() => { setScan(0); setCaptureError(null); }} />
+        <div style={{ padding: "12px 24px 16px", display: "flex", gap: 8, alignItems: "center" }}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
-          <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? "업로드·인식 중…" : cameraStarting ? "카메라 연결 중…" : cameraOpen ? "사진 찍기" : currentShot ? "이 장 다시 찍기" : "촬영하기"}</PrimaryButton></div>
-          <button type="button" disabled={captureLoading || cameraStarting} onClick={cameraOpen ? stopCamera : () => fileInputRef.current?.click()} className="file-attach tap">{cameraOpen ? "닫기" : "파일 첨부"}</button>
+          <button type="button" disabled={captureLoading || cameraStarting || Boolean(currentShot)} onClick={skipCurrentDocument} className="document-skip tap">
+            {scanPages[scan].docType === "passport"
+              ? <>{t("여권이", "No")}<br />{t("없어요", "passport")}</>
+              : t("등록증이 없어요", "No residence card")}
+          </button>
+          <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
+          <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="file-attach compact tap">
+            {t("파일 첨부", "File upload")}
+          </button>
         </div>
       </Shell>
     );
@@ -579,7 +865,7 @@ export default function App() {
       setProfileSubmitting(true);
       setProfileErrors({});
       try {
-        const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields);
+        const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields, locale);
         applyAgent(response);
         setExtract((current) => ({
           ...current,
@@ -595,38 +881,38 @@ export default function App() {
         if (error?.status === 422 && error?.code === "validation_failed") {
           const details = error.details;
           const entries = Array.isArray(details)
-            ? details.map((detail) => [detail.field, detail.reason || error.message])
+            ? details.map((detail) => [detail.field, localizedText(detail.reason || error.message, locale, t("입력값을 확인해 주세요.", "Check this value."))])
             : Object.entries(details || {}).map(([field, reason]) => [field, String(reason)]);
           setProfileErrors(Object.fromEntries(entries.filter(([field]) => field && field !== "message")));
         }
         if (!error?.details || Object.keys(error.details).length === 0) {
-          setProfileErrors({ _form: error instanceof Error ? error.message : "프로필을 확인하지 못했어요." });
+          setProfileErrors({ _form: localizedError(error, locale, "프로필을 확인하지 못했어요.", "Could not confirm the profile.") });
         }
       } finally {
         setProfileSubmitting(false);
       }
     };
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="프로필 만들기" onBack={() => go(2)} />
-        <Rail active={2} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<ExitButton onClick={requestOnboardingExit} locale={locale} />} />
+        <Rail active={2} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>카드에서 만든 프로필</h2>
-          <p style={SUB}>노란색 항목을 확인하고, 잘못 읽은 값만 수정해 주세요.</p>
+          <h2 style={H2}>{t("카드에서 만든 프로필", "Profile from your documents")}</h2>
+          <p style={SUB}>{t("노란색 항목을 확인하고, 잘못 읽은 값만 수정해 주세요.", "Check highlighted fields and edit only incorrect values.")}</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 9 }}>
-          <Label>OCR 추출 결과</Label>
+          <Label>{t("OCR 추출 결과", "OCR results")}</Label>
           {fields.map((field) => (
-            <Field key={field.key} label={field.label} value={profileDraft[field.key] ?? field.value}
+            <Field key={field.key} label={profileFieldLabel(field, locale)} value={profileDraft[field.key] ?? field.value}
               confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
-              error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} />
+              error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} locale={locale} />
           ))}
           {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
         </div>
         <div style={{ padding: "14px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>수정 불가 항목은 마스킹된 값으로 전송되지 않아요.</div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{t("수정 불가 항목은 마스킹된 값으로 전송되지 않아요.", "Read-only masked values are not submitted.")}</div>
           <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
-            {profileSubmitting ? "확인 중…" : "확인하고 계속"}
+            {profileSubmitting ? t("확인 중…", "Checking…") : t("확인하고 계속", "Confirm and continue")}
           </PrimaryButton>
         </div>
       </Shell>
@@ -635,29 +921,15 @@ export default function App() {
 
   // ── 4 AI 상담 (서버가 내려주는 question 을 그린다) ──
   if (step === 4) {
-    const hasPurpose = Object.values(answers.purposes).some(Boolean);
-    const updatePhone = (phone) => { setAnswers((value) => ({ ...value, phone })); setVerdict(null); };
-    const updateCert = (cert) => { setAnswers((value) => ({ ...value, cert })); setVerdict(null); };
-    const togglePurpose = (index) => {
-      setAnswers((value) => ({ ...value, purposes: { ...value.purposes, [index]: !value.purposes[index] } }));
-      setVerdict(null);
-    };
-    const runVerdict = async () => {
-      setChatLoading(true);
-      const scenario = new URLSearchParams(window.location.search).get("scenario");
-      setVerdict(await getVerdict("mock", { ...answers, scenario }));
-      setChatLoading(false);
-    };
-
     if (verdict) {
       const editAnswers = () => setVerdict(null);
       return (
-        <Shell modal={approvalModal}>
-          <TopBar title="첫계좌 AI" onBack={editAnswers} right={<span className="review-status"><i />심사 완료</span>} />
-          <Rail active={3} />
+        <Shell modal={activeModal}>
+          <TopBar title={t("첫계좌 AI", "First Account AI")} onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
+          <Rail active={3} locale={locale} />
           <div className="scroll review-scroll">
             <section className="review-hero">
-              <div className="review-kicker">계좌&nbsp;&nbsp;개설&nbsp;&nbsp;진단&nbsp;&nbsp;결과</div>
+              <div className="review-kicker">{t("계좌 개설 진단 결과", "ACCOUNT OPENING REVIEW")}</div>
               <h1>{verdict.headline}</h1>
               <p>{verdict.summary}</p>
             </section>
@@ -669,26 +941,19 @@ export default function App() {
                   <p>{verdict.blocker.body}</p>
                 </section>
               )}
-              <AccountCard title="한도제한계좌" subtitle="한도제한계좌 · 1일 이체 100만원 한도" account={verdict.limited} />
-              <AccountCard title="일반계좌" subtitle="일반계좌" account={verdict.regular} />
+              <AccountCard title={t("한도제한계좌", "Limited account")} subtitle={t("한도제한계좌 · 1일 이체 100만원 한도", "Limited account · KRW 1,000,000 daily transfer limit")} account={verdict.limited} />
+              <AccountCard title={t("일반계좌", "Standard account")} subtitle={t("일반계좌", "Standard account")} account={verdict.regular} />
 
               <details className="review-sources">
-                <summary>판정 근거</summary>
+                <summary>{t("판정 근거", "Review basis")}</summary>
                 {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
               </details>
-              <p className="review-disclaimer">이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.</p>
+              <p className="review-disclaimer">{t("이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.", "This is a preliminary review based on bank policy. The bank makes the final account-opening decision.")}</p>
             </div>
           </div>
           <div className="review-actions">
-            <button type="button" onClick={editAnswers} className="review-edit tap">답변 수정</button>
-            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind)}</button>
-          </div>
-          <div style={{ padding: "0 20px 20px" }}>
-            <button type="button" onClick={() => go(5)} className="tap"
-              style={{ width: "100%", minHeight: 44, borderRadius: 12, border: "1px solid var(--line)",
-                background: "#fff", fontSize: 13.5, fontWeight: 700 }}>
-              할 일 목록
-            </button>
+            <button type="button" onClick={editAnswers} className="review-edit tap">{t("답변 수정", "Edit answers")}</button>
+            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind, locale)}</button>
           </div>
         </Shell>
       );
@@ -705,21 +970,21 @@ export default function App() {
       setToast("");
       setMessages((current) => [...current, { from: "user", text: value }]);
       try {
-        const response = applyAgent(await sendChat(sessionId, value));
+        const response = applyAgent(await sendChat(sessionId, value, locale));
         setChatInput("");
         const next = readUi(response).type;
         if (next !== "question") go(5);      // 질문이 끝나면 과제 목록으로
       } catch (error) {
-        if (!handleAuthError(error)) setToast(error?.message || "메시지를 보내지 못했어요.");
+        if (!handleAuthError(error)) setToast(localizedError(error, locale, "메시지를 보내지 못했어요.", "Could not send the message."));
       } finally {
         setChatLoading(false);
       }
     };
 
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="첫계좌 AI" onBack={() => go(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />상담 중</span>} />
-        <Rail active={3} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("첫계좌 AI", "First Account AI")} onBack={() => back(3)} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
+        <Rail active={3} locale={locale} />
         <div className="scroll chat-scroll" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.map((message, index) => (
             <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}>
@@ -730,16 +995,16 @@ export default function App() {
           {question && (
             <ChatBubble avatar wide>
               <QuestionCard payload={question} options={options} value={chatInput}
-                onChange={setChatInput} onSubmit={answer} disabled={chatLoading} />
+                onChange={setChatInput} onSubmit={answer} disabled={chatLoading} locale={locale} />
             </ChatBubble>
           )}
 
           {/* 모르는 ui.type 이면 reply 만 보여주고 다음 화면으로 넘어갈 길을 남긴다 */}
           {!question && !chatLoading && (
-            <button type="button" onClick={() => go(5)} className="chat-submit tap">할 일 목록 보기</button>
+            <button type="button" onClick={() => go(5)} className="chat-submit tap">{t("할 일 목록 보기", "View tasks")}</button>
           )}
 
-          {chatLoading && <ChatBubble avatar>답변을 정리하고 있어요…</ChatBubble>}
+          {chatLoading && <ChatBubble avatar>{t("답변을 정리하고 있어요…", "Preparing your answer…")}</ChatBubble>}
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
 
           <div ref={chatEndRef} aria-hidden="true" />
@@ -755,114 +1020,142 @@ export default function App() {
       if (taskBusy) return;
       setTaskBusy(task.id);
       setToast("");
+      if (APPLICATIONS[task.id]) setPreviewActionId(task.id);
       try {
-        const response = applyAgent(await startAction(sessionId, task.id));
+        const response = applyAgent(await startAction(sessionId, task.id, locale));
         // 다음 질문이 오면 상담 화면으로 되돌아간다. 그 밖의 ui 는 담당 파트(6~9)가 그린다.
         if (readUi(response).type === "question") go(4);
       } catch (error) {
         // 409 prerequisite_missing 은 상태를 바꾸지 않고 토스트만 띄운다.
-        if (!handleAuthError(error)) setToast(error?.message || "과제를 시작하지 못했어요.");
+        if (!handleAuthError(error)) setToast(localizedError(error, locale, "과제를 시작하지 못했어요.", "Could not start the task."));
       } finally {
         setTaskBusy("");
       }
     };
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="할 일" onBack={() => go(4)} />
-        <Rail active={3} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("할 일", "Tasks")} onBack={() => back(4)} />
+        <Rail active={3} locale={locale} />
         <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>지금 할 수 있는 일</h2>
-          <p style={SUB}>잠긴 항목은 먼저 끝내야 하는 과제가 있어요.</p>
+          <h2 style={H2}>{t("지금 할 수 있는 일", "What you can do now")}</h2>
+          <p style={SUB}>{t("잠긴 항목은 먼저 끝내야 하는 과제가 있어요.", "Locked tasks require another task to be completed first.")}</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
-          {/* confirm 직후 ui.type 이 doc_preview 로 오면 생성된 신청서를 여기서 바로 보여준다. */}
           {ui.type === "doc_preview" && ui.payload?.document_id && (
             <div style={{ ...card, display: "flex", gap: 13, borderColor: "var(--brand-2)" }}>
               <div style={{ width: 52, height: 70, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
-                <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--brand-2)" }}>방금 만든 신청서</div>
+                <div style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--brand-2)" }}>{t("방금 만든 신청서", "New application")}</div>
                 <b style={{ display: "block", marginTop: 4, fontSize: 14.5 }}>{ui.payload.title}</b>
                 <button type="button" onClick={() => openStoredDocument(ui.payload)} className="tap"
                   style={{ marginTop: 8, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>
-                  미리보기
+                  {t("미리보기", "Preview")}
                 </button>
               </div>
             </div>
           )}
           {tasks.length === 0 && (
             <div style={{ ...card, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 }}>
-              아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.
+              {t("아직 받은 과제가 없어요. 상담을 이어가면 목록이 채워져요.", "No tasks yet. Continue the conversation to build your task list.")}
             </div>
           )}
           {tasks.map((task) => (
-            <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} />
+            <TaskCard key={task.id} task={task} busy={taskBusy === task.id} onStart={startTask} locale={locale} />
           ))}
         </div>
         <div style={{ padding: "10px 24px 34px", display: "flex", flexDirection: "column", gap: 10 }}>
           {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
-          <PrimaryButton onClick={() => go(4)}>상담으로 돌아가기</PrimaryButton>
+          <PrimaryButton onClick={() => go(4)}>{t("상담으로 돌아가기", "Back to chat")}</PrimaryButton>
           {/* 화면 6~9(서류·승인·이력)로 들어가는 유일한 진입로다. */}
           <button type="button" onClick={() => go(7)} className="tap"
             style={{ width: "100%", minHeight: 46, borderRadius: 12, border: "1px solid var(--line)",
               background: "#fff", fontSize: 13.5, fontWeight: 700, color: "oklch(0.25 0.012 60)" }}>
-            내 신청서 · 서류함
+            {t("내 신청서 · 서류함", "Applications · Documents")}
           </button>
         </div>
-        {approval && <ApprovalModal approval={approval} loading={approvalLoading} error={approvalError} onDecision={decideApproval} />}
       </Shell>
     );
   }
 
   // ── 6 준비 안내 ──
-  if (step === 6 && verdict)
+  if (step === 6 && verdict) {
+    const action = nextAction(verdict, locale);
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="준비할 것" onBack={() => go(4)} />
-        <Rail active={4} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("준비할 것", "What to prepare")} onBack={() => back(4)} />
+        <Rail active={4} locale={locale} />
         <div style={{ padding: "4px 24px 16px" }}>
           <div style={{ padding: 17, borderRadius: 16, background: "#c44f40", color: "#fff" }}>
-            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.85, marginBottom: 8 }}>다음 할 일</div>
-            <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{nextAction(verdict).title}</div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8, opacity: 0.92 }}>{nextAction(verdict).meta}</div>
+            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.85, marginBottom: 8 }}>{t("다음 할 일", "NEXT STEP")}</div>
+            <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{action.title}</div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8, opacity: 0.92 }}>{action.meta}</div>
           </div>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ ...card, padding: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>{nextAction(verdict).cardTitle}</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{nextAction(verdict).cardMeta}</div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>{action.cardTitle}</div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{action.cardMeta}</div>
             <div style={{ marginTop: 11, display: "flex", flexDirection: "column", gap: 9 }}>
-              {nextAction(verdict).steps.map((s, i) => (
+              {action.steps.map((s, i) => (
                 <div key={i} style={{ display: "flex", gap: 10, fontSize: 12.5, lineHeight: 1.45, color: "oklch(0.35 0.012 60)" }}>
                   <span style={{ ...mono, color: "#c44f40", fontWeight: 700 }}>{i + 1}</span><span>{s}</span>
                 </div>
               ))}
             </div>
-            <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{nextAction(verdict).note}</div>
+            <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{action.note}</div>
           </div>
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          <PrimaryButton onClick={() => go(7)}>내 신청서</PrimaryButton>
+          <PrimaryButton onClick={() => go(7)}>{t("내 신청서", "My applications")}</PrimaryButton>
         </div>
       </Shell>
     );
+  }
 
   // ── 7 신청서 ──
-  if (step === 7)
+  if (step === 7) {
+    const taskApplicationIds = (agentState?.tasks || [])
+      .map((task) => task.id)
+      .filter((id) => APPLICATIONS[id]);
+    const applicationIds = taskApplicationIds.length > 0
+      ? [...new Set(taskApplicationIds)]
+      : ["alien_registration", "open_bank_account"];
+    if (!applicationIds.includes(previewActionId)) applicationIds.push(previewActionId);
+    const selectedApplication = APPLICATIONS[previewActionId] || APPLICATIONS.open_bank_account;
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="내 신청서" onBack={() => go(6)} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("내 신청서", "My applications")} onBack={() => back(verdict ? 6 : 5)} />
         <div style={{ padding: "4px 24px 16px" }}>
-          <Rail active={4} />
-          <h2 style={H2}>채워진 신청서 {documents.length}종</h2>
-          <p style={SUB}>인쇄하거나 창구에서 휴대폰으로 보여주세요.</p>
+          <Rail active={4} locale={locale} />
+          <h2 style={H2}>{t(`채워진 신청서 ${documents.length}종`, `${documents.length} completed application(s)`)}</h2>
+          <p style={SUB}>{t("인쇄하거나 창구에서 휴대폰으로 보여주세요.", "Print them or show them on your phone at the counter.")}</p>
         </div>
         <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ ...card, padding: 13 }}>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 9 }}>{t("생성할 신청서", "Application to generate")}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {applicationIds.map((actionId) => {
+                const application = APPLICATIONS[actionId];
+                const selected = previewActionId === actionId;
+                return (
+                  <button key={actionId} type="button" onClick={() => setPreviewActionId(actionId)} className="tap"
+                    aria-pressed={selected}
+                    style={{ minHeight: 42, padding: "9px 11px", borderRadius: 10,
+                      border: selected ? "1.5px solid var(--brand)" : "1px solid var(--line)",
+                      background: selected ? "oklch(0.55 0.14 250 / 0.07)" : "#fff",
+                      color: selected ? "var(--brand)" : "oklch(0.25 0.012 60)", textAlign: "left", fontWeight: 700 }}>
+                    {application[locale]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {documents.length === 0 && (
             <div style={{ ...card, display: "flex", gap: 13 }}>
               <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
-                <b style={{ fontSize: 14.5 }}>계좌개설신청서</b>
-                <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>미리보기를 누르면 AI가 신청서를 생성합니다.</div>
+                <b style={{ fontSize: 14.5 }}>{selectedApplication[locale]}</b>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>{t("미리보기를 누르면 AI가 신청서를 생성합니다.", "Select preview to generate the application.")}</div>
               </div>
             </div>
           )}
@@ -871,72 +1164,56 @@ export default function App() {
               <div style={{ width: 62, height: 84, flex: "none", borderRadius: 7, border: "1px solid oklch(0.88 0.01 60)", background: "repeating-linear-gradient(0deg, oklch(0.9 0.01 60) 0 3px, oklch(0.97 0.008 60) 3px 9px)" }} />
               <div style={{ flex: 1 }}>
                 <b style={{ fontSize: 14.5 }}>{d.title}</b>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{formatDate(d.created_at)}</div>
-                <button type="button" onClick={() => openStoredDocument(d)} className="tap" style={{ marginTop: 10, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>저장된 PDF 보기</button>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Noto Sans KR',sans-serif" }}>{formatDate(d.created_at, locale)}</div>
+                <button type="button" onClick={() => openStoredDocument(d)} className="tap" style={{ marginTop: 10, padding: 0, border: 0, background: "transparent", color: "var(--brand-2)", fontSize: 11.5, fontWeight: 700 }}>{t("저장된 PDF 보기", "View saved PDF")}</button>
               </div>
             </div>
           ))}
         </div>
         <div style={{ padding: "16px 24px 34px" }}>
-          {/* 신청서 종류가 previewAction 의 action_id 를 정한다. */}
-          <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 8 }}>신청서 종류</div>
-          <div role="radiogroup" aria-label="신청서 종류" style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-            {FORM_TYPES.map((type) => {
-              const selected = formType === type.id;
-              return (
-                <button key={type.id} type="button" role="radio" aria-checked={selected}
-                  onClick={() => setFormType(type.id)} className="tap"
-                  style={{ textAlign: "left", padding: "11px 13px", borderRadius: 12,
-                    border: `1px solid ${selected ? "var(--brand-2)" : "var(--line)"}`,
-                    background: selected ? "oklch(0.96 0.02 60)" : "#fff" }}>
-                  <b style={{ fontSize: 13.5 }}>{type.title}</b>
-                  <div style={{ marginTop: 3, fontSize: 11.5, color: "var(--muted)" }}>{type.sub}</div>
-                </button>
-              );
-            })}
-          </div>
           {previewError && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{previewError}</div>}
-          <PrimaryButton disabled={previewLoading} onClick={() => openPdfPreview(formType)}>
-            {previewLoading ? "PDF 생성 중…" : "PDF 미리보기"}
+          <PrimaryButton disabled={previewLoading} onClick={openPdfPreview}>
+            {previewLoading ? t("PDF 생성 중…", "Generating PDF…") : t(`${selectedApplication.ko} 미리보기`, `Preview ${selectedApplication.en}`)}
           </PrimaryButton>
-          <button type="button" onClick={() => go(9)} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>내 서류함 · 실행 이력</button>
+          <button type="button" onClick={() => { setCabinetBackStep(7); go(9); }} className="tap" style={{ width: "100%", marginTop: 9, minHeight: 46, borderRadius: 12, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{t("내 서류함 · 실행 이력", "Documents · History")}</button>
         </div>
       </Shell>
     );
+  }
 
   // ── 9 내 서류함 / 실행 이력 ──
   if (step === 9)
     return (
-      <Shell modal={approvalModal}>
-        <TopBar title="내 서류함 · 실행 이력" onBack={() => go(7)} />
+      <Shell modal={activeModal}>
+        <TopBar title={t("내 서류함 · 실행 이력", "Documents · History")} onBack={() => back(cabinetBackStep)} />
         <div className="scroll" style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
           <section>
-            <h2 style={{ ...H2, fontSize: 20 }}>저장 문서</h2>
+            <h2 style={{ ...H2, fontSize: 20 }}>{t("저장 문서", "Saved documents")}</h2>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
-              {documents.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>최근 응답에 저장된 문서가 없습니다.</div>}
+              {documents.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("최근 응답에 저장된 문서가 없습니다.", "No saved documents yet.")}</div>}
               {documents.map((document) => (
                 <div key={document.id} style={card}>
                   <b style={{ fontSize: 14 }}>{document.title}</b>
-                  <div style={{ marginTop: 4, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(document.created_at)}</div>
+                  <div style={{ marginTop: 4, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(document.created_at, locale)}</div>
                   <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                    <button type="button" onClick={() => openStoredDocument(document)} className="tap" style={smallActionStyle}>미리보기</button>
-                    <button type="button" onClick={() => downloadPdf(document)} className="tap" style={smallActionStyle}>PDF 다운로드</button>
+                    <button type="button" onClick={() => openStoredDocument(document)} className="tap" style={smallActionStyle}>{t("미리보기", "Preview")}</button>
+                    <button type="button" onClick={() => downloadPdf(document)} className="tap" style={smallActionStyle}>{t("PDF 다운로드", "Download PDF")}</button>
                   </div>
                 </div>
               ))}
             </div>
           </section>
           <section>
-            <h2 style={{ ...H2, fontSize: 20 }}>실행 이력</h2>
+            <h2 style={{ ...H2, fontSize: 20 }}>{t("실행 이력", "Action history")}</h2>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 9 }}>
-              {ledgerLoading && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>불러오는 중…</div>}
+              {ledgerLoading && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("불러오는 중…", "Loading…")}</div>}
               {ledgerError && <div role="alert" className="capture-error" style={{ margin: 0 }}>{ledgerError}</div>}
-              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>아직 승인 후 실행된 작업이 없습니다.</div>}
+              {!ledgerLoading && !ledgerError && ledger.length === 0 && <div style={{ ...card, color: "var(--muted)", fontSize: 12.5 }}>{t("아직 승인 후 실행된 작업이 없습니다.", "No approved actions yet.")}</div>}
               {ledger.map((entry, index) => (
                 <div key={`${entry.action || "action"}-${entry.approved_at || index}`} style={card}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || "실행 작업"}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
-                  <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at)}</div>
-                  {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>근거 · {item}</div>)}
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{entry.action || t("실행 작업", "Action")}</b><span style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5 }}>{entry.risk_level}</span></div>
+                  <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11.5 }}>{formatDate(entry.approved_at, locale)}</div>
+                  {(entry.evidence || []).map((item) => <div key={item} style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)" }}>{t("근거", "Evidence")} · {item}</div>)}
                 </div>
               ))}
             </div>
@@ -949,8 +1226,8 @@ export default function App() {
   // ── PDF 뷰어 ──
   if (step === 10 && preview && previewBlobUrl)
     return (
-      <Shell modal={approvalModal} dark>
-        <TopBar title={preview.title} onBack={() => go(9)} />
+      <Shell modal={activeModal} dark>
+        <TopBar title={preview.title} onBack={() => back(9)} />
         {(preview.warnings || []).length > 0 && (
           <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
             {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
@@ -960,12 +1237,23 @@ export default function App() {
           <iframe title={preview.title} src={previewBlobUrl} style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
         </div>
         <div style={{ padding: "16px 20px 34px", display: "flex", gap: 9 }}>
-          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>PDF 다운로드</button>
+          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, color: "#fff", background: "var(--brand-2)" }}>{t("PDF 다운로드", "Download PDF")}</button>
         </div>
       </Shell>
     );
 
-  return <Shell modal={approvalModal}><div style={{ padding: 40 }}>로딩 중…</div></Shell>;
+  return (
+    <Shell modal={activeModal}>
+      <TopBar title="첫계좌" onBack={() => back(0)} />
+      <div style={{ padding: "28px 26px", display: "flex", flexDirection: "column", gap: 14 }}>
+        <h2 style={H2}>{t("화면을 다시 연결할게요", "Let's reconnect your screen")}</h2>
+        <p style={SUB}>{t("진행 내용은 임시 저장되어 있어요. 이어하기를 눌러 안전하게 돌아가세요.", "Your progress is saved temporarily. Continue to return safely.")}</p>
+        <PrimaryButton disabled={sessionLoading} onClick={resumeSession}>
+          {sessionLoading ? t("불러오는 중…", "Loading…") : t("저장된 진행 이어하기", "Continue saved progress")}
+        </PrimaryButton>
+      </div>
+    </Shell>
+  );
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
@@ -988,6 +1276,30 @@ function ImagePreview({ file, alt }) {
   }, [file]);
   return url ? <img src={url} alt={alt} /> : null;
 }
+function CaptureProgress({ locale = "ko" }) {
+  const en = locale === "en";
+  const [phase, setPhase] = useState(0);
+  const phases = en
+    ? ["Sending image securely", "Reading the text", "Organizing the details"]
+    : ["이미지를 안전하게 보내고 있어요", "글자를 하나씩 읽고 있어요", "필요한 정보를 정리하고 있어요"];
+  useEffect(() => {
+    const interval = window.setInterval(() => setPhase((current) => (current + 1) % phases.length), 1500);
+    return () => window.clearInterval(interval);
+  }, [phases.length]);
+  return (
+    <div className="capture-progress" role="status" aria-live="polite">
+      <div className="ai-reading-mark" aria-hidden="true">
+        <span className="ai-reading-label">AI</span>
+        <span className="reading-line line-one"><i /></span>
+        <span className="reading-line line-two"><i /></span>
+        <span className="reading-line line-three"><i /></span>
+      </div>
+      <b>{en ? "AI is reading your document" : "AI가 서류를 읽고 있어요"}</b>
+      <span className="scan-status" key={phase}>{phases[phase]}<i aria-hidden="true">...</i></span>
+      <small>{en ? "This may take a moment. Please keep this screen open." : "잠시 걸릴 수 있어요. 화면을 그대로 두세요."}</small>
+    </div>
+  );
+}
 function AuthInput({ label, type = "text", value, onChange, placeholder, ...inputProps }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -997,6 +1309,9 @@ function AuthInput({ label, type = "text", value, onChange, placeholder, ...inpu
     </label>
   );
 }
+function FieldHint({ children, tone = "info" }) {
+  return <div className={`auth-field-hint ${tone}`}>{children}</div>;
+}
 function ChatBubble({ children, mine, avatar, wide }) {
   return (
     <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}`}>
@@ -1004,12 +1319,6 @@ function ChatBubble({ children, mine, avatar, wide }) {
       <div className="chat-bubble">{children}</div>
     </div>
   );
-}
-function ChatOptions({ children, wrap }) {
-  return <div className={`chat-options${wrap ? " wrap" : ""}`}>{children}</div>;
-}
-function ChatChoice({ children, selected, onClick }) {
-  return <button type="button" onClick={onClick} className={`chat-choice tap${selected ? " selected" : ""}`}>{selected && <span>✓</span>}{children}</button>;
 }
 function AccountCard({ title, subtitle, account }) {
   return (
@@ -1020,8 +1329,17 @@ function AccountCard({ title, subtitle, account }) {
     </section>
   );
 }
-function Row2({ children }) {
-  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, marginBottom: 10 }}>{children}</div>;
+function ExitButton({ onClick, locale = "ko" }) {
+  return <button type="button" onClick={onClick} className="exit-button">{locale === "en" ? "Exit" : "나가기"}</button>;
+}
+function LanguageChoice({ code, title, subtitle, selected, onClick }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={selected} className={`language-choice${selected ? " selected" : ""}`}>
+      <span className="language-code" aria-hidden="true">{code}</span>
+      <span className="language-copy"><b>{title}</b><small>{subtitle}</small></span>
+      <span className="language-check" aria-hidden="true">{selected ? "✓" : ""}</span>
+    </button>
+  );
 }
 function Pick({ children, on, ok, onClick }) {
   const accent = ok ? "var(--ok)" : "var(--brand-2)";
@@ -1034,20 +1352,37 @@ function Pick({ children, on, ok, onClick }) {
     </div>
   );
 }
-function ApprovalModal({ approval, loading, error, onDecision }) {
+function ExitConfirmModal({ onContinue, onExit, locale = "ko" }) {
+  const en = locale === "en";
   return (
-    <div role="dialog" aria-modal="true" aria-label="실행 승인" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
+    <div role="dialog" aria-modal="true" aria-labelledby="exit-title" className="modal-backdrop">
+      <div className="exit-dialog">
+        <div className="exit-dialog-icon" aria-hidden="true">☁</div>
+        <h3 id="exit-title">{en ? "Pause for now?" : "진행을 잠시 멈출까요?"}</h3>
+        <p>{en ? "Photos are not stored in your browser. Only your progress is saved temporarily on this device, and your server profile is restored after you sign in again." : "사진 자체는 브라우저에 보관하지 않고, 진행 단계만 이 기기에 임시 저장해요. 다음에 로그인하면 서버에 저장된 프로필로 이어갈 수 있어요."}</p>
+        <div className="exit-dialog-actions">
+          <button type="button" onClick={onContinue} className="tap">{en ? "Keep going" : "계속 진행"}</button>
+          <button type="button" onClick={onExit} className="tap primary">{en ? "Save and exit" : "저장하고 나가기"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) {
+  const en = locale === "en";
+  return (
+    <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"} style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "flex-end" }}>
       <div style={{ width: "100%", padding: "22px 20px 30px", borderRadius: "24px 24px 0 0", background: "#fff" }}>
         <div style={{ ...mono, color: "var(--brand-2)", fontSize: 10.5, fontWeight: 800, letterSpacing: ".1em" }}>APPROVAL · {approval.risk_level || "L2"}</div>
-        <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || "실행 승인"}</h3>
+        <h3 style={{ margin: "10px 0 8px", fontSize: 20 }}>{approval.title || (en ? "Action approval" : "실행 승인")}</h3>
         {(approval.summary || []).map((item) => <div key={item} style={{ padding: "7px 0", fontSize: 12.5 }}>· {item}</div>)}
-        {(approval.evidence || []).length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--muted)" }}>근거</div>}
+        {(approval.evidence || []).length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Evidence" : "근거"}</div>}
         {(approval.evidence || []).map((item) => <div key={item} style={{ padding: "4px 0", fontSize: 11.5, color: "var(--muted)" }}>· {item}</div>)}
-        <p style={{ margin: "12px 0", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5 }}>아직 외부 예약이나 제출은 실행되지 않았습니다.</p>
+        <p style={{ margin: "12px 0", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5 }}>{en ? "No external reservation or submission has been made yet." : "아직 외부 예약이나 제출은 실행되지 않았습니다."}</p>
         {error && <div role="alert" className="capture-error" style={{ margin: "0 0 10px" }}>{error}</div>}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>취소</button>
-          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? "처리 중…" : "확인"}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 50, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Processing…" : "처리 중…") : (en ? "Confirm" : "확인")}</button>
         </div>
       </div>
     </div>
@@ -1056,51 +1391,141 @@ function ApprovalModal({ approval, loading, error, onDecision }) {
 
 const smallActionStyle = { flex: 1, minHeight: 38, borderRadius: 10, border: "1px solid var(--line)", background: "#fff", fontSize: 11.5, fontWeight: 700 };
 
-function formatDate(value) {
+function formatDate(value, locale = "ko") {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("ko-KR");
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(locale === "en" ? "en-US" : "ko-KR");
 }
-function Sheet({ children, title, onClose }) {
+// 촬영 화면 오류 문구. 계약의 error code 별로 다음 행동을 다르게 안내한다.
+function localizedText(value, locale, englishFallback) {
+  const text = value ? String(value) : "";
+  return locale === "en" && /[가-힣]/.test(text) ? englishFallback : text || englishFallback;
+}
+
+function localizedError(error, locale, koreanFallback, englishFallback) {
+  if (locale !== "en") return error instanceof Error && error.message ? error.message : koreanFallback;
+  const byCode = {
+    invalid_or_missing_token: "Your login has expired. Please sign in again.",
+    session_access_denied: "You cannot access this session. Please sign in again.",
+    prerequisite_missing: "Complete the required task first.",
+    extraction_failed: "We could not read the image. Please try again.",
+    validation_failed: "Check the information you entered.",
+    blocked_by_law: "This step cannot proceed due to legal requirements.",
+    network: "Could not connect to the network. Please try again.",
+  };
+  if (byCode[error?.code]) return byCode[error.code];
+  return localizedText(error instanceof Error ? error.message : "", locale, englishFallback);
+}
+
+function captureMessage(error, locale = "ko") {
+  const en = locale === "en";
+  switch (error?.code) {
+    case "extraction_failed":
+      return en ? "We could not read the image. Avoid glare and capture the entire document." : "사진에서 정보를 읽지 못했어요. 빛 반사를 피해 카드 전체가 보이게 다시 촬영해 주세요.";
+    case "unsupported_media_type":
+      return en ? "Only PNG images are supported. Retake the photo to convert it automatically." : "PNG 이미지만 올릴 수 있어요. 다시 촬영하면 자동으로 PNG로 변환돼요.";
+    case "upload_not_completed":
+      return en ? "The upload did not finish. Please try again." : "사진 업로드가 끝나지 않았어요. 다시 촬영해 주세요.";
+    case "network":
+      return en ? "Could not connect to the network. Please try again." : "네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.";
+    default:
+      return localizedError(error, locale, "이미지를 처리하지 못했어요.", "Could not process the image.");
+  }
+}
+
+// 신원 불일치 항목의 값. 국적·성별은 코드로 오므로 사람이 읽는 말로 바꾼다.
+function mismatchValue(key, value, locale = "ko") {
+  const en = locale === "en";
+  if (!value) return en ? "none" : "없음";
+  // 한글 국가명 맵은 8개국뿐이다. 영어는 서류(MRZ)에 찍힌 코드를 그대로 쓴다.
+  if (key === "nationality") return en ? value : nationalityLabel(value);
+  if (key === "gender") return (GENDER_LABELS[value] || [value, value])[en ? 1 : 0];
+  return String(value);
+}
+
+// 촬영 화면 오류 배너.
+// validation_failed 는 앞서 올린 신분증과 신원이 다르다는 뜻이라 다시 찍어도
+// 해결되지 않는다. 재촬영 대신 앞 서류를 다시 보게 안내한다.
+function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier }) {
+  const en = locale === "en";
+  if (!error) return null;
+  if (error.code !== "validation_failed") {
+    return (
+      <div role="alert" className="capture-error">
+        {error.message}{" "}
+        <button type="button" onClick={onDeviceCamera}>{en ? "Open device camera" : "기기 카메라로 열기"}</button>
+      </div>
+    );
+  }
+  // 영어는 localizedError 가 서버 문구를 고정 문장으로 덮어써서 어느 항목이
+  // 다른지 사라진다. 항목은 아래에서 직접 그린다.
+  const mismatched = Object.entries(error.details?.mismatched || {});
   return (
-    <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "oklch(0.2 0.012 60 / 0.45)", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: "26px 26px 34px 34px", padding: "18px 14px 26px", maxHeight: "74%", overflow: "auto" }}>
-        <div style={{ padding: "0 10px 12px", fontSize: 16, fontWeight: 800 }}>{title}</div>
-        {children}
+    <div role="alert" className="capture-error">
+      {en ? "This document belongs to a different person than the ID you uploaded earlier." : error.message}
+      {mismatched.length > 0 && (
+        <div style={{ margin: "6px 0 0", display: "flex", flexDirection: "column", gap: 2 }}>
+          {mismatched.map(([key, pair]) => (
+            <div key={key} style={{ ...mono, fontSize: 11 }}>
+              · {profileFieldLabel({ key }, locale)} · {mismatchValue(key, pair?.existing, locale)} → {mismatchValue(key, pair?.incoming, locale)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 6 }}>
+        {en ? "Retaking the photo will not fix this. Please re-check the ID you uploaded earlier."
+            : "다시 촬영해도 해결되지 않아요. 앞서 올린 신분증부터 다시 확인해 주세요."}
+        <button type="button" onClick={onReviewEarlier}>{en ? "Review earlier document" : "앞 서류 다시 보기"}</button>
       </div>
     </div>
   );
 }
 
-// 촬영 화면 오류 문구. 계약의 error code 별로 다음 행동을 다르게 안내한다.
-function captureMessage(error) {
-  switch (error?.code) {
-    case "extraction_failed":
-      return "사진에서 정보를 읽지 못했어요. 빛 반사를 피해 카드 전체가 보이게 다시 촬영해 주세요.";
-    case "unsupported_media_type":
-      return "PNG 이미지만 올릴 수 있어요. 다시 촬영하면 자동으로 PNG로 변환돼요.";
-    case "upload_not_completed":
-      return "사진 업로드가 끝나지 않았어요. 다시 촬영해 주세요.";
-    case "network":
-      return "네트워크에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.";
-    default:
-      return error instanceof Error ? error.message : "이미지를 처리하지 못했어요.";
-  }
+function profileFieldLabel(field, locale = "ko") {
+  const labels = {
+    name_en: ["이름", "Name"],
+    arc_no: ["등록번호", "Registration number"],
+    nationality: ["국적", "Nationality"],
+    visa_type: ["체류자격", "Visa type"],
+    stay_expiry: ["체류기간", "Stay expiry"],
+    addr_kr: ["체류지", "Address in Korea"],
+    birth_date: ["생년월일", "Date of birth"],
+    gender: ["성별", "Sex"],
+  };
+  const label = labels[field?.key];
+  if (label) return label[locale === "en" ? 1 : 0];
+  if (locale === "en") return String(field?.key || "Field").replaceAll("_", " ");
+  return field?.label || field?.key || "";
 }
 
-function mask(arc) {
-  if (!arc) return "";
-  return arc.slice(0, 8) + "••••••";
+function verdictCta(kind, locale = "ko") {
+  const labels = locale === "en"
+    ? { ready: "What should I bring?", passport: "How do I renew it?", phone: "How do I get a phone?", cert: "Where can I get it?" }
+    : { ready: "무엇을 가져가나요?", passport: "어떻게 재발급하나요?", phone: "휴대폰은 어떻게 개통하나요?", cert: "어디서 떼나요?" };
+  return labels[kind] || (locale === "en" ? "View next step" : "다음 단계 보기");
 }
-function verdictCta(kind) {
-  return {
-    ready: "무엇을 가져가나요?",
-    passport: "어떻게 재발급하나요?",
-    phone: "휴대폰은 어떻게 개통하나요?",
-    cert: "어디서 떼나요?",
-  }[kind] || "다음 단계 보기";
-}
-function nextAction(v) {
+function nextAction(v, locale = "ko") {
+  if (locale === "en") {
+    if (v.kind === "passport")
+      return { title: "Renew your passport before visiting the bank", meta: "Embassy in Korea · 1–3 weeks · Residence card unaffected",
+        cardTitle: "Passport renewal", cardMeta: "Current passport · Residence card · Embassy visit",
+        note: "Return to the app when your new passport is issued. We will prepare the documents again.",
+        steps: ["Book an appointment with your embassy in Korea.", "Bring your residence card and current passport.", "Return to the app after receiving the new passport number."] };
+    if (v.kind === "phone")
+      return { title: "Get a prepaid phone in your name", meta: "Any mobile carrier store · Bring residence card and passport · Same-day activation",
+        cardTitle: "Phone activation", cardMeta: "Must be in your name · Prepaid MVNO plans accepted",
+        note: "A number registered to a friend cannot be used. It must be in your name.",
+        steps: ["Bring your residence card and passport to a mobile carrier store.", "Ask for a prepaid plan; a Korean bank account is not required.", "Make sure the number is registered in your name."] };
+    if (v.kind === "cert")
+      return { title: "Print your enrollment certificate", meta: "School portal or international office · Paper original · Issued within 3 months",
+        cardTitle: "Enrollment certificate", cardMeta: "Enrollment certificate or admission letter · Issued by your school",
+        note: "We do not scan this document. Bring the paper original for the bank to check.",
+        steps: ["Sign in to your school portal and print the certificate.", "If classes have not started, use your admission letter instead.", "Bring the paper original issued within the last 3 months."] };
+    return { title: "Visit the bank with your documents", meta: "Residence card, passport, enrollment certificate, and printed application",
+      cardTitle: "Enrollment certificate", cardMeta: "Enrollment certificate or admission letter · Issued by your school",
+      note: "We do not scan this document. Bring the paper original for the bank to check.",
+      steps: ["Print it from your school portal or contact the international office.", "Bring the paper original issued within the last 3 months.", "If classes have not started, use your admission letter instead."] };
+  }
   if (v.kind === "passport")
     return { title: "은행 방문 전에 여권을 재발급하세요", meta: "주한 대사관 · 1~3주 · 외국인등록증 영향 없음",
       cardTitle: "여권 재발급", cardMeta: "기존 여권 · 외국인등록증 · 대사관 방문",
