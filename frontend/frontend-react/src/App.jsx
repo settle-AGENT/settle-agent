@@ -1414,40 +1414,8 @@ export default function App() {
   if (step === 4) {
     if (verdict) {
       const editAnswers = () => setVerdict(null);
-      return (
-        <Shell modal={activeModal}>
-          <TopBar title={t("AI 상담", "AI consultation")} onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
-          <Rail active={3} locale={locale} />
-          <div className="scroll review-scroll">
-            <section className="review-hero">
-              <div className="review-kicker">{t("계좌 개설 진단 결과", "ACCOUNT OPENING REVIEW")}</div>
-              <h1>{verdict.headline}</h1>
-              <p>{verdict.summary}</p>
-            </section>
-
-            <div className="review-content">
-              {verdict.blocker && (
-                <section className="review-card blocker">
-                  <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
-                  <p>{verdict.blocker.body}</p>
-                </section>
-              )}
-              <AccountCard title={t("한도제한계좌", "Limited account")} subtitle={t("한도제한계좌 · 1일 이체 100만원 한도", "Limited account · KRW 1,000,000 daily transfer limit")} account={verdict.limited} />
-              <AccountCard title={t("일반계좌", "Standard account")} subtitle={t("일반계좌", "Standard account")} account={verdict.regular} />
-
-              <details className="review-sources">
-                <summary>{t("판정 근거", "Review basis")}</summary>
-                {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
-              </details>
-              <p className="review-disclaimer">{t("이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.", "This is a preliminary review based on bank policy. The bank makes the final account-opening decision.")}</p>
-            </div>
-          </div>
-          <div className="review-actions">
-            <button type="button" onClick={editAnswers} className="review-edit tap">{t("답변 수정", "Edit answers")}</button>
-            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind, locale)}</button>
-          </div>
-        </Shell>
-      );
+      return <ReviewResultScreen locale={locale} modal={activeModal} verdict={verdict}
+        onBack={editAnswers} onNext={() => go(6)} />;
     }
 
     const question = ui.type === "question" ? ui.payload : null;
@@ -1778,37 +1746,8 @@ export default function App() {
 
   // ── 6 준비 안내 ──
   if (step === 6 && verdict) {
-    const action = nextAction(verdict, locale);
-    return (
-      <Shell modal={activeModal}>
-        <TopBar title={t("준비할 것", "What to prepare")} onBack={() => back(4)} />
-        <Rail active={4} locale={locale} />
-        <div style={{ padding: "4px 24px 16px" }}>
-          <div style={{ padding: 17, borderRadius: 16, background: "#c44f40", color: "#fff" }}>
-            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.85, marginBottom: 8 }}>{t("다음 할 일", "NEXT STEP")}</div>
-            <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{action.title}</div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8, opacity: 0.92 }}>{action.meta}</div>
-          </div>
-        </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ ...card, padding: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>{action.cardTitle}</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{action.cardMeta}</div>
-            <div style={{ marginTop: 11, display: "flex", flexDirection: "column", gap: 9 }}>
-              {action.steps.map((s, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, fontSize: 12.5, lineHeight: 1.45, color: "oklch(0.35 0.012 60)" }}>
-                  <span style={{ ...mono, color: "#c44f40", fontWeight: 700 }}>{i + 1}</span><span>{s}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{action.note}</div>
-          </div>
-        </div>
-        <div className="bottom-cta">
-          <PrimaryButton onClick={() => go(7)}>{t("내 신청서", "My applications")}</PrimaryButton>
-        </div>
-      </Shell>
-    );
+    return <PreparationScreen locale={locale} modal={activeModal} verdict={verdict}
+      onBack={() => back(4)} onNext={() => go(7)} />;
   }
 
   // ── 7 신청서 만들기 ──
@@ -1939,46 +1878,10 @@ export default function App() {
 
   // ── PDF 뷰어 ──
   if (step === 10 && preview && previewBlobUrl) {
-    const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
-    const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
-    const dotStyle = (activeDot) => ({ width: 6, height: 6, borderRadius: 99, border: 0, padding: 0,
-      background: activeDot ? "var(--brand-2)" : "oklch(0.55 0.01 60)" });
-    const arrowStyle = { border: 0, background: "transparent", color: "oklch(0.78 0.01 60)", fontSize: 15, padding: "0 4px", lineHeight: 1 };
-    return (
-      <Shell modal={activeModal} dark>
-        <TopBar title={preview.title} onBack={() => back(7)} />
-        {(preview.warnings || []).length > 0 && (
-          <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
-            {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
-          </div>
-        )}
-        <div className="scroll" style={{ padding: "0 20px 12px" }}>
-          <iframe title={preview.title} src={pageCount ? `${previewBlobUrl}#page=${page}` : previewBlobUrl}
-            style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
-        </div>
-        {pageCount > 1 && (
-          <div style={{ padding: "0 20px 4px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button type="button" className="tap" style={arrowStyle} aria-label="Previous page"
-                disabled={page <= 1} onClick={() => setPdfPage(page - 1)}>‹</button>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                {Array.from({ length: pageCount }, (_, i) => (
-                  <button key={i} type="button" aria-label={`Page ${i + 1}`} aria-current={page === i + 1}
-                    className="tap" style={dotStyle(page === i + 1)} onClick={() => setPdfPage(i + 1)} />
-                ))}
-              </div>
-              <button type="button" className="tap" style={arrowStyle} aria-label="Next page"
-                disabled={page >= pageCount} onClick={() => setPdfPage(page + 1)}>›</button>
-            </div>
-            <div style={{ ...mono, fontSize: 11, color: "oklch(0.78 0.01 60)" }}>{page} / {pageCount}</div>
-          </div>
-        )}
-        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 20, paddingRight: 20, display: "flex", gap: 9 }}>
-          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, fontSize: 13 }}>{t("PDF 다운로드", "Download PDF")}</button>
-          {approval && <button type="button" onClick={() => setApprovalVisible(true)} className="tap" style={{ ...smallActionStyle, minHeight: 52, border: 0, fontSize: 14, color: "#fff", background: "var(--brand-2)" }}>{t("발급하기", "Issue")}</button>}
-        </div>
-      </Shell>
-    );
+    return <PdfPreviewScreen locale={locale} modal={activeModal} preview={preview}
+      previewBlobUrl={previewBlobUrl} pdfPage={pdfPage} onPageChange={setPdfPage}
+      approval={approval} onBack={() => back(7)} onDownload={() => downloadPdf(preview)}
+      onIssue={() => setApprovalVisible(true)} />;
   }
   return (
     <Shell modal={activeModal}>
@@ -1995,6 +1898,47 @@ export default function App() {
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
+function ReviewResultScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  return (
+    <Shell modal={modal}>
+      <TopBar title={t("사전 확인 결과", "Pre-check result")} onBack={onBack} right={<span className="review-status"><i />{t("사전 확인 완료", "Pre-check complete")}</span>} />
+      <Rail active={3} locale={locale} />
+      <div className="scroll review-scroll">
+        <section className="review-hero">
+          <div className="review-kicker">{t("계좌 개설 사전 확인 결과", "ACCOUNT OPENING PRE-CHECK")}</div>
+          <h1>{verdict.headline}</h1>
+          <p>{verdict.summary}</p>
+        </section>
+        <div className="review-content">
+          {verdict.blocker && (
+            <section className="review-card blocker">
+              <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
+              <p>{verdict.blocker.body}</p>
+            </section>
+          )}
+          <section className="review-account-section" aria-label={t("계좌 유형별 안내", "Account type information")}>
+            <div className="review-section-title">{t("계좌 유형별 안내", "Account type information")}</div>
+            <div className="review-account-list">
+              <AccountCard title={t("한도제한계좌", "Limited account")} subtitle={t("1일 이체 100만원 한도", "KRW 1,000,000 daily transfer limit")} account={verdict.limited} />
+              <AccountCard title={t("일반계좌", "Standard account")} subtitle={t("거래 한도 제한 없음", "No restricted transaction limit")} account={verdict.regular} />
+            </div>
+          </section>
+          <details className="review-sources">
+            <summary>{t("판정 근거", "Review basis")}</summary>
+            {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
+          </details>
+          <p className="review-disclaimer">{t("이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.", "This is a preliminary review based on bank policy. The bank makes the final account-opening decision.")}</p>
+        </div>
+      </div>
+      <div className="review-actions">
+        <button type="button" onClick={onBack} className="review-edit tap">{t("답변 수정", "Edit answers")}</button>
+        <button type="button" onClick={onNext} className="review-next tap">{verdictCta(verdict.kind, locale)}</button>
+      </div>
+    </Shell>
+  );
+}
+
 function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToChat, onOpen }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
@@ -2007,25 +1951,64 @@ function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToCha
     <Rail active={3} locale={locale} />
     <div className="document-flow-head"><h2>{pick("\uacc4\uc88c \uac1c\uc124\uae4c\uc9c0 \uc11c\ub958 2\uac1c", "Two documents to open your account")}</h2><p>{pick("\uacc4\uc88c\ub97c \ub9cc\ub4e4\ub824\uba74 \uba3c\uc800 \uc678\uad6d\uc778\ub4f1\ub85d\uc774 \ub418\uc5b4 \uc788\uc5b4\uc57c \ud574\uc694. \uadf8\ub798\uc11c \ub450 \uc11c\ub958\ub97c \uc21c\uc11c\ub300\ub85c \ub9cc\ub4e4\uc5b4 \ub4dc\ub824\uc694.", "You need alien registration first. We will prepare both documents in order.")}</p></div>
     <div className="scroll document-flow-list">
-      {steps.map((item, index) => { const status = taskById[item.actionId]?.status; const done = status === "done"; const active = status === "in_progress" || status === "available"; return <React.Fragment key={item.actionId}>
-        {index > 0 && <div className="document-flow-arrow">{"\u2193"}</div>}
-        <section className={`document-flow-card${active ? " active" : ""}`}><div className="document-flow-row"><span className="document-flow-number">{index + 1}</span><div><b>{item.title}</b><p>{item.description}</p></div><em>{done ? pick("\uc644\ub8cc", "Done") : status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div>{active && <button type="button" onClick={() => onOpen(item.actionId)}>{status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}{item.actionId === "open_bank_account" && <div className="document-card-requirements"><div className="document-ready-label">{pick("\uc0c1\ub2f4\uc5d0\uc11c \ud655\uc778\ud55c \uc900\ube44\ubb3c", "Items confirmed in chat")}</div><div className="document-ready-chips"><span className={answers.phone === "yes" ? "ready" : ""}>{answers.phone === "yes" ? "\u2713 " : ""}{pick("\ud734\ub300\ud3f0", "Mobile phone")}</span><span className={answers.cert === "yes" ? "ready" : ""}>{answers.cert === "yes" ? "\u2713 " : ""}{pick("\uc7ac\ud559\uc99d\uba85\uc11c", "Enrollment certificate")}</span></div></div>}</section>
-      </React.Fragment>; })}
+      {steps.map((item, index) => { const status = taskById[item.actionId]?.status; const done = status === "done"; const active = status === "in_progress" || status === "available"; return (
+        <section key={item.actionId} className={`document-flow-card${done ? " done" : active ? " active" : " locked"}`}>
+          <div className="document-flow-row"><span className="document-flow-number">{done ? "\u2713" : index + 1}</span><div><b>{item.title}</b><p>{item.description}</p></div><em>{done ? pick("\uc644\ub8cc", "Done") : status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div>
+          {active && <button type="button" onClick={() => onOpen(item.actionId)}>{status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}
+          {item.actionId === "open_bank_account" && <div className="document-card-requirements"><div className="document-ready-label">{pick("\uc0c1\ub2f4\uc5d0\uc11c \ud655\uc778\ud55c \uc900\ube44\ubb3c", "Items confirmed in chat")}</div><div className="document-ready-chips"><span className={answers.phone === "yes" ? "ready" : ""}>{answers.phone === "yes" ? "\u2713 " : ""}{pick("\ud734\ub300\ud3f0", "Mobile phone")}</span><span className={answers.cert === "yes" ? "ready" : ""}>{answers.cert === "yes" ? "\u2713 " : ""}{pick("\uc7ac\ud559\uc99d\uba85\uc11c", "Enrollment certificate")}</span></div></div>}
+        </section>
+      ); })}
     </div>
-    <button type="button" className="task-chat-fab tap" onClick={onReturnToChat}
-      aria-label={pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}>
-      <span><b>{pick("AI \uc0c1\ub2f4", "AI chat")}</b><small>{pick("\uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to chat")}</small></span>
-      <img src="/assets/dari-mascot.png" alt="" />
-    </button>
+    <div className="document-flow-actions"><button type="button" className="task-chat-return tap" onClick={onReturnToChat}
+      aria-label={pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}>{pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}</button></div>
   </Shell>;
+}
+
+function PreparationScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  const action = nextAction(verdict, locale);
+  return (
+    <Shell modal={modal}>
+      <TopBar title={t("준비할 것", "What to prepare")} onBack={onBack} />
+      <Rail active={4} locale={locale} />
+      <div className="preparation-head">
+        <section className="preparation-summary">
+          <div className="preparation-kicker">{t("다음 할 일", "NEXT STEP")}</div>
+          <h2>{action.title}</h2>
+          <p>{action.meta}</p>
+        </section>
+      </div>
+      <div className="scroll preparation-content">
+        <section className="preparation-section">
+          <h3>{action.cardTitle}</h3>
+          <p className="preparation-meta">{action.cardMeta}</p>
+          <ol className="preparation-steps">
+            {action.steps.map((item, index) => (
+              <li key={index}><span>{index + 1}</span><p>{item}</p></li>
+            ))}
+          </ol>
+          <aside className="preparation-note">{action.note}</aside>
+        </section>
+      </div>
+      <div className="bottom-cta preparation-actions"><PrimaryButton onClick={onNext}>{t("신청서 만들기", "Create application")}</PrimaryButton></div>
+    </Shell>
+  );
 }
 
 function DocumentApplicationBuilder({ locale, modal, application, goal, documents, loading, error, onBack, onCreate, onOpenDocument }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   return <Shell modal={modal}>
-    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} /><Rail active={4} locale={locale} />
-    <div className="builder-head"><h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2><p>{pick("\uc800\uc7a5\ub41c \ud504\ub85c\ud544\ub85c \uc790\ub3d9 \uc791\uc131\ud574\uc694. \ub9cc\ub4e4\uae30\ub97c \ub204\ub974\uba74 \ubbf8\ub9ac\ubcf4\uae30\uac00 \ub098\uc640\uc694.", "We fill it automatically from your saved profile. Create it to see a preview.")}</p></div>
-    <div className="scroll builder-content"><section className="builder-selection"><div><b>{application[locale]}</b><span>✓ {pick("\ud655\uc815\ub428", "Confirmed")}</span></div><p>{goal[locale]}</p></section>{loading ? <DocumentWritingProgress locale={locale} title={application[locale]} /> : <div className="document-paper-preview"><i /><i /><i /><i /><i /><div /></div>}{documents.filter((doc) => doc.title === application[locale]).map((doc) => <button key={doc.id} type="button" className="stored-document-link" onClick={() => onOpenDocument(doc)}>{pick("\uc800\uc7a5\ub41c PDF \ubcf4\uae30", "View saved PDF")}</button>)}</div>
+    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} />
+    <Rail active={4} locale={locale} />
+    <div className="builder-head">
+      <h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2>
+      <p>{pick("\uc800\uc7a5\ub41c \ud504\ub85c\ud544\ub85c \uc790\ub3d9 \uc791\uc131\ud574\uc694. \ub9cc\ub4e4\uae30\ub97c \ub204\ub974\uba74 \ubbf8\ub9ac\ubcf4\uae30\uac00 \ub098\uc640\uc694.", "We fill it automatically from your saved profile. Create it to see a preview.")}</p>
+    </div>
+    <div className="scroll builder-content">
+      <section className="builder-selection"><div><b>{application[locale]}</b><span>{pick("\uc120\ud0dd\ub428", "Selected")}</span></div><p>{goal[locale]}</p></section>
+      {loading ? <DocumentWritingProgress locale={locale} title={application[locale]} /> : <div className="document-paper-preview"><i /><i /><i /><i /><i /><div /></div>}
+      {documents.filter((doc) => doc.title === application[locale]).map((doc) => <button key={doc.id} type="button" className="stored-document-link" onClick={() => onOpenDocument(doc)}>{pick("\uc800\uc7a5\ub41c PDF \ubcf4\uae30", "View saved PDF")}</button>)}
+    </div>
     <div className="builder-actions">{error && <div role="alert" className="capture-error">{error}</div>}<button type="button" disabled={loading} onClick={onCreate}>{loading ? pick("\uc2e0\uccad\uc11c \ub9cc\ub4dc\ub294 \uc911\u2026", "Creating application\u2026") : pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")}</button></div>
   </Shell>;
 }
@@ -2057,10 +2040,71 @@ function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLe
       && (!document.session_id || document.session_id === task.sessionId));
     return !hasDocument && task.status === "in_progress";
   });
-  return <Shell modal={modal}><TopBar title={pick("\ub0b4 \uc11c\ub958\ud568 \u00b7 \ubc1c\uae09 \uc774\ub825", "Documents \u00b7 Issuance history")} onBack={onBack} /><div className="scroll cabinet-content">
-    <section><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")} <small>{documents.length + pendingWorks.length}</small></h2>{documents.length === 0 && pendingWorks.length === 0 ? <div className="cabinet-zero"><img src="/assets/dari-mascot.png" alt="" /><h3>{pick("\uc544\uc9c1 \uc800\uc7a5\ub41c \uc11c\ub958\uac00 \uc5c6\uc5b4\uc694", "No saved documents yet")}</h3><p>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \ud544\uc694\ud55c \uc11c\ub958\ub97c \ud655\uc778\ud558\uace0 \uc2e0\uccad\uc11c\ub97c \ub9cc\ub4e4\uc5b4 \ubcf4\uc138\uc694.", "Ask the AI what you need and create your first application.")}</p><button type="button" onClick={onStartChat}>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \uc2dc\uc791\ud558\uae30", "Start in AI chat")}</button></div> : <div className="cabinet-list saved-work-list">{pendingWorks.map((task, index) => <article key={`${task.sessionId}-${task.id}`}><div><span>{index + 1}</span><b>{APPLICATIONS[task.id][locale]}</b><em className={`work-status ${task.status}`}>{task.status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : task.status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("🔒 \uc7a0\uae08", "🔒 Locked")}</em></div><p>{task.note || task.agency}</p>{task.status !== "locked" && <button type="button" className="saved-work-action" onClick={() => onOpenTask(task.sessionId, task.id)}>{task.status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}</article>)}{documents.map((doc, index) => <article key={doc.id}><div><span>{pendingWorks.length + index + 1}</span><b>{doc.title}</b><em className={`work-status ${doc.status === "issued" ? "issued" : "done"}`}>{doc.status === "issued" ? pick("\ubc1c\uae09 \uc644\ub8cc", "Issued") : pick("\uc791\uc131 \uc644\ub8cc", "Completed")}</em></div><p>{formatDate(doc.created_at, locale)}</p><div className="cabinet-buttons"><button type="button" onClick={() => onPreview(doc)}>{pick("\ubbf8\ub9ac\ubcf4\uae30", "Preview")}</button><button type="button" onClick={() => onDownload(doc)}>PDF {pick("\ub2e4\uc6b4\ub85c\ub4dc", "Download")}</button></div></article>)}</div>}</section>
-    <section><h2>{pick("\ubc1c\uae09 \ubb38\uc11c \u00b7 \uc774\ub825", "Issued documents \u00b7 History")}</h2>{loading && <div className="cabinet-empty">{pick("\ubd88\ub7ec\uc624\ub294 \uc911\u2026", "Loading\u2026")}</div>}{error && <div className="capture-error">{error}</div>}{!loading && !error && ledger.length === 0 ? <div className="history-zero"><span aria-hidden="true">✓</span><div><b>{pick("\uc544\uc9c1 \ubc1c\uae09\ud55c \ubb38\uc11c\uac00 \uc5c6\uc5b4\uc694", "No issued documents yet")}</b><p>{pick("\ubbf8\ub9ac\ubcf4\uae30 \ud6c4 \ucd5c\uc885 \ubc1c\uae09\uae4c\uc9c0 \uc2b9\uc778\ud55c \ubb38\uc11c\ub9cc \uc5ec\uae30\uc5d0 \ub0a8\uc544\uc694.", "Only documents you finally approve for issuance appear here.")}</p></div></div> : <div className="cabinet-list history-list">{ledger.map((entry, index) => <article key={`${entry.document_id || entry.action}-${entry.approved_at || index}`}><b>{entry.action || pick("\uc2e0\uccad\uc11c \ubc1c\uae09", "Application issued")}</b><p>{formatDate(entry.approved_at, locale)}</p><small>{pick("\ucd5c\uc885 \ubc1c\uae09 \uc644\ub8cc", "Issuance completed")}</small></article>)}</div>}</section>
-  </div></Shell>;
+  return <Shell modal={modal}>
+    <TopBar title={pick("\ub0b4 \uc11c\ub958\ud568", "My documents")} onBack={onBack} />
+    <div className="scroll cabinet-content">
+      <section className="cabinet-section">
+        <div className="cabinet-section-head"><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")}</h2><small>{documents.length + pendingWorks.length}</small></div>
+        {documents.length === 0 && pendingWorks.length === 0
+          ? <div className="cabinet-zero"><img src="/assets/dari-mascot.png" alt="" /><h3>{pick("\uc544\uc9c1 \uc800\uc7a5\ub41c \uc11c\ub958\uac00 \uc5c6\uc5b4\uc694", "No saved documents yet")}</h3><p>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \ud544\uc694\ud55c \uc11c\ub958\ub97c \ud655\uc778\ud558\uace0 \uc2e0\uccad\uc11c\ub97c \ub9cc\ub4e4\uc5b4 \ubcf4\uc138\uc694.", "Ask the AI what you need and create your first application.")}</p><button type="button" onClick={onStartChat}>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \uc2dc\uc791\ud558\uae30", "Start in AI chat")}</button></div>
+          : <div className="cabinet-list saved-work-list">
+              {pendingWorks.map((task) => <article key={`${task.sessionId}-${task.id}`} className="cabinet-row pending"><div className="cabinet-row-head"><b>{APPLICATIONS[task.id][locale]}</b><em className={`work-status ${task.status}`}>{task.status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : task.status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc7a0\uae08", "Locked")}</em></div><p>{task.note || task.agency}</p>{task.status !== "locked" && <button type="button" className="saved-work-action" onClick={() => onOpenTask(task.sessionId, task.id)}>{task.status === "in_progress" ? pick("\uc774\uc5b4\uc11c \uc791\uc131\ud558\uae30", "Continue editing") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}</article>)}
+              {documents.map((doc) => <article key={doc.id} className="cabinet-row saved"><div className="cabinet-row-head"><b>{doc.title}</b><em className={`work-status ${doc.status === "issued" ? "issued" : "done"}`}>{doc.status === "issued" ? pick("\ubc1c\uae09 \uc644\ub8cc", "Issued") : pick("\uc791\uc131 \uc644\ub8cc", "Completed")}</em></div><p>{formatDate(doc.created_at, locale)}</p><div className="cabinet-buttons"><button type="button" onClick={() => onPreview(doc)}>{pick("\ubbf8\ub9ac\ubcf4\uae30", "Preview")}</button><button type="button" onClick={() => onDownload(doc)}>PDF {pick("\ub2e4\uc6b4\ub85c\ub4dc", "Download")}</button></div></article>)}
+            </div>}
+      </section>
+      <section className="cabinet-section history-section">
+        <div className="cabinet-section-head"><h2>{pick("\ubc1c\uae09 \uc774\ub825", "Issuance history")}</h2></div>
+        {loading && <div className="cabinet-empty">{pick("\ubd88\ub7ec\uc624\ub294 \uc911\u2026", "Loading\u2026")}</div>}
+        {error && <div className="capture-error">{error}</div>}
+        {!loading && !error && ledger.length === 0
+          ? <div className="history-zero"><span aria-hidden="true">✓</span><div><b>{pick("\uc544\uc9c1 \ubc1c\uae09\ud55c \ubb38\uc11c\uac00 \uc5c6\uc5b4\uc694", "No issued documents yet")}</b><p>{pick("\ubbf8\ub9ac\ubcf4\uae30 \ud6c4 \ucd5c\uc885 \ubc1c\uae09\uae4c\uc9c0 \uc2b9\uc778\ud55c \ubb38\uc11c\ub9cc \uc5ec\uae30\uc5d0 \ub0a8\uc544\uc694.", "Only documents you finally approve for issuance appear here.")}</p></div></div>
+          : <div className="cabinet-list history-list">{ledger.map((entry, index) => <article key={`${entry.document_id || entry.action}-${entry.approved_at || index}`}><div className="cabinet-row-head"><b>{entry.action || pick("\uc2e0\uccad\uc11c \ubc1c\uae09", "Application issued")}</b><small>{pick("\ubc1c\uae09 \uc644\ub8cc", "Issued")}</small></div><p>{formatDate(entry.approved_at, locale)}</p></article>)}</div>}
+      </section>
+    </div>
+  </Shell>;
+}
+
+function PdfPreviewScreen({ locale = "ko", modal, preview, previewBlobUrl, pdfPage = 1, onPageChange, approval, onBack, onDownload, onIssue }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
+  const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
+  return (
+    <Shell modal={modal}>
+      <TopBar title={preview.title} onBack={onBack} />
+      <div className="scroll pdf-preview-content">
+        {(preview.warnings || []).length > 0 && (
+          <div role="alert" className="pdf-preview-notice">
+            <b>{t("발급 전 확인", "Before issuing")}</b>
+            {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+          </div>
+        )}
+        <div className="pdf-viewer-frame">
+          <iframe title={preview.title} src={pageCount ? `${previewBlobUrl}#page=${page}` : previewBlobUrl} />
+        </div>
+        {pageCount > 1 && (
+          <div className="pdf-page-controls">
+            <div className="pdf-page-navigation">
+              <button type="button" className="tap pdf-page-arrow" aria-label="Previous page"
+                disabled={page <= 1} onClick={() => onPageChange(page - 1)}>‹</button>
+              <div className="pdf-page-dots">
+                {Array.from({ length: pageCount }, (_, index) => (
+                  <button key={index} type="button" aria-label={`Page ${index + 1}`} aria-current={page === index + 1}
+                    className={`tap pdf-page-dot${page === index + 1 ? " active" : ""}`} onClick={() => onPageChange(index + 1)} />
+                ))}
+              </div>
+              <button type="button" className="tap pdf-page-arrow" aria-label="Next page"
+                disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>›</button>
+            </div>
+            <span>{page} / {pageCount}</span>
+          </div>
+        )}
+      </div>
+      <div className="bottom-cta pdf-preview-actions">
+        <button type="button" onClick={onDownload} className="tap pdf-download-action">{t("PDF 다운로드", "Download PDF")}</button>
+        {approval && <button type="button" onClick={onIssue} className="tap pdf-issue-action">{t("발급하기", "Issue")}</button>}
+      </div>
+    </Shell>
+  );
 }
 
 function DocumentWritingProgress({ locale = "ko", title }) {
@@ -2268,10 +2312,10 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
   return (
     <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"}
       className="approval-backdrop" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 22px" }}>
-      <div className="approval-sheet" style={{ width: "100%", padding: "20px 20px 18px", borderRadius: 20, background: "#fff", boxShadow: "0 18px 44px oklch(0.2 0.012 60 / 0.28)" }}>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 99, background: "oklch(0.72 0.13 45 / 0.12)" }}>
-          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--brand-2)" }} />
-          <span style={{ fontSize: 10.5, fontWeight: 800, color: "var(--brand-2)" }}>
+      <div className="approval-sheet" style={{ width: "100%", padding: "20px 20px 18px", borderRadius: 12, background: "#fff", boxShadow: "none" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 99, background: "oklch(.93 .028 250)" }}>
+          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "oklch(.42 .12 250)" }} />
+          <span style={{ fontSize: 10.5, fontWeight: 800, color: "oklch(.36 .1 250)" }}>
             {en ? "Now: confirm issuance" : "지금: 발급 확인"}
           </span>
         </div>
@@ -2297,8 +2341,8 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
         </p>
         {error && <div role="alert" className="capture-error" style={{ margin: "12px 0 0" }}>{error}</div>}
         <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
-          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Issuing…" : "발급 중…") : (en ? "Issue" : "발급하기")}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 48, borderRadius: 10, border: "1px solid oklch(.76 .045 250)", background: "#fff", color: "oklch(.31 .09 250)", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 48, borderRadius: 10, border: 0, background: "oklch(.31 .09 250)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Issuing…" : "발급 중…") : (en ? "Issue" : "발급하기")}</button>
         </div>
       </div>
     </div>
@@ -2410,7 +2454,7 @@ function profileFieldLabel(field, locale = "ko") {
 function verdictCta(kind, locale = "ko") {
   const labels = locale === "en"
     ? { ready: "What should I bring?", passport: "How do I renew it?", phone: "How do I get a phone?", cert: "Where can I get it?" }
-    : { ready: "무엇을 가져가나요?", passport: "어떻게 재발급하나요?", phone: "휴대폰은 어떻게 개통하나요?", cert: "어디서 떼나요?" };
+    : { ready: "무엇을 가져가나요?", passport: "어떻게 재발급하나요?", phone: "휴대폰은 어떻게 개통하나요?", cert: "발급 방법 확인" };
   return labels[kind] || (locale === "en" ? "View next step" : "다음 단계 보기");
 }
 function nextAction(v, locale = "ko") {
