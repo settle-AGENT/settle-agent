@@ -930,10 +930,9 @@ export default function App() {
               <div className="resume-home-center">
                 <div className="resume-home-brand">
                   <BridgeMark size={78} />
-                  <div className="return-greeting">
+                  <h1 className="return-greeting home-greeting">
                     {homeState === "start" ? t("환영해요", "Welcome") : t("다시 오셨네요", "Welcome back")}
-                    <span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span>
-                  </div>
+                  </h1>
                 </div>
                 {homeState === "resume" && (
                   <section className="resume-card resume-card--progress" aria-label={t("저장된 진행 상황", "Saved progress")}>
@@ -951,10 +950,16 @@ export default function App() {
                     <p>{t("외국인등록증을 촬영하면 정보를 자동으로 채워드려요.", "Scan your residence card and we'll fill in your details automatically.")}</p>
                   </section>
                 )}
+                {homeState === "profile" && (
+                  <section className="resume-intro">
+                    <h2>{t("필요한 서류를 준비해 보세요", "Prepare the documents you need")}</h2>
+                    <p>{t("저장된 프로필로 신청서를 빠르게 만들 수 있어요.", "Use your saved profile to prepare applications faster.")}</p>
+                  </section>
+                )}
                 {homeState === "resume" && <button type="button" className="resume-btn resume-btn-secondary" onClick={startNewDocument}>{t("새 서류 발급하기", "Prepare a new document")}</button>}
                 {homeState === "profile" && <>
                   <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={startNewDocument}>{t("새 서류 발급하기", "Prepare a new document")}</button>
-                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}><span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}</button>
+                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}>{sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}</button>
                 </>}
                 {homeState === "start" && <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={startNewDocument}>{sessionLoading ? t("진행 내용 확인 중…", "Checking your progress…") : t("프로필 만들기", "Create profile")}</button>}
                 {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
@@ -967,33 +972,31 @@ export default function App() {
       return (
       <Shell modal={activeModal}>
         <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
+        <div className="home-landing-main">
           <BridgeMark size={104} />
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>}
+          <div className="home-landing-greeting">
+            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}</div>}
           </div>
-          <div style={{ width: 34, height: 1, background: "var(--line)" }} />
-          <div style={{ fontSize: 15, lineHeight: 1.55, color: "oklch(0.45 0.012 60)", textAlign: "center", maxWidth: 250 }}>
-            {t("은행은 한 번만 가세요.", "Visit the bank only once.")}<br />{t("서류는 저희가 먼저 준비해요.", "We prepare your documents first.")}
+          <div className="home-landing-copy">
+            <h1>{t("은행은 한 번만 가세요.", "Visit the bank only once.")}</h1>
+            <p>{t("서류는 저희가 먼저 준비해요.", "We prepare your documents first.")}</p>
           </div>
         </div>
-        <div style={{ padding: "0 30px 40px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-          <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
+        <div className="home-landing-actions">
+          <div className="home-beta">
             D-2 STUDENT VISA · BETA
           </div>
           {isAuthenticated && resumed && (
             <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">↗</span>
               <div><b>{resumed.title}</b><small>{resumed.stage}</small></div>
             </div>
           )}
           {isAuthenticated && !sessionLoading && !resumed && !hasProfile && (
             <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">＋</span>
               <div><b>{t("프로필부터 만들어 볼까요?", "Let's create your profile")}</b><small>{t("서류 사진을 등록하면 필요한 절차를 안내해 드려요.", "Upload your documents to get personalized guidance.")}</small></div>
             </div>
           )}
-          <div style={{ width: "100%" }}>
+          <div className="home-primary-action">
             <PrimaryButton disabled={sessionLoading} onClick={() => {
               if (isAuthenticated && resumed) resumeSession();
               else if (isAuthenticated) resumeSession();
@@ -1021,9 +1024,9 @@ export default function App() {
             <button type="button" onClick={() => go(1)} className="text-action">{t("언어 설정부터 다시 보기", "Choose language again")}</button>
           )}
           {isAuthenticated && (
-            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
-            </div>
+            <button type="button" onClick={openCabinetFromHome} className="home-secondary-action tap">
+              {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
+            </button>
           )}
           {isAuthenticated && (
             <button type="button" onClick={resetUserUiState} className="text-action">{t("로그아웃", "Sign out")}</button>
