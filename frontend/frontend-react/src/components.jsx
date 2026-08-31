@@ -3,8 +3,8 @@ import React from "react";
 
 export function BridgeMark({ size = 60 }) {
   return (
-    <div className="maite-wordmark" style={{ width: size * 1.65, height: size * 0.48 }}>
-      <img src="/assets/maite-wordmark.png" alt="MAITE" />
+    <div className="maite-wordmark" style={{ width: size * 2.5 }}>
+      <img src="/assets/dari-logo.png" alt="DARI" />
     </div>
   );
 }
