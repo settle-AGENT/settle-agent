@@ -1265,8 +1265,9 @@ export default function App() {
       <Shell modal={activeModal}>
         <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={1} locale={locale} />
-        <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+        <div className="capture-head">
+          <h2>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+          <p>{t("외국인등록증 앞·뒷면과 여권 사진면을 등록해 주세요.", "Add the front and back of your residence card and your passport photo page.")}</p>
         </div>
         <div className="capture-tabs">
           {scanPages.map((p, i) => {
@@ -1283,10 +1284,7 @@ export default function App() {
             );
           })}
         </div>
-        <div style={{ margin: "0 24px", flex: 1, minHeight: 220, borderRadius: 18, background: "oklch(0.18 0.012 60)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 20 }}>
-          {currentShot && (
-            <div style={{ width: 40, height: 40, borderRadius: 99, background: "var(--ok)", color: "#fff", fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
-          )}
+        <div className="capture-stage">
           {captureActivated
             ? <div className={`scan-preview${captureLoading ? " loading" : ""}`}>
             {captureLoading
@@ -1300,7 +1298,7 @@ export default function App() {
             : <div className="scan-preview scan-idle" aria-label={t("촬영 또는 파일 첨부 대기", "Waiting for camera or file upload")}>
                 <span className="scan-idle-label">{scanPages[scan].label}</span>
               </div>}
-          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraStarting ? t("카메라 준비 중", "Preparing camera") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("촬영하기 또는 파일 첨부를 선택해 주세요", "Choose Camera or File upload")}</div>
+          <div className="capture-stage-status">{captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraStarting ? t("카메라 준비 중", "Preparing camera") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("촬영하기 또는 파일 첨부를 선택해 주세요", "Choose Camera or File upload")}</div>
         </div>
         <CaptureAlert error={captureError} locale={locale}
           onDeviceCamera={() => nativeCameraInputRef.current?.click()}
@@ -1309,16 +1307,18 @@ export default function App() {
             setCaptureError(null);
             window.setTimeout(() => fileInputRef.current?.click(), 0);
           }} />
-        <div className="bottom-cta" style={{ paddingTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="bottom-cta capture-actions">
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
-          <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
-          <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="file-attach compact tap">
-            {t("파일 첨부", "File upload")}
-          </button>
-          <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="file-attach compact tap">
-            {t("건너뛰기", "Skip")}
-          </button>
+          <div className="capture-primary-action"><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
+          <div className="capture-sub-actions">
+            <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="capture-secondary-action tap">
+              {t("파일 첨부", "File upload")}
+            </button>
+            <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="capture-tertiary-action tap">
+              {t("건너뛰기", "Skip")}
+            </button>
+          </div>
         </div>
       </Shell>
     );
@@ -2355,7 +2355,7 @@ function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier })
   return (
     <div className="capture-alert-backdrop">
       <div role="alertdialog" aria-modal="true" className="capture-alert-dialog">
-        <div className={`capture-alert-icon${mismatch ? " warning" : " error"}`} aria-hidden="true">{mismatch ? "⚠" : "⊘"}</div>
+        <div className={`capture-alert-icon${mismatch ? " warning" : " error"}`} aria-hidden="true">!</div>
         <h3>{mismatch
           ? (en ? "The photo details do not match" : "사진 정보가 서로 일치하지 않아요")
           : parsingFailed
