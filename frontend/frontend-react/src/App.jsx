@@ -1590,9 +1590,12 @@ export default function App() {
 
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
-        <Rail active={3} locale={locale} />
-        <div ref={chatScrollRef} className="scroll chat-scroll consultation-chat" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<span className="consultation-status"><i />{t("상담 중", "In session")}</span>} />
+        <div className="consultation-progress" aria-label={t("전체 5단계 중 상담 단계", "Consultation, step 4 of 5")}>
+          <span className="consultation-progress-label">{t("4 / 5 · 상담", "4 / 5 · Consultation")}</span>
+          <div aria-hidden="true">{[0, 1, 2, 3, 4].map((item) => <i key={item} className={item <= 3 ? "active" : ""} />)}</div>
+        </div>
+        <div ref={chatScrollRef} className="scroll chat-scroll consultation-chat">
           {messages.length === 0 && (
             <ChatBubble avatar>
               <strong>{t("\uc548\ub155\ud558\uc138\uc694! AI \uc0c1\ub2f4\uc774\uc5d0\uc694 \ud83d\ude4c", "Hello! I am your AI assistant \ud83d\ude4c")}</strong>
@@ -1601,11 +1604,13 @@ export default function App() {
           )}
           {messages.map((message, index) => {
             const isLastAgent = message.from === "agent" && (index === messages.length - 1 || messages.slice(index + 1).every((m) => m.from === "user"));
+            const isAgentContinuation = message.from === "agent" && index > 0 && messages[index - 1]?.from === "agent";
             const hasInlineOffer = isLastAgent && actionOffer?.action_id;
             const displayText = isLastAgent && typingText !== null ? typingText : message.text;
             const lines = displayText ? displayText.split("\n") : [];
             return (
-              <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}
+              <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"}
+                avatar={message.from === "agent" && !isAgentContinuation} continuation={isAgentContinuation}
                 compact={message.from === "user" && /^[0-9-]+$/.test(message.text?.trim() || "")}>
                 {message.from === "agent" && index === 0 && lines[0] && <strong>{lines[0]}</strong>}
                 {lines.slice(message.from === "agent" && index === 0 ? 1 : 0).map((line, li) => (
@@ -1634,7 +1639,7 @@ export default function App() {
           })}
 
           {question && (
-            <ChatBubble avatar wide>
+            <ChatBubble avatar={messages.at(-1)?.from !== "agent"} continuation={messages.at(-1)?.from === "agent"} wide>
               <QuestionCard payload={question} options={options} value={chatInput}
                 onChange={setChatInput} onSubmit={answer} disabled={chatLoading} locale={locale} />
             </ChatBubble>
@@ -1664,15 +1669,11 @@ export default function App() {
             </div>
           )}
 
-          {chatLoading && thinkingSteps.length > 0 && (
-            <ChatBubble avatar>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {thinkingSteps.map((label, ti) => (
-                  <div key={ti} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: ti === thinkingSteps.length - 1 ? "var(--brand-2)" : "var(--muted)" }}>
-                    {ti === thinkingSteps.length - 1 ? <span className="thinking-dot" /> : <span style={{ color: "var(--ok)" }}>✓</span>}
-                    {label}
-                  </div>
-                ))}
+          {chatLoading && (
+            <ChatBubble avatar={!question} continuation={Boolean(question)}>
+              <div className="chat-loading" role="status" aria-live="polite">
+                <span>{t("답변을 준비하고 있어요", "Preparing a response")}</span>
+                <i aria-hidden="true" /><i aria-hidden="true" /><i aria-hidden="true" />
               </div>
             </ChatBubble>
           )}
@@ -2145,9 +2146,9 @@ function AuthInput({ label, type = "text", value, onChange, placeholder, valid, 
 function FieldHint({ children, tone = "info" }) {
   return <div className={`auth-field-hint ${tone}`}>{children}</div>;
 }
-function ChatBubble({ children, mine, avatar, wide, compact }) {
+function ChatBubble({ children, mine, avatar, wide, compact, continuation }) {
   return (
-    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}${compact ? " compact" : ""}`}>
+    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}${compact ? " compact" : ""}${continuation ? " continuation" : ""}`}>
       {avatar && <div className="chat-avatar" aria-hidden="true"><img src="/assets/dari-avatar.png" alt="" /></div>}
       <div className="chat-bubble">{children}</div>
     </div>
@@ -2220,7 +2221,8 @@ function ChatInputBar({ value, onChange, disabled, onSend, locale = "ko" }) {
         autoComplete="off"
       />
       <button type="submit" className="chat-send-btn tap" disabled={disabled || !value.trim()}>
-        {disabled ? "…" : locale === "en" ? "Send" : "전송"}
+        <span className="sr-only">{locale === "en" ? "Send" : "전송"}</span>
+        {disabled ? <span className="chat-send-wait" aria-hidden="true">…</span> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" /></svg>}
       </button>
     </form>
   );

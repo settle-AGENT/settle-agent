@@ -148,19 +148,17 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
   const choice = inputType === "select" || inputType === "address";
   const en = locale === "en";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div>
-        <b style={{ fontSize: 14.5, lineHeight: 1.45 }}>{label}</b>
-        {hint && <div style={{ marginTop: 5, fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>{hint}</div>}
+    <div className="chat-question-card">
+      <div className="chat-question-copy">
+        <b>{label}</b>
+        {hint && <div>{hint}</div>}
       </div>
 
       {choice ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div className="chat-question-options">
           {options.map((option) => (
             <button key={option.value} type="button" disabled={disabled}
-              onClick={() => onSubmit(option.value)} className="tap"
-              style={{ minHeight: 48, padding: "0 15px", borderRadius: 11, fontSize: 15, fontWeight: 700,
-                border: "1px solid var(--line)", background: "#fff", color: "oklch(0.25 0.012 60)" }}>
+              onClick={() => onSubmit(option.value)} className="chat-question-option tap">
               {option.label}
             </button>
           ))}
@@ -170,13 +168,11 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
         </div>
       ) : (
         <form onSubmit={(event) => { event.preventDefault(); if (value.trim()) onSubmit(value.trim()); }}
-          style={{ display: "flex", gap: 8 }}>
-          <input className="profile-field-input" style={{ flex: 1 }} value={value} disabled={disabled}
+          className="chat-question-form">
+          <input className="chat-question-input" value={value} disabled={disabled}
             onChange={(event) => onChange(event.target.value)} placeholder={en ? "Enter your answer" : "답변을 입력하세요"} />
           <button type="submit" disabled={disabled || !value.trim()} className="tap"
-            style={{ minHeight: 48, padding: "0 16px", borderRadius: 11, border: 0, fontSize: 15, fontWeight: 700,
-              background: disabled || !value.trim() ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)",
-              color: disabled || !value.trim() ? "oklch(0.55 0.01 60)" : "#fff" }}>{en ? "Send" : "보내기"}</button>
+            >{en ? "Send" : "보내기"}</button>
         </form>
       )}
     </div>
