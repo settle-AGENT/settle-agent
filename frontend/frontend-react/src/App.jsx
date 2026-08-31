@@ -1260,6 +1260,7 @@ export default function App() {
       setScan((scan + 1) % scanPages.length);
     };
     const currentShot = shots[scanPages[scan].key];
+    const allShotsReady = scanPages.every((page) => Boolean(shots[page.key]));
     const captureActivated = cameraStarting || captureLoading || cameraOpen || Boolean(currentShot);
     return (
       <Shell modal={activeModal}>
@@ -1307,17 +1308,24 @@ export default function App() {
             setCaptureError(null);
             window.setTimeout(() => fileInputRef.current?.click(), 0);
           }} />
-        <div className="bottom-cta capture-actions">
+        <div className={`bottom-cta capture-actions${allShotsReady ? " complete" : ""}`}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
+          {allShotsReady && (
+            <div className="capture-profile-action">
+              <PrimaryButton onClick={() => go(3)}>{t("프로필 확인하기", "Review profile")}</PrimaryButton>
+            </div>
+          )}
           <div className="capture-primary-action"><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
           <div className="capture-sub-actions">
-            <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="capture-secondary-action tap">
-              {t("파일 첨부", "File upload")}
+            <button type="button" title={currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")} aria-label={currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="capture-secondary-action tap">
+              {currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")}
             </button>
-            <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="capture-tertiary-action tap">
-              {t("건너뛰기", "Skip")}
-            </button>
+            {!allShotsReady && (
+              <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="capture-tertiary-action tap">
+                {t("건너뛰기", "Skip")}
+              </button>
+            )}
           </div>
         </div>
       </Shell>
@@ -1377,21 +1385,23 @@ export default function App() {
       <Shell modal={activeModal}>
         <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={2} locale={locale} />
-        <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>{t("카드에서 만든 프로필", "Profile from your documents")}</h2>
-          <p style={SUB}>{t("노란색 항목을 확인하고, 잘못 읽은 값만 수정해 주세요.", "Check highlighted fields and edit only incorrect values.")}</p>
+        <div className="profile-head">
+          <h2>{t("인식된 정보 확인", "Review recognized information")}</h2>
+          <p>{t("확인이 필요한 항목을 확인하고, 잘못 인식된 정보만 수정해 주세요.", "Review fields that need confirmation and edit only incorrect information.")}</p>
         </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 9 }}>
-          <Label>{t("OCR 추출 결과", "OCR results")}</Label>
-          {fields.map((field) => (
-            <Field key={field.key} label={profileFieldLabel(field, locale)} value={profileDraft[field.key] ?? field.value}
-              confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
-              error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} locale={locale} />
-          ))}
-          {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
+        <div className="scroll profile-scroll">
+          <div className="profile-section-label">{t("기본 정보", "Basic information")}</div>
+          <div className="profile-field-list">
+            {fields.map((field) => (
+              <Field key={field.key} label={profileFieldLabel(field, locale)} value={profileDraft[field.key] ?? field.value}
+                confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
+                error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} locale={locale} />
+            ))}
+          </div>
+          {profileErrors._form && <div role="alert" className="capture-error profile-form-error">{profileErrors._form}</div>}
         </div>
-        <div className="bottom-cta" style={{ paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{t("수정 불가 항목은 마스킹된 값으로 전송되지 않아요.", "Read-only masked values are not submitted.")}</div>
+        <div className="bottom-cta profile-actions">
+          <div className="profile-submit-note">{t("수정할 수 없는 항목은 확인용이며 별도로 전송되지 않아요.", "Read-only fields are shown for review and are not submitted separately.")}</div>
           <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
             {profileSubmitting ? t("확인 중…", "Checking…") : t("확인하고 계속", "Confirm and continue")}
           </PrimaryButton>
