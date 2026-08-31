@@ -1119,21 +1119,20 @@ export default function App() {
     return (
       <Shell modal={activeModal}>
         <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} right={<LangToggle locale={locale} onChange={changeLocale} />} />
-        <div style={{ padding: "18px 26px 12px" }}>
+        <div className="auth-hero">
           <BridgeMark size={56} />
-          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("MAITE를 시작해요", "Create your MAITE profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
-          <p style={SUB}>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
+          <h2>{signup ? t("DARI를 시작해요", "Create your DARI profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
+          <p>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
         </div>
-        <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-          {authMessageType === "error" && authMessage && <div role="alert" className="auth-notice error">{authMessage}</div>}
+        <form onSubmit={submitAuth} className="scroll auth-form">
+          {authMessage && <div role={authMessageType === "error" ? "alert" : "status"} className={`auth-notice ${authMessageType}`}>{authMessage}</div>}
           <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} valid={validEmail} />
           {auth.email && !validEmail && <FieldHint tone="error">{t("영문 이메일 형식으로 입력해 주세요. (예: name@example.com)", "Enter a valid email address, such as name@example.com.")}</FieldHint>}
-          {validEmail && <div className="auth-inline-hint">✓ {t("@ 포함 이메일 형식", "Valid email format")}</div>}
           <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={Boolean(auth.password) && !passwordEligible} valid={Boolean(auth.password) && passwordEligible} />
-          {!signup && authMessageType === "success" && authMessage && <div role="status" className="auth-notice success">{authMessage}</div>}
-          <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+          {!signup && auth.password && !passwordEligible && <FieldHint tone="error">{t("비밀번호 조건을 확인해 주세요.", "Check the password requirements.")}</FieldHint>}
+          {signup && <div className="password-guide" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
             <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
-          </div>
+          </div>}
           {signup && (
             <>
               <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} valid={passwordMatches} indicator={t("일치", "Match")} />
@@ -1144,22 +1143,21 @@ export default function App() {
                   <span>{t("D-2 유학", "D-2 Student")}</span><span aria-hidden="true">✓</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("D-4 연수", "D-4 Training")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("D-4 연수", "D-4 Training")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("D-10 구직", "D-10 Job seeking")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("D-10 구직", "D-10 Job seeking")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("기타", "Other")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("기타", "Other")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
               </div>
             </>
           )}
         </form>
-        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 26, paddingRight: 26 }}>
+        <div className="bottom-cta auth-actions">
           <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? t("처리 중…", "Processing…") : signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")}</PrimaryButton>
-          <button type="button" onClick={switchAuthMode}
-            style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
+          <button type="button" onClick={switchAuthMode} className="auth-mode-switch">
             {signup ? t("이미 계정이 있나요? 로그인", "Already have an account? Sign in") : t("계정이 없나요? 회원가입", "Need an account? Sign up")}
           </button>
         </div>
@@ -2125,11 +2123,10 @@ function CaptureProgress({ locale = "ko" }) {
 }
 function AuthInput({ label, type = "text", value, onChange, placeholder, valid, indicator = "✓", ...inputProps }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</span>
-      <span style={{ position: "relative", display: "block" }}>
-        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
-          style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: valid ? "0 46px 0 15px" : "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
+    <label className="auth-field">
+      <span className="auth-label">{label}</span>
+      <span className="auth-input-wrap">
+        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps} />
         {valid && <span className="auth-input-indicator" aria-hidden="true">{indicator}</span>}
       </span>
     </label>
