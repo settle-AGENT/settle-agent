@@ -586,7 +586,7 @@ button:disabled { cursor: default; }
 .chat-scroll { scroll-behavior: smooth; }
 .consultation-chat { display: flex; flex-direction: column; gap: 9px; padding: 18px 16px 22px; background: oklch(.985 .008 250); }
 .chat-line { display: flex; align-items: flex-start; gap: 9px; min-width: 0; max-width: 92%; }
-.chat-line.mine { align-self: flex-end; justify-content: flex-end; }
+.chat-line.mine { width: fit-content; max-width: 86%; align-self: flex-end; justify-content: flex-end; }
 .chat-line.continuation { margin-left: 41px; }
 .chat-line.wide { width: calc(100% - 41px); max-width: calc(100% - 41px); }
 .chat-line.wide:has(.chat-avatar) { width: 100%; max-width: 100%; }
@@ -622,13 +622,17 @@ button:disabled { cursor: default; }
 .chat-bubble > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .chat-line.continuation .chat-bubble { border-radius: 15px; }
 .chat-line.mine .chat-bubble {
-  max-width: 86%;
+  width: fit-content;
+  max-width: 100%;
   padding: 11px 14px;
   border-color: oklch(.32 .07 250);
   border-radius: 15px 5px 15px 15px;
   background: oklch(.31 .09 250);
   color: #fff;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
+.chat-line.mine .chat-bubble > * { overflow-wrap: break-word; word-break: normal; }
 .chat-line.wide .chat-bubble { flex: 1; width: auto; padding: 14px; }
 .chat-bubble > strong { color: oklch(.27 .065 250); font-size: 15px; line-height: 1.5; }
 .chat-bubble > span { color: inherit; font-size: 14px; line-height: 1.6; }

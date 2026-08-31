@@ -290,6 +290,8 @@ export default function App() {
   const cameraStreamRef = useRef(null);
   const cameraRequestRef = useRef(false);
   const navigationHistoryRef = useRef([]);
+  const extractionReplyAddedRef = useRef(false);
+  const profileReplyAddedRef = useRef(false);
   const progressRef = useRef(savedProgress);
   const locale = (agentState?.locale || lang) === "ko" ? "ko" : "en";
   const t = (ko, en) => locale === "en" ? en : ko;
@@ -605,7 +607,7 @@ export default function App() {
   };
 
   // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
-  const applyAgent = (response) => {
+  const applyAgent = (response, { appendReply = true } = {}) => {
     if (response?.state) {
       setAgentState(response.state);
       if (memberId && response.state.session_id) {
@@ -626,7 +628,7 @@ export default function App() {
     setUi(responseUi);
     const repeatedQuestion = responseUi.type === "question"
       && response?.reply?.trim() === responseUi.payload?.label?.trim();
-    if (response?.reply && !repeatedQuestion) {
+    if (appendReply && response?.reply && !repeatedQuestion) {
       setMessages((current) => [...current, { from: "agent", text: response.reply }]);
     }
     const nextApproval = response?.ui?.type === "approval"
@@ -652,6 +654,8 @@ export default function App() {
     setAgentState(null);
     setUi({ type: "none", payload: {} });
     setMessages([]);
+    extractionReplyAddedRef.current = false;
+    profileReplyAddedRef.current = false;
     setToast("");
     setSessionLoading(false);
     setSessionRestoreChecked(false);
@@ -790,6 +794,8 @@ export default function App() {
 
       stopCamera();
       setMessages([]);
+      extractionReplyAddedRef.current = false;
+      profileReplyAddedRef.current = false;
       setShots({});
       setCompletedScans([]);
       setScan(0);
@@ -848,6 +854,8 @@ export default function App() {
     setToast("");
     try {
       setMessages([]);
+      extractionReplyAddedRef.current = false;
+      profileReplyAddedRef.current = false;
       const response = await createSession(lang, false, { sessionId: draftSessionId });
       applyAgent(response);
       setPreviewActionId(actionId);
@@ -1209,7 +1217,11 @@ export default function App() {
           : cardProfileFields;
         if (isCardDocument) setCardProfileFields(mergedCardFields);
         setExtract({ ...data, fields: mergedCardFields });
-        if (data.agentResponse) applyAgent(data.agentResponse);
+        if (data.agentResponse) {
+          const appendExtractionReply = !extractionReplyAddedRef.current;
+          if (appendExtractionReply && data.agentResponse.reply) extractionReplyAddedRef.current = true;
+          applyAgent(data.agentResponse, { appendReply: appendExtractionReply });
+        }
         if (isCardDocument) {
           setProfileDraft((current) => ({
             ...current,
@@ -1355,7 +1367,9 @@ export default function App() {
       setProfileErrors({});
       try {
         const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields, locale);
-        applyAgent(response);
+        const appendProfileReply = !profileReplyAddedRef.current;
+        if (appendProfileReply && response.reply) profileReplyAddedRef.current = true;
+        applyAgent(response, { appendReply: appendProfileReply });
         setExtract((current) => ({
           ...current,
           profile: response.state?.profile || {},
