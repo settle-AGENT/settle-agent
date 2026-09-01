@@ -402,12 +402,12 @@ button:disabled { cursor: default; }
 .capture-alert-details { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; color: oklch(.5 .1 30); font: 10.5px "IBM Plex Mono", monospace; }
 .capture-alert-dialog code { display: block; margin-top: 12px; color: oklch(.58 .14 30); font: 10.5px "IBM Plex Mono", monospace; }
 .capture-alert-dialog > button { width: 100%; min-height: 50px; margin-top: 18px; border: 0; border-radius: 10px; background: var(--capture-navy); color: #fff; font-size: 14px; font-weight: 800; }
-.capture-tabs { display: flex; gap: 3px; margin: 0 24px 14px; padding: 4px; border-radius: 11px; background: oklch(.93 .018 250); }
+.capture-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin: 0 24px 14px; padding: 4px; border-radius: 11px; background: oklch(.93 .018 250); }
 .capture-tab {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   min-height: 58px;
-  padding: 7px 4px;
+  padding: 7px 2px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -423,8 +423,10 @@ button:disabled { cursor: default; }
 .capture-tab.active { border-color: oklch(.72 .07 250); background: #fff; color: var(--capture-navy); }
 .capture-tab.done { color: oklch(.43 .09 250); }
 .capture-tab.done.active { border-color: var(--capture-blue); background: #fff; }
-.capture-tab-title { display: block; font-size: 12.5px; font-weight: 800; line-height: 1.25; white-space: nowrap; }
+.capture-tab-title { display: block; max-width: 100%; font-size: 12.5px; font-weight: 800; line-height: 1.25; white-space: normal; }
 .capture-tab-sub { display: block; font-size: 11.5px; font-weight: 650; line-height: 1.25; opacity: .88; }
+html[lang="en"] .capture-tab-title { font-size: 12px; line-height: 1.2; letter-spacing: -.015em; white-space: nowrap; }
+html[lang="en"] .capture-tab-sub { line-height: 1.2; }
 .capture-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
 .capture-profile-action { width: 100%; }
 .capture-profile-action .primary-button { min-height: 50px !important; border-radius: 10px !important; background: var(--capture-navy) !important; }
