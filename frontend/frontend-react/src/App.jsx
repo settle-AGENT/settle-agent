@@ -290,6 +290,8 @@ export default function App() {
   const cameraStreamRef = useRef(null);
   const cameraRequestRef = useRef(false);
   const navigationHistoryRef = useRef([]);
+  const extractionReplyAddedRef = useRef(false);
+  const profileReplyAddedRef = useRef(false);
   const progressRef = useRef(savedProgress);
   const locale = (agentState?.locale || lang) === "ko" ? "ko" : "en";
   const t = (ko, en) => locale === "en" ? en : ko;
@@ -605,7 +607,7 @@ export default function App() {
   };
 
   // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
-  const applyAgent = (response) => {
+  const applyAgent = (response, { appendReply = true } = {}) => {
     if (response?.state) {
       setAgentState(response.state);
       if (memberId && response.state.session_id) {
@@ -626,7 +628,7 @@ export default function App() {
     setUi(responseUi);
     const repeatedQuestion = responseUi.type === "question"
       && response?.reply?.trim() === responseUi.payload?.label?.trim();
-    if (response?.reply && !repeatedQuestion) {
+    if (appendReply && response?.reply && !repeatedQuestion) {
       setMessages((current) => [...current, { from: "agent", text: response.reply }]);
     }
     const nextApproval = response?.ui?.type === "approval"
@@ -652,6 +654,8 @@ export default function App() {
     setAgentState(null);
     setUi({ type: "none", payload: {} });
     setMessages([]);
+    extractionReplyAddedRef.current = false;
+    profileReplyAddedRef.current = false;
     setToast("");
     setSessionLoading(false);
     setSessionRestoreChecked(false);
@@ -790,6 +794,8 @@ export default function App() {
 
       stopCamera();
       setMessages([]);
+      extractionReplyAddedRef.current = false;
+      profileReplyAddedRef.current = false;
       setShots({});
       setCompletedScans([]);
       setScan(0);
@@ -848,6 +854,8 @@ export default function App() {
     setToast("");
     try {
       setMessages([]);
+      extractionReplyAddedRef.current = false;
+      profileReplyAddedRef.current = false;
       const response = await createSession(lang, false, { sessionId: draftSessionId });
       applyAgent(response);
       setPreviewActionId(actionId);
@@ -930,10 +938,9 @@ export default function App() {
               <div className="resume-home-center">
                 <div className="resume-home-brand">
                   <BridgeMark size={78} />
-                  <div className="return-greeting">
+                  <h1 className="return-greeting home-greeting">
                     {homeState === "start" ? t("환영해요", "Welcome") : t("다시 오셨네요", "Welcome back")}
-                    <span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span>
-                  </div>
+                  </h1>
                 </div>
                 {homeState === "resume" && (
                   <section className="resume-card resume-card--progress" aria-label={t("저장된 진행 상황", "Saved progress")}>
@@ -951,10 +958,16 @@ export default function App() {
                     <p>{t("외국인등록증을 촬영하면 정보를 자동으로 채워드려요.", "Scan your residence card and we'll fill in your details automatically.")}</p>
                   </section>
                 )}
+                {homeState === "profile" && (
+                  <section className="resume-intro">
+                    <h2>{t("필요한 서류를 준비해 보세요", "Prepare the documents you need")}</h2>
+                    <p>{t("저장된 프로필로 신청서를 빠르게 만들 수 있어요.", "Use your saved profile to prepare applications faster.")}</p>
+                  </section>
+                )}
                 {homeState === "resume" && <button type="button" className="resume-btn resume-btn-secondary" onClick={startNewDocument}>{t("새 서류 발급하기", "Prepare a new document")}</button>}
                 {homeState === "profile" && <>
                   <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={startNewDocument}>{t("새 서류 발급하기", "Prepare a new document")}</button>
-                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}><span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}</button>
+                  <button type="button" className="resume-btn resume-btn-secondary" onClick={openCabinetFromHome}>{sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함", "My documents")}</button>
                 </>}
                 {homeState === "start" && <button type="button" className="resume-btn resume-btn-primary" disabled={sessionLoading} onClick={startNewDocument}>{sessionLoading ? t("진행 내용 확인 중…", "Checking your progress…") : t("프로필 만들기", "Create profile")}</button>}
                 {toast && <div role="alert" className="capture-error" style={{ margin: 0 }}>{toast}</div>}
@@ -967,33 +980,31 @@ export default function App() {
       return (
       <Shell modal={activeModal}>
         <div className="splash-lang"><LangToggle locale={locale} onChange={changeLocale} /></div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 26, padding: "40px 34px" }}>
+        <div className="home-landing-main">
           <BridgeMark size={104} />
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}<span className={`wave-hello${showGreeting ? " visible" : ""}`} aria-hidden="true">👋</span></div>}
+          <div className="home-landing-greeting">
+            {isAuthenticated && <div className="return-greeting">{t("다시 오셨네요", "Welcome back")}</div>}
           </div>
-          <div style={{ width: 34, height: 1, background: "var(--line)" }} />
-          <div style={{ fontSize: 15, lineHeight: 1.55, color: "oklch(0.45 0.012 60)", textAlign: "center", maxWidth: 250 }}>
-            {t("은행은 한 번만 가세요.", "Visit the bank only once.")}<br />{t("서류는 저희가 먼저 준비해요.", "We prepare your documents first.")}
+          <div className="home-landing-copy">
+            <h1>{t("은행은 한 번만 가세요.", "Visit the bank only once.")}</h1>
+            <p>{t("서류는 저희가 먼저 준비해요.", "We prepare your documents first.")}</p>
           </div>
         </div>
-        <div style={{ padding: "0 30px 40px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-          <div style={{ padding: "7px 13px", borderRadius: 999, background: "oklch(0.93 0.008 60)", ...mono, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em" }}>
+        <div className="home-landing-actions">
+          <div className="home-beta">
             D-2 STUDENT VISA · BETA
           </div>
           {isAuthenticated && resumed && (
             <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">↗</span>
               <div><b>{resumed.title}</b><small>{resumed.stage}</small></div>
             </div>
           )}
           {isAuthenticated && !sessionLoading && !resumed && !hasProfile && (
             <div className="saved-progress-note" role="status">
-              <span aria-hidden="true">＋</span>
               <div><b>{t("프로필부터 만들어 볼까요?", "Let's create your profile")}</b><small>{t("서류 사진을 등록하면 필요한 절차를 안내해 드려요.", "Upload your documents to get personalized guidance.")}</small></div>
             </div>
           )}
-          <div style={{ width: "100%" }}>
+          <div className="home-primary-action">
             <PrimaryButton disabled={sessionLoading} onClick={() => {
               if (isAuthenticated && resumed) resumeSession();
               else if (isAuthenticated) resumeSession();
@@ -1021,9 +1032,9 @@ export default function App() {
             <button type="button" onClick={() => go(1)} className="text-action">{t("언어 설정부터 다시 보기", "Choose language again")}</button>
           )}
           {isAuthenticated && (
-            <div onClick={openCabinetFromHome} className="tap" style={{ width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, border: "1px solid oklch(0.85 0.01 60)", background: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span aria-hidden="true">🗂️</span> {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
-            </div>
+            <button type="button" onClick={openCabinetFromHome} className="home-secondary-action tap">
+              {sessionLoading ? t("서류함 불러오는 중…", "Opening documents…") : t("내 서류함 열기", "Open my documents")}
+            </button>
           )}
           {isAuthenticated && (
             <button type="button" onClick={resetUserUiState} className="text-action">{t("로그아웃", "Sign out")}</button>
@@ -1116,21 +1127,20 @@ export default function App() {
     return (
       <Shell modal={activeModal}>
         <TopBar title={signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")} onBack={() => back(0)} right={<LangToggle locale={locale} onChange={changeLocale} />} />
-        <div style={{ padding: "18px 26px 12px" }}>
+        <div className="auth-hero">
           <BridgeMark size={56} />
-          <h2 style={{ ...H2, marginTop: 20 }}>{signup ? t("MAITE를 시작해요", "Create your MAITE profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
-          <p style={SUB}>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
+          <h2>{signup ? t("DARI를 시작해요", "Create your DARI profile") : t("다시 만나서 반가워요", "Nice to see you again")}</h2>
+          <p>{signup ? t("사용할 이메일과 안전한 비밀번호를 입력해 주세요.", "Enter your email and a secure password.") : t("이메일과 비밀번호를 입력해 주세요.", "Enter your email and password.")}</p>
         </div>
-        <form onSubmit={submitAuth} className="scroll" style={{ padding: "12px 26px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-          {authMessageType === "error" && authMessage && <div role="alert" className="auth-notice error">{authMessage}</div>}
+        <form onSubmit={submitAuth} className="scroll auth-form">
+          {authMessage && <div role={authMessageType === "error" ? "alert" : "status"} className={`auth-notice ${authMessageType}`}>{authMessage}</div>}
           <AuthInput label={t("이메일", "Email")} type="email" value={auth.email} onChange={updateAuth("email")} placeholder="name@example.com" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} aria-invalid={Boolean(auth.email) && !validEmail} valid={validEmail} />
           {auth.email && !validEmail && <FieldHint tone="error">{t("영문 이메일 형식으로 입력해 주세요. (예: name@example.com)", "Enter a valid email address, such as name@example.com.")}</FieldHint>}
-          {validEmail && <div className="auth-inline-hint">✓ {t("@ 포함 이메일 형식", "Valid email format")}</div>}
           <AuthInput label={t("비밀번호", "Password")} type="password" value={auth.password} onChange={updateAuth("password")} placeholder={t("비밀번호를 입력하세요", "Enter your password")} autoComplete={signup ? "new-password" : "current-password"} maxLength={64} aria-invalid={Boolean(auth.password) && !passwordEligible} valid={Boolean(auth.password) && passwordEligible} />
-          {!signup && authMessageType === "success" && authMessage && <div role="status" className="auth-notice success">{authMessage}</div>}
-          <div className="password-guide login" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
+          {!signup && auth.password && !passwordEligible && <FieldHint tone="error">{t("비밀번호 조건을 확인해 주세요.", "Check the password requirements.")}</FieldHint>}
+          {signup && <div className="password-guide" aria-label={t("비밀번호 조건", "Password requirements")} aria-live="polite">
             <div>{rules.map((rule) => <span key={rule.label} className={auth.password && rule.met ? "met" : ""}>{auth.password && rule.met ? "✓" : "○"} {rule.label}</span>)}</div>
-          </div>
+          </div>}
           {signup && (
             <>
               <AuthInput label={t("비밀번호 확인", "Confirm password")} type="password" value={auth.passwordConfirm} onChange={updateAuth("passwordConfirm")} placeholder={t("비밀번호를 다시 입력하세요", "Enter your password again")} autoComplete="new-password" maxLength={64} aria-invalid={Boolean(auth.passwordConfirm) && !passwordMatches} valid={passwordMatches} indicator={t("일치", "Match")} />
@@ -1141,22 +1151,21 @@ export default function App() {
                   <span>{t("D-2 유학", "D-2 Student")}</span><span aria-hidden="true">✓</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("D-4 연수", "D-4 Training")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("D-4 연수", "D-4 Training")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("D-10 구직", "D-10 Job seeking")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("D-10 구직", "D-10 Job seeking")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
                 <button type="button" className="visa-choice" disabled>
-                  <span>{t("기타", "Other")}</span><span aria-hidden="true">🔒</span>
+                  <span>{t("기타", "Other")}</span><span>{t("준비 중", "Coming soon")}</span>
                 </button>
               </div>
             </>
           )}
         </form>
-        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 26, paddingRight: 26 }}>
+        <div className="bottom-cta auth-actions">
           <PrimaryButton disabled={!canSubmit || authLoading} onClick={() => submitAuth({ preventDefault() {} })}>{authLoading ? t("처리 중…", "Processing…") : signup ? t("회원가입", "Sign up") : t("로그인", "Sign in")}</PrimaryButton>
-          <button type="button" onClick={switchAuthMode}
-            style={{ width: "100%", minHeight: 46, marginTop: 8, border: 0, background: "transparent", color: "var(--muted)", fontSize: 13 }}>
+          <button type="button" onClick={switchAuthMode} className="auth-mode-switch">
             {signup ? t("이미 계정이 있나요? 로그인", "Already have an account? Sign in") : t("계정이 없나요? 회원가입", "Need an account? Sign up")}
           </button>
         </div>
@@ -1208,7 +1217,11 @@ export default function App() {
           : cardProfileFields;
         if (isCardDocument) setCardProfileFields(mergedCardFields);
         setExtract({ ...data, fields: mergedCardFields });
-        if (data.agentResponse) applyAgent(data.agentResponse);
+        if (data.agentResponse) {
+          const appendExtractionReply = !extractionReplyAddedRef.current;
+          if (appendExtractionReply && data.agentResponse.reply) extractionReplyAddedRef.current = true;
+          applyAgent(data.agentResponse, { appendReply: appendExtractionReply });
+        }
         if (isCardDocument) {
           setProfileDraft((current) => ({
             ...current,
@@ -1259,13 +1272,15 @@ export default function App() {
       setScan((scan + 1) % scanPages.length);
     };
     const currentShot = shots[scanPages[scan].key];
+    const allShotsReady = scanPages.every((page) => Boolean(shots[page.key]));
     const captureActivated = cameraStarting || captureLoading || cameraOpen || Boolean(currentShot);
     return (
       <Shell modal={activeModal}>
         <TopBar title={t("서류 촬영", "Capture documents")} onBack={() => back(1)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={1} locale={locale} />
-        <div style={{ padding: "4px 24px 12px" }}>
-          <h2 style={H2}>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+        <div className="capture-head">
+          <h2>{t("3장을 촬영하세요", "Capture 3 images")}</h2>
+          <p>{t("외국인등록증 앞·뒷면과 여권 사진면을 등록해 주세요.", "Add the front and back of your residence card and your passport photo page.")}</p>
         </div>
         <div className="capture-tabs">
           {scanPages.map((p, i) => {
@@ -1282,10 +1297,7 @@ export default function App() {
             );
           })}
         </div>
-        <div style={{ margin: "0 24px", flex: 1, minHeight: 220, borderRadius: 18, background: "oklch(0.18 0.012 60)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 20 }}>
-          {currentShot && (
-            <div style={{ width: 40, height: 40, borderRadius: 99, background: "var(--ok)", color: "#fff", fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
-          )}
+        <div className="capture-stage">
           {captureActivated
             ? <div className={`scan-preview${captureLoading ? " loading" : ""}`}>
             {captureLoading
@@ -1299,7 +1311,7 @@ export default function App() {
             : <div className="scan-preview scan-idle" aria-label={t("촬영 또는 파일 첨부 대기", "Waiting for camera or file upload")}>
                 <span className="scan-idle-label">{scanPages[scan].label}</span>
               </div>}
-          <div style={{ alignSelf: "stretch", ...mono, fontSize: 10.5, color: "var(--ok)" }}>●&nbsp; {captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraStarting ? t("카메라 준비 중", "Preparing camera") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("촬영하기 또는 파일 첨부를 선택해 주세요", "Choose Camera or File upload")}</div>
+          <div className="capture-stage-status">{captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraStarting ? t("카메라 준비 중", "Preparing camera") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("촬영하기 또는 파일 첨부를 선택해 주세요", "Choose Camera or File upload")}</div>
         </div>
         <CaptureAlert error={captureError} locale={locale}
           onDeviceCamera={() => nativeCameraInputRef.current?.click()}
@@ -1308,16 +1320,25 @@ export default function App() {
             setCaptureError(null);
             window.setTimeout(() => fileInputRef.current?.click(), 0);
           }} />
-        <div className="bottom-cta" style={{ paddingTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <div className={`bottom-cta capture-actions${allShotsReady ? " complete" : ""}`}>
           <input ref={fileInputRef} type="file" accept="image/*" onChange={selectImage} hidden />
           <input ref={nativeCameraInputRef} type="file" accept="image/*" capture="environment" onChange={selectImage} hidden />
-          <div style={{ flex: 1 }}><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
-          <button type="button" title={t("파일 첨부", "File upload")} aria-label={t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="file-attach compact tap">
-            {t("파일 첨부", "File upload")}
-          </button>
-          <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="file-attach compact tap">
-            {t("건너뛰기", "Skip")}
-          </button>
+          {allShotsReady && (
+            <div className="capture-profile-action">
+              <PrimaryButton onClick={() => go(3)}>{t("프로필 확인하기", "Review profile")}</PrimaryButton>
+            </div>
+          )}
+          <div className="capture-primary-action"><PrimaryButton disabled={captureLoading || cameraStarting} onClick={cameraOpen ? takePhoto : () => startCamera(true)}>{captureLoading ? t("인식 중…", "Reading…") : cameraStarting ? t("연결 중…", "Connecting…") : cameraOpen ? t("사진 찍기", "Take photo") : currentShot ? t("다시 찍기", "Retake") : t("촬영하기", "Camera")}</PrimaryButton></div>
+          <div className="capture-sub-actions">
+            <button type="button" title={currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")} aria-label={currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")} disabled={captureLoading || cameraStarting} onClick={attachFile} className="capture-secondary-action tap">
+              {currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")}
+            </button>
+            {!allShotsReady && (
+              <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="capture-tertiary-action tap">
+                {t("건너뛰기", "Skip")}
+              </button>
+            )}
+          </div>
         </div>
       </Shell>
     );
@@ -1346,7 +1367,9 @@ export default function App() {
       setProfileErrors({});
       try {
         const response = await confirmProfile(sessionId || extract?.state?.session_id, dirtyFields, locale);
-        applyAgent(response);
+        const appendProfileReply = !profileReplyAddedRef.current;
+        if (appendProfileReply && response.reply) profileReplyAddedRef.current = true;
+        applyAgent(response, { appendReply: appendProfileReply });
         setExtract((current) => ({
           ...current,
           profile: response.state?.profile || {},
@@ -1376,21 +1399,23 @@ export default function App() {
       <Shell modal={activeModal}>
         <TopBar title={t("프로필 만들기", "Create profile")} onBack={() => back(2)} right={<TopActions locale={locale} onLocale={changeLocale} onExit={requestOnboardingExit} />} />
         <Rail active={2} locale={locale} />
-        <div style={{ padding: "4px 24px 14px" }}>
-          <h2 style={H2}>{t("카드에서 만든 프로필", "Profile from your documents")}</h2>
-          <p style={SUB}>{t("노란색 항목을 확인하고, 잘못 읽은 값만 수정해 주세요.", "Check highlighted fields and edit only incorrect values.")}</p>
+        <div className="profile-head">
+          <h2>{t("인식된 정보 확인", "Review recognized information")}</h2>
+          <p>{t("확인이 필요한 항목을 확인하고, 잘못 인식된 정보만 수정해 주세요.", "Review fields that need confirmation and edit only incorrect information.")}</p>
         </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 9 }}>
-          <Label>{t("OCR 추출 결과", "OCR results")}</Label>
-          {fields.map((field) => (
-            <Field key={field.key} label={profileFieldLabel(field, locale)} value={profileDraft[field.key] ?? field.value}
-              confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
-              error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} locale={locale} />
-          ))}
-          {profileErrors._form && <div role="alert" className="capture-error" style={{ margin: 0 }}>{profileErrors._form}</div>}
+        <div className="scroll profile-scroll">
+          <div className="profile-section-label">{t("기본 정보", "Basic information")}</div>
+          <div className="profile-field-list">
+            {fields.map((field) => (
+              <Field key={field.key} label={profileFieldLabel(field, locale)} value={profileDraft[field.key] ?? field.value}
+                confidence={field.confidence} editable={field.editable} dirty={field.key in dirtyFields}
+                error={profileErrors[field.key]} onChange={(value) => updateField(field, value)} locale={locale} />
+            ))}
+          </div>
+          {profileErrors._form && <div role="alert" className="capture-error profile-form-error">{profileErrors._form}</div>}
         </div>
-        <div className="bottom-cta" style={{ paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.45 }}>{t("수정 불가 항목은 마스킹된 값으로 전송되지 않아요.", "Read-only masked values are not submitted.")}</div>
+        <div className="bottom-cta profile-actions">
+          <div className="profile-submit-note">{t("수정할 수 없는 항목은 확인용이며 별도로 전송되지 않아요.", "Read-only fields are shown for review and are not submitted separately.")}</div>
           <PrimaryButton disabled={profileSubmitting || fields.length === 0} onClick={submitProfile}>
             {profileSubmitting ? t("확인 중…", "Checking…") : t("확인하고 계속", "Confirm and continue")}
           </PrimaryButton>
@@ -1403,40 +1428,8 @@ export default function App() {
   if (step === 4) {
     if (verdict) {
       const editAnswers = () => setVerdict(null);
-      return (
-        <Shell modal={activeModal}>
-          <TopBar title={t("AI 상담", "AI consultation")} onBack={editAnswers} right={<span className="review-status"><i />{t("심사 완료", "Review complete")}</span>} />
-          <Rail active={3} locale={locale} />
-          <div className="scroll review-scroll">
-            <section className="review-hero">
-              <div className="review-kicker">{t("계좌 개설 진단 결과", "ACCOUNT OPENING REVIEW")}</div>
-              <h1>{verdict.headline}</h1>
-              <p>{verdict.summary}</p>
-            </section>
-
-            <div className="review-content">
-              {verdict.blocker && (
-                <section className="review-card blocker">
-                  <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
-                  <p>{verdict.blocker.body}</p>
-                </section>
-              )}
-              <AccountCard title={t("한도제한계좌", "Limited account")} subtitle={t("한도제한계좌 · 1일 이체 100만원 한도", "Limited account · KRW 1,000,000 daily transfer limit")} account={verdict.limited} />
-              <AccountCard title={t("일반계좌", "Standard account")} subtitle={t("일반계좌", "Standard account")} account={verdict.regular} />
-
-              <details className="review-sources">
-                <summary>{t("판정 근거", "Review basis")}</summary>
-                {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
-              </details>
-              <p className="review-disclaimer">{t("이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.", "This is a preliminary review based on bank policy. The bank makes the final account-opening decision.")}</p>
-            </div>
-          </div>
-          <div className="review-actions">
-            <button type="button" onClick={editAnswers} className="review-edit tap">{t("답변 수정", "Edit answers")}</button>
-            <button type="button" onClick={() => go(6)} className="review-next tap">{verdictCta(verdict.kind, locale)}</button>
-          </div>
-        </Shell>
-      );
+      return <ReviewResultScreen locale={locale} modal={activeModal} verdict={verdict}
+        onBack={editAnswers} onNext={() => go(6)} />;
     }
 
     const question = ui.type === "question" ? ui.payload : null;
@@ -1579,9 +1572,12 @@ export default function App() {
 
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<span style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--ok)", fontSize: 11.5 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--ok)" }} />{t("상담 중", "In session")}</span>} />
-        <Rail active={3} locale={locale} />
-        <div ref={chatScrollRef} className="scroll chat-scroll consultation-chat" style={{ padding: "6px 18px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<span className="consultation-status"><i />{t("상담 중", "In session")}</span>} />
+        <div className="consultation-progress" aria-label={t("전체 5단계 중 상담 단계", "Consultation, step 4 of 5")}>
+          <span className="consultation-progress-label">{t("4 / 5 · 상담", "4 / 5 · Consultation")}</span>
+          <div aria-hidden="true">{[0, 1, 2, 3, 4].map((item) => <i key={item} className={item <= 3 ? "active" : ""} />)}</div>
+        </div>
+        <div ref={chatScrollRef} className="scroll chat-scroll consultation-chat">
           {messages.length === 0 && (
             <ChatBubble avatar>
               <strong>{t("\uc548\ub155\ud558\uc138\uc694! AI \uc0c1\ub2f4\uc774\uc5d0\uc694 \ud83d\ude4c", "Hello! I am your AI assistant \ud83d\ude4c")}</strong>
@@ -1590,11 +1586,13 @@ export default function App() {
           )}
           {messages.map((message, index) => {
             const isLastAgent = message.from === "agent" && (index === messages.length - 1 || messages.slice(index + 1).every((m) => m.from === "user"));
+            const isAgentContinuation = message.from === "agent" && index > 0 && messages[index - 1]?.from === "agent";
             const hasInlineOffer = isLastAgent && actionOffer?.action_id;
             const displayText = isLastAgent && typingText !== null ? typingText : message.text;
             const lines = displayText ? displayText.split("\n") : [];
             return (
-              <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"} avatar={message.from === "agent"}
+              <ChatBubble key={`${message.from}-${index}`} mine={message.from === "user"}
+                avatar={message.from === "agent" && !isAgentContinuation} continuation={isAgentContinuation}
                 compact={message.from === "user" && /^[0-9-]+$/.test(message.text?.trim() || "")}>
                 {message.from === "agent" && index === 0 && lines[0] && <strong>{lines[0]}</strong>}
                 {lines.slice(message.from === "agent" && index === 0 ? 1 : 0).map((line, li) => (
@@ -1623,7 +1621,7 @@ export default function App() {
           })}
 
           {question && (
-            <ChatBubble avatar wide>
+            <ChatBubble avatar={messages.at(-1)?.from !== "agent"} continuation={messages.at(-1)?.from === "agent"} wide>
               <QuestionCard payload={question} options={options} value={chatInput}
                 onChange={setChatInput} onSubmit={answer} disabled={chatLoading} locale={locale} />
             </ChatBubble>
@@ -1653,15 +1651,11 @@ export default function App() {
             </div>
           )}
 
-          {chatLoading && thinkingSteps.length > 0 && (
-            <ChatBubble avatar>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {thinkingSteps.map((label, ti) => (
-                  <div key={ti} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: ti === thinkingSteps.length - 1 ? "var(--brand-2)" : "var(--muted)" }}>
-                    {ti === thinkingSteps.length - 1 ? <span className="thinking-dot" /> : <span style={{ color: "var(--ok)" }}>✓</span>}
-                    {label}
-                  </div>
-                ))}
+          {chatLoading && (
+            <ChatBubble avatar={!question} continuation={Boolean(question)}>
+              <div className="chat-loading" role="status" aria-live="polite">
+                <span>{t("답변을 준비하고 있어요", "Preparing a response")}</span>
+                <i aria-hidden="true" /><i aria-hidden="true" /><i aria-hidden="true" />
               </div>
             </ChatBubble>
           )}
@@ -1766,37 +1760,8 @@ export default function App() {
 
   // ── 6 준비 안내 ──
   if (step === 6 && verdict) {
-    const action = nextAction(verdict, locale);
-    return (
-      <Shell modal={activeModal}>
-        <TopBar title={t("준비할 것", "What to prepare")} onBack={() => back(4)} />
-        <Rail active={4} locale={locale} />
-        <div style={{ padding: "4px 24px 16px" }}>
-          <div style={{ padding: 17, borderRadius: 16, background: "#c44f40", color: "#fff" }}>
-            <div style={{ ...mono, fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.85, marginBottom: 8 }}>{t("다음 할 일", "NEXT STEP")}</div>
-            <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.3 }}>{action.title}</div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8, opacity: 0.92 }}>{action.meta}</div>
-          </div>
-        </div>
-        <div className="scroll" style={{ padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ ...card, padding: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>{action.cardTitle}</div>
-            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{action.cardMeta}</div>
-            <div style={{ marginTop: 11, display: "flex", flexDirection: "column", gap: 9 }}>
-              {action.steps.map((s, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, fontSize: 12.5, lineHeight: 1.45, color: "oklch(0.35 0.012 60)" }}>
-                  <span style={{ ...mono, color: "#c44f40", fontWeight: 700 }}>{i + 1}</span><span>{s}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 12, padding: "9px 11px", borderRadius: 9, background: "oklch(.93 .008 60)", fontSize: 11.5, lineHeight: 1.45 }}>{action.note}</div>
-          </div>
-        </div>
-        <div className="bottom-cta">
-          <PrimaryButton onClick={() => go(7)}>{t("내 신청서", "My applications")}</PrimaryButton>
-        </div>
-      </Shell>
-    );
+    return <PreparationScreen locale={locale} modal={activeModal} verdict={verdict}
+      onBack={() => back(4)} onNext={() => go(7)} />;
   }
 
   // ── 7 신청서 만들기 ──
@@ -1927,46 +1892,10 @@ export default function App() {
 
   // ── PDF 뷰어 ──
   if (step === 10 && preview && previewBlobUrl) {
-    const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
-    const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
-    const dotStyle = (activeDot) => ({ width: 6, height: 6, borderRadius: 99, border: 0, padding: 0,
-      background: activeDot ? "var(--brand-2)" : "oklch(0.55 0.01 60)" });
-    const arrowStyle = { border: 0, background: "transparent", color: "oklch(0.78 0.01 60)", fontSize: 15, padding: "0 4px", lineHeight: 1 };
-    return (
-      <Shell modal={activeModal} dark>
-        <TopBar title={preview.title} onBack={() => back(7)} />
-        {(preview.warnings || []).length > 0 && (
-          <div role="alert" style={{ margin: "0 20px 12px", padding: "11px 13px", borderRadius: 11, background: "oklch(.8 .1 75 / .15)", color: "oklch(.82 .08 75)", fontSize: 11.5, lineHeight: 1.5 }}>
-            {preview.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
-          </div>
-        )}
-        <div className="scroll" style={{ padding: "0 20px 12px" }}>
-          <iframe title={preview.title} src={pageCount ? `${previewBlobUrl}#page=${page}` : previewBlobUrl}
-            style={{ width: "100%", height: "100%", minHeight: 620, border: 0, borderRadius: 6, background: "#fff" }} />
-        </div>
-        {pageCount > 1 && (
-          <div style={{ padding: "0 20px 4px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button type="button" className="tap" style={arrowStyle} aria-label="Previous page"
-                disabled={page <= 1} onClick={() => setPdfPage(page - 1)}>‹</button>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                {Array.from({ length: pageCount }, (_, i) => (
-                  <button key={i} type="button" aria-label={`Page ${i + 1}`} aria-current={page === i + 1}
-                    className="tap" style={dotStyle(page === i + 1)} onClick={() => setPdfPage(i + 1)} />
-                ))}
-              </div>
-              <button type="button" className="tap" style={arrowStyle} aria-label="Next page"
-                disabled={page >= pageCount} onClick={() => setPdfPage(page + 1)}>›</button>
-            </div>
-            <div style={{ ...mono, fontSize: 11, color: "oklch(0.78 0.01 60)" }}>{page} / {pageCount}</div>
-          </div>
-        )}
-        <div className="bottom-cta" style={{ paddingTop: 12, paddingLeft: 20, paddingRight: 20, display: "flex", gap: 9 }}>
-          <button type="button" onClick={() => downloadPdf(preview)} className="tap" style={{ ...smallActionStyle, minHeight: 52, fontSize: 13 }}>{t("PDF 다운로드", "Download PDF")}</button>
-          {approval && <button type="button" onClick={() => setApprovalVisible(true)} className="tap" style={{ ...smallActionStyle, minHeight: 52, border: 0, fontSize: 14, color: "#fff", background: "var(--brand-2)" }}>{t("발급하기", "Issue")}</button>}
-        </div>
-      </Shell>
-    );
+    return <PdfPreviewScreen locale={locale} modal={activeModal} preview={preview}
+      previewBlobUrl={previewBlobUrl} pdfPage={pdfPage} onPageChange={setPdfPage}
+      approval={approval} onBack={() => back(7)} onDownload={() => downloadPdf(preview)}
+      onIssue={() => setApprovalVisible(true)} />;
   }
   return (
     <Shell modal={activeModal}>
@@ -1983,6 +1912,47 @@ export default function App() {
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
+function ReviewResultScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  return (
+    <Shell modal={modal}>
+      <TopBar title={t("사전 확인 결과", "Pre-check result")} onBack={onBack} right={<span className="review-status"><i />{t("사전 확인 완료", "Pre-check complete")}</span>} />
+      <Rail active={3} locale={locale} />
+      <div className="scroll review-scroll">
+        <section className="review-hero">
+          <div className="review-kicker">{t("계좌 개설 사전 확인 결과", "ACCOUNT OPENING PRE-CHECK")}</div>
+          <h1>{verdict.headline}</h1>
+          <p>{verdict.summary}</p>
+        </section>
+        <div className="review-content">
+          {verdict.blocker && (
+            <section className="review-card blocker">
+              <div className="review-card-head"><b>{verdict.blocker.title}</b><span>{verdict.blocker.badge}</span></div>
+              <p>{verdict.blocker.body}</p>
+            </section>
+          )}
+          <section className="review-account-section" aria-label={t("계좌 유형별 안내", "Account type information")}>
+            <div className="review-section-title">{t("계좌 유형별 안내", "Account type information")}</div>
+            <div className="review-account-list">
+              <AccountCard title={t("한도제한계좌", "Limited account")} subtitle={t("1일 이체 100만원 한도", "KRW 1,000,000 daily transfer limit")} account={verdict.limited} />
+              <AccountCard title={t("일반계좌", "Standard account")} subtitle={t("거래 한도 제한 없음", "No restricted transaction limit")} account={verdict.regular} />
+            </div>
+          </section>
+          <details className="review-sources">
+            <summary>{t("판정 근거", "Review basis")}</summary>
+            {verdict.sources.map((source) => <div key={source}>· {source}</div>)}
+          </details>
+          <p className="review-disclaimer">{t("이 판정은 은행 정책 기준의 사전 점검입니다. 최종 계좌 개설 여부는 은행이 결정합니다.", "This is a preliminary review based on bank policy. The bank makes the final account-opening decision.")}</p>
+        </div>
+      </div>
+      <div className="review-actions">
+        <button type="button" onClick={onBack} className="review-edit tap">{t("답변 수정", "Edit answers")}</button>
+        <button type="button" onClick={onNext} className="review-next tap">{verdictCta(verdict.kind, locale)}</button>
+      </div>
+    </Shell>
+  );
+}
+
 function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToChat, onOpen }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
@@ -1995,25 +1965,64 @@ function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToCha
     <Rail active={3} locale={locale} />
     <div className="document-flow-head"><h2>{pick("\uacc4\uc88c \uac1c\uc124\uae4c\uc9c0 \uc11c\ub958 2\uac1c", "Two documents to open your account")}</h2><p>{pick("\uacc4\uc88c\ub97c \ub9cc\ub4e4\ub824\uba74 \uba3c\uc800 \uc678\uad6d\uc778\ub4f1\ub85d\uc774 \ub418\uc5b4 \uc788\uc5b4\uc57c \ud574\uc694. \uadf8\ub798\uc11c \ub450 \uc11c\ub958\ub97c \uc21c\uc11c\ub300\ub85c \ub9cc\ub4e4\uc5b4 \ub4dc\ub824\uc694.", "You need alien registration first. We will prepare both documents in order.")}</p></div>
     <div className="scroll document-flow-list">
-      {steps.map((item, index) => { const status = taskById[item.actionId]?.status; const done = status === "done"; const active = status === "in_progress" || status === "available"; return <React.Fragment key={item.actionId}>
-        {index > 0 && <div className="document-flow-arrow">{"\u2193"}</div>}
-        <section className={`document-flow-card${active ? " active" : ""}`}><div className="document-flow-row"><span className="document-flow-number">{index + 1}</span><div><b>{item.title}</b><p>{item.description}</p></div><em>{done ? pick("\uc644\ub8cc", "Done") : status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div>{active && <button type="button" onClick={() => onOpen(item.actionId)}>{status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}{item.actionId === "open_bank_account" && <div className="document-card-requirements"><div className="document-ready-label">{pick("\uc0c1\ub2f4\uc5d0\uc11c \ud655\uc778\ud55c \uc900\ube44\ubb3c", "Items confirmed in chat")}</div><div className="document-ready-chips"><span className={answers.phone === "yes" ? "ready" : ""}>{answers.phone === "yes" ? "\u2713 " : ""}{pick("\ud734\ub300\ud3f0", "Mobile phone")}</span><span className={answers.cert === "yes" ? "ready" : ""}>{answers.cert === "yes" ? "\u2713 " : ""}{pick("\uc7ac\ud559\uc99d\uba85\uc11c", "Enrollment certificate")}</span></div></div>}</section>
-      </React.Fragment>; })}
+      {steps.map((item, index) => { const status = taskById[item.actionId]?.status; const done = status === "done"; const active = status === "in_progress" || status === "available"; return (
+        <section key={item.actionId} className={`document-flow-card${done ? " done" : active ? " active" : " locked"}`}>
+          <div className="document-flow-row"><span className="document-flow-number">{done ? "\u2713" : index + 1}</span><div><b>{item.title}</b><p>{item.description}</p></div><em>{done ? pick("\uc644\ub8cc", "Done") : status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc120\ud589 \ud544\uc694", "Locked")}</em></div>
+          {active && <button type="button" onClick={() => onOpen(item.actionId)}>{status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}
+          {item.actionId === "open_bank_account" && <div className="document-card-requirements"><div className="document-ready-label">{pick("\uc0c1\ub2f4\uc5d0\uc11c \ud655\uc778\ud55c \uc900\ube44\ubb3c", "Items confirmed in chat")}</div><div className="document-ready-chips"><span className={answers.phone === "yes" ? "ready" : ""}>{answers.phone === "yes" ? "\u2713 " : ""}{pick("\ud734\ub300\ud3f0", "Mobile phone")}</span><span className={answers.cert === "yes" ? "ready" : ""}>{answers.cert === "yes" ? "\u2713 " : ""}{pick("\uc7ac\ud559\uc99d\uba85\uc11c", "Enrollment certificate")}</span></div></div>}
+        </section>
+      ); })}
     </div>
-    <button type="button" className="task-chat-fab tap" onClick={onReturnToChat}
-      aria-label={pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}>
-      <span><b>{pick("AI \uc0c1\ub2f4", "AI chat")}</b><small>{pick("\uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to chat")}</small></span>
-      <img src="/assets/ma1te-mascot.svg" alt="" />
-    </button>
+    <div className="document-flow-actions"><button type="button" className="task-chat-return tap" onClick={onReturnToChat}
+      aria-label={pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}>{pick("AI \uc0c1\ub2f4\uc73c\ub85c \ub3cc\uc544\uac00\uae30", "Back to AI chat")}</button></div>
   </Shell>;
+}
+
+function PreparationScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  const action = nextAction(verdict, locale);
+  return (
+    <Shell modal={modal}>
+      <TopBar title={t("준비할 것", "What to prepare")} onBack={onBack} />
+      <Rail active={4} locale={locale} />
+      <div className="preparation-head">
+        <section className="preparation-summary">
+          <div className="preparation-kicker">{t("다음 할 일", "NEXT STEP")}</div>
+          <h2>{action.title}</h2>
+          <p>{action.meta}</p>
+        </section>
+      </div>
+      <div className="scroll preparation-content">
+        <section className="preparation-section">
+          <h3>{action.cardTitle}</h3>
+          <p className="preparation-meta">{action.cardMeta}</p>
+          <ol className="preparation-steps">
+            {action.steps.map((item, index) => (
+              <li key={index}><span>{index + 1}</span><p>{item}</p></li>
+            ))}
+          </ol>
+          <aside className="preparation-note">{action.note}</aside>
+        </section>
+      </div>
+      <div className="bottom-cta preparation-actions"><PrimaryButton onClick={onNext}>{t("신청서 만들기", "Create application")}</PrimaryButton></div>
+    </Shell>
+  );
 }
 
 function DocumentApplicationBuilder({ locale, modal, application, goal, documents, loading, error, onBack, onCreate, onOpenDocument }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   return <Shell modal={modal}>
-    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} /><Rail active={4} locale={locale} />
-    <div className="builder-head"><h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2><p>{pick("\uc800\uc7a5\ub41c \ud504\ub85c\ud544\ub85c \uc790\ub3d9 \uc791\uc131\ud574\uc694. \ub9cc\ub4e4\uae30\ub97c \ub204\ub974\uba74 \ubbf8\ub9ac\ubcf4\uae30\uac00 \ub098\uc640\uc694.", "We fill it automatically from your saved profile. Create it to see a preview.")}</p></div>
-    <div className="scroll builder-content"><section className="builder-selection"><div><b>{application[locale]}</b><span>✓ {pick("\ud655\uc815\ub428", "Confirmed")}</span></div><p>{goal[locale]}</p></section>{loading ? <DocumentWritingProgress locale={locale} title={application[locale]} /> : <div className="document-paper-preview"><i /><i /><i /><i /><i /><div /></div>}{documents.filter((doc) => doc.title === application[locale]).map((doc) => <button key={doc.id} type="button" className="stored-document-link" onClick={() => onOpenDocument(doc)}>{pick("\uc800\uc7a5\ub41c PDF \ubcf4\uae30", "View saved PDF")}</button>)}</div>
+    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} />
+    <Rail active={4} locale={locale} />
+    <div className="builder-head">
+      <h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2>
+      <p>{pick("\uc800\uc7a5\ub41c \ud504\ub85c\ud544\ub85c \uc790\ub3d9 \uc791\uc131\ud574\uc694. \ub9cc\ub4e4\uae30\ub97c \ub204\ub974\uba74 \ubbf8\ub9ac\ubcf4\uae30\uac00 \ub098\uc640\uc694.", "We fill it automatically from your saved profile. Create it to see a preview.")}</p>
+    </div>
+    <div className="scroll builder-content">
+      <section className="builder-selection"><div><b>{application[locale]}</b><span>{pick("\uc120\ud0dd\ub428", "Selected")}</span></div><p>{goal[locale]}</p></section>
+      {loading ? <DocumentWritingProgress locale={locale} title={application[locale]} /> : <div className="document-paper-preview"><i /><i /><i /><i /><i /><div /></div>}
+      {documents.filter((doc) => doc.title === application[locale]).map((doc) => <button key={doc.id} type="button" className="stored-document-link" onClick={() => onOpenDocument(doc)}>{pick("\uc800\uc7a5\ub41c PDF \ubcf4\uae30", "View saved PDF")}</button>)}
+    </div>
     <div className="builder-actions">{error && <div role="alert" className="capture-error">{error}</div>}<button type="button" disabled={loading} onClick={onCreate}>{loading ? pick("\uc2e0\uccad\uc11c \ub9cc\ub4dc\ub294 \uc911\u2026", "Creating application\u2026") : pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")}</button></div>
   </Shell>;
 }
@@ -2045,10 +2054,71 @@ function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLe
       && (!document.session_id || document.session_id === task.sessionId));
     return !hasDocument && task.status === "in_progress";
   });
-  return <Shell modal={modal}><TopBar title={pick("\ub0b4 \uc11c\ub958\ud568 \u00b7 \ubc1c\uae09 \uc774\ub825", "Documents \u00b7 Issuance history")} onBack={onBack} /><div className="scroll cabinet-content">
-    <section><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")} <small>{documents.length + pendingWorks.length}</small></h2>{documents.length === 0 && pendingWorks.length === 0 ? <div className="cabinet-zero"><img src="/assets/ma1te-mascot.svg" alt="" /><h3>{pick("\uc544\uc9c1 \uc800\uc7a5\ub41c \uc11c\ub958\uac00 \uc5c6\uc5b4\uc694", "No saved documents yet")}</h3><p>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \ud544\uc694\ud55c \uc11c\ub958\ub97c \ud655\uc778\ud558\uace0 \uc2e0\uccad\uc11c\ub97c \ub9cc\ub4e4\uc5b4 \ubcf4\uc138\uc694.", "Ask the AI what you need and create your first application.")}</p><button type="button" onClick={onStartChat}>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \uc2dc\uc791\ud558\uae30", "Start in AI chat")}</button></div> : <div className="cabinet-list saved-work-list">{pendingWorks.map((task, index) => <article key={`${task.sessionId}-${task.id}`}><div><span>{index + 1}</span><b>{APPLICATIONS[task.id][locale]}</b><em className={`work-status ${task.status}`}>{task.status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : task.status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("🔒 \uc7a0\uae08", "🔒 Locked")}</em></div><p>{task.note || task.agency}</p>{task.status !== "locked" && <button type="button" className="saved-work-action" onClick={() => onOpenTask(task.sessionId, task.id)}>{task.status === "in_progress" ? pick("\uc774\uc5b4\ud558\uae30", "Continue") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}</article>)}{documents.map((doc, index) => <article key={doc.id}><div><span>{pendingWorks.length + index + 1}</span><b>{doc.title}</b><em className={`work-status ${doc.status === "issued" ? "issued" : "done"}`}>{doc.status === "issued" ? pick("\ubc1c\uae09 \uc644\ub8cc", "Issued") : pick("\uc791\uc131 \uc644\ub8cc", "Completed")}</em></div><p>{formatDate(doc.created_at, locale)}</p><div className="cabinet-buttons"><button type="button" onClick={() => onPreview(doc)}>{pick("\ubbf8\ub9ac\ubcf4\uae30", "Preview")}</button><button type="button" onClick={() => onDownload(doc)}>PDF {pick("\ub2e4\uc6b4\ub85c\ub4dc", "Download")}</button></div></article>)}</div>}</section>
-    <section><h2>{pick("\ubc1c\uae09 \ubb38\uc11c \u00b7 \uc774\ub825", "Issued documents \u00b7 History")}</h2>{loading && <div className="cabinet-empty">{pick("\ubd88\ub7ec\uc624\ub294 \uc911\u2026", "Loading\u2026")}</div>}{error && <div className="capture-error">{error}</div>}{!loading && !error && ledger.length === 0 ? <div className="history-zero"><span aria-hidden="true">✓</span><div><b>{pick("\uc544\uc9c1 \ubc1c\uae09\ud55c \ubb38\uc11c\uac00 \uc5c6\uc5b4\uc694", "No issued documents yet")}</b><p>{pick("\ubbf8\ub9ac\ubcf4\uae30 \ud6c4 \ucd5c\uc885 \ubc1c\uae09\uae4c\uc9c0 \uc2b9\uc778\ud55c \ubb38\uc11c\ub9cc \uc5ec\uae30\uc5d0 \ub0a8\uc544\uc694.", "Only documents you finally approve for issuance appear here.")}</p></div></div> : <div className="cabinet-list history-list">{ledger.map((entry, index) => <article key={`${entry.document_id || entry.action}-${entry.approved_at || index}`}><b>{entry.action || pick("\uc2e0\uccad\uc11c \ubc1c\uae09", "Application issued")}</b><p>{formatDate(entry.approved_at, locale)}</p><small>{pick("\ucd5c\uc885 \ubc1c\uae09 \uc644\ub8cc", "Issuance completed")}</small></article>)}</div>}</section>
-  </div></Shell>;
+  return <Shell modal={modal}>
+    <TopBar title={pick("\ub0b4 \uc11c\ub958\ud568", "My documents")} onBack={onBack} />
+    <div className="scroll cabinet-content">
+      <section className="cabinet-section">
+        <div className="cabinet-section-head"><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")}</h2><small>{documents.length + pendingWorks.length}</small></div>
+        {documents.length === 0 && pendingWorks.length === 0
+          ? <div className="cabinet-zero"><img src="/assets/dari-mascot.png" alt="" /><h3>{pick("\uc544\uc9c1 \uc800\uc7a5\ub41c \uc11c\ub958\uac00 \uc5c6\uc5b4\uc694", "No saved documents yet")}</h3><p>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \ud544\uc694\ud55c \uc11c\ub958\ub97c \ud655\uc778\ud558\uace0 \uc2e0\uccad\uc11c\ub97c \ub9cc\ub4e4\uc5b4 \ubcf4\uc138\uc694.", "Ask the AI what you need and create your first application.")}</p><button type="button" onClick={onStartChat}>{pick("AI \uc0c1\ub2f4\uc5d0\uc11c \uc2dc\uc791\ud558\uae30", "Start in AI chat")}</button></div>
+          : <div className="cabinet-list saved-work-list">
+              {pendingWorks.map((task) => <article key={`${task.sessionId}-${task.id}`} className="cabinet-row pending"><div className="cabinet-row-head"><b>{APPLICATIONS[task.id][locale]}</b><em className={`work-status ${task.status}`}>{task.status === "in_progress" ? pick("\uc791\uc131 \uc911", "In progress") : task.status === "available" ? pick("\uc2dc\uc791 \uac00\ub2a5", "Ready") : pick("\uc7a0\uae08", "Locked")}</em></div><p>{task.note || task.agency}</p>{task.status !== "locked" && <button type="button" className="saved-work-action" onClick={() => onOpenTask(task.sessionId, task.id)}>{task.status === "in_progress" ? pick("\uc774\uc5b4\uc11c \uc791\uc131\ud558\uae30", "Continue editing") : pick("\uc2dc\uc791\ud558\uae30", "Start")}</button>}</article>)}
+              {documents.map((doc) => <article key={doc.id} className="cabinet-row saved"><div className="cabinet-row-head"><b>{doc.title}</b><em className={`work-status ${doc.status === "issued" ? "issued" : "done"}`}>{doc.status === "issued" ? pick("\ubc1c\uae09 \uc644\ub8cc", "Issued") : pick("\uc791\uc131 \uc644\ub8cc", "Completed")}</em></div><p>{formatDate(doc.created_at, locale)}</p><div className="cabinet-buttons"><button type="button" onClick={() => onPreview(doc)}>{pick("\ubbf8\ub9ac\ubcf4\uae30", "Preview")}</button><button type="button" onClick={() => onDownload(doc)}>PDF {pick("\ub2e4\uc6b4\ub85c\ub4dc", "Download")}</button></div></article>)}
+            </div>}
+      </section>
+      <section className="cabinet-section history-section">
+        <div className="cabinet-section-head"><h2>{pick("\ubc1c\uae09 \uc774\ub825", "Issuance history")}</h2></div>
+        {loading && <div className="cabinet-empty">{pick("\ubd88\ub7ec\uc624\ub294 \uc911\u2026", "Loading\u2026")}</div>}
+        {error && <div className="capture-error">{error}</div>}
+        {!loading && !error && ledger.length === 0
+          ? <div className="history-zero"><span aria-hidden="true">✓</span><div><b>{pick("\uc544\uc9c1 \ubc1c\uae09\ud55c \ubb38\uc11c\uac00 \uc5c6\uc5b4\uc694", "No issued documents yet")}</b><p>{pick("\ubbf8\ub9ac\ubcf4\uae30 \ud6c4 \ucd5c\uc885 \ubc1c\uae09\uae4c\uc9c0 \uc2b9\uc778\ud55c \ubb38\uc11c\ub9cc \uc5ec\uae30\uc5d0 \ub0a8\uc544\uc694.", "Only documents you finally approve for issuance appear here.")}</p></div></div>
+          : <div className="cabinet-list history-list">{ledger.map((entry, index) => <article key={`${entry.document_id || entry.action}-${entry.approved_at || index}`}><div className="cabinet-row-head"><b>{entry.action || pick("\uc2e0\uccad\uc11c \ubc1c\uae09", "Application issued")}</b><small>{pick("\ubc1c\uae09 \uc644\ub8cc", "Issued")}</small></div><p>{formatDate(entry.approved_at, locale)}</p></article>)}</div>}
+      </section>
+    </div>
+  </Shell>;
+}
+
+function PdfPreviewScreen({ locale = "ko", modal, preview, previewBlobUrl, pdfPage = 1, onPageChange, approval, onBack, onDownload, onIssue }) {
+  const t = (ko, en) => locale === "en" ? en : ko;
+  const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
+  const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
+  return (
+    <Shell modal={modal}>
+      <TopBar title={preview.title} onBack={onBack} />
+      <div className="scroll pdf-preview-content">
+        {(preview.warnings || []).length > 0 && (
+          <div role="alert" className="pdf-preview-notice">
+            <b>{t("발급 전 확인", "Before issuing")}</b>
+            {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+          </div>
+        )}
+        <div className="pdf-viewer-frame">
+          <iframe title={preview.title} src={pageCount ? `${previewBlobUrl}#page=${page}` : previewBlobUrl} />
+        </div>
+        {pageCount > 1 && (
+          <div className="pdf-page-controls">
+            <div className="pdf-page-navigation">
+              <button type="button" className="tap pdf-page-arrow" aria-label="Previous page"
+                disabled={page <= 1} onClick={() => onPageChange(page - 1)}>‹</button>
+              <div className="pdf-page-dots">
+                {Array.from({ length: pageCount }, (_, index) => (
+                  <button key={index} type="button" aria-label={`Page ${index + 1}`} aria-current={page === index + 1}
+                    className={`tap pdf-page-dot${page === index + 1 ? " active" : ""}`} onClick={() => onPageChange(index + 1)} />
+                ))}
+              </div>
+              <button type="button" className="tap pdf-page-arrow" aria-label="Next page"
+                disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>›</button>
+            </div>
+            <span>{page} / {pageCount}</span>
+          </div>
+        )}
+      </div>
+      <div className="bottom-cta pdf-preview-actions">
+        <button type="button" onClick={onDownload} className="tap pdf-download-action">{t("PDF 다운로드", "Download PDF")}</button>
+        {approval && <button type="button" onClick={onIssue} className="tap pdf-issue-action">{t("발급하기", "Issue")}</button>}
+      </div>
+    </Shell>
+  );
 }
 
 function DocumentWritingProgress({ locale = "ko", title }) {
@@ -2122,11 +2192,10 @@ function CaptureProgress({ locale = "ko" }) {
 }
 function AuthInput({ label, type = "text", value, onChange, placeholder, valid, indicator = "✓", ...inputProps }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{label}</span>
-      <span style={{ position: "relative", display: "block" }}>
-        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps}
-          style={{ width: "100%", height: 54, border: "1px solid var(--line)", borderRadius: 13, padding: valid ? "0 46px 0 15px" : "0 15px", outline: "none", background: "#fff", color: "var(--ink)", font: "inherit", fontSize: 15 }} />
+    <label className="auth-field">
+      <span className="auth-label">{label}</span>
+      <span className="auth-input-wrap">
+        <input className={`auth-input${valid ? " valid" : ""}`} type={type} value={value} onChange={onChange} placeholder={placeholder} {...inputProps} />
         {valid && <span className="auth-input-indicator" aria-hidden="true">{indicator}</span>}
       </span>
     </label>
@@ -2135,10 +2204,10 @@ function AuthInput({ label, type = "text", value, onChange, placeholder, valid, 
 function FieldHint({ children, tone = "info" }) {
   return <div className={`auth-field-hint ${tone}`}>{children}</div>;
 }
-function ChatBubble({ children, mine, avatar, wide, compact }) {
+function ChatBubble({ children, mine, avatar, wide, compact, continuation }) {
   return (
-    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}${compact ? " compact" : ""}`}>
-      {avatar && <div className="chat-avatar" aria-hidden="true"><img src="/assets/ma1te-mascot.svg" alt="" /></div>}
+    <div className={`chat-line${mine ? " mine" : ""}${wide ? " wide" : ""}${compact ? " compact" : ""}${continuation ? " continuation" : ""}`}>
+      {avatar && <div className="chat-avatar" aria-hidden="true"><img src="/assets/dari-avatar.png" alt="" /></div>}
       <div className="chat-bubble">{children}</div>
     </div>
   );
@@ -2210,7 +2279,8 @@ function ChatInputBar({ value, onChange, disabled, onSend, locale = "ko" }) {
         autoComplete="off"
       />
       <button type="submit" className="chat-send-btn tap" disabled={disabled || !value.trim()}>
-        {disabled ? "…" : locale === "en" ? "Send" : "전송"}
+        <span className="sr-only">{locale === "en" ? "Send" : "전송"}</span>
+        {disabled ? <span className="chat-send-wait" aria-hidden="true">…</span> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" /></svg>}
       </button>
     </form>
   );
@@ -2256,10 +2326,10 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
   return (
     <div role="dialog" aria-modal="true" aria-label={en ? "Action approval" : "실행 승인"}
       className="approval-backdrop" style={{ position: "absolute", inset: 0, zIndex: 20, background: "oklch(0.2 0.012 60 / 0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 22px" }}>
-      <div className="approval-sheet" style={{ width: "100%", padding: "20px 20px 18px", borderRadius: 20, background: "#fff", boxShadow: "0 18px 44px oklch(0.2 0.012 60 / 0.28)" }}>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 99, background: "oklch(0.72 0.13 45 / 0.12)" }}>
-          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--brand-2)" }} />
-          <span style={{ fontSize: 10.5, fontWeight: 800, color: "var(--brand-2)" }}>
+      <div className="approval-sheet" style={{ width: "100%", padding: "20px 20px 18px", borderRadius: 12, background: "#fff", boxShadow: "none" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 99, background: "oklch(.93 .028 250)" }}>
+          <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "oklch(.42 .12 250)" }} />
+          <span style={{ fontSize: 10.5, fontWeight: 800, color: "oklch(.36 .1 250)" }}>
             {en ? "Now: confirm issuance" : "지금: 발급 확인"}
           </span>
         </div>
@@ -2285,8 +2355,8 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
         </p>
         {error && <div role="alert" className="capture-error" style={{ margin: "12px 0 0" }}>{error}</div>}
         <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: "1px solid var(--line)", background: "#fff", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
-          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 48, borderRadius: 13, border: 0, background: "var(--brand-2)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Issuing…" : "발급 중…") : (en ? "Issue" : "발급하기")}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(false)} className="tap" style={{ minHeight: 48, borderRadius: 10, border: "1px solid oklch(.76 .045 250)", background: "#fff", color: "oklch(.31 .09 250)", fontWeight: 700 }}>{en ? "Cancel" : "취소"}</button>
+          <button type="button" disabled={loading} onClick={() => onDecision(true)} className="tap" style={{ minHeight: 48, borderRadius: 10, border: 0, background: "oklch(.31 .09 250)", color: "#fff", fontWeight: 700 }}>{loading ? (en ? "Issuing…" : "발급 중…") : (en ? "Issue" : "발급하기")}</button>
         </div>
       </div>
     </div>
@@ -2355,7 +2425,7 @@ function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier })
   return (
     <div className="capture-alert-backdrop">
       <div role="alertdialog" aria-modal="true" className="capture-alert-dialog">
-        <div className={`capture-alert-icon${mismatch ? " warning" : " error"}`} aria-hidden="true">{mismatch ? "⚠" : "⊘"}</div>
+        <div className={`capture-alert-icon${mismatch ? " warning" : " error"}`} aria-hidden="true">!</div>
         <h3>{mismatch
           ? (en ? "The photo details do not match" : "사진 정보가 서로 일치하지 않아요")
           : parsingFailed
@@ -2398,7 +2468,7 @@ function profileFieldLabel(field, locale = "ko") {
 function verdictCta(kind, locale = "ko") {
   const labels = locale === "en"
     ? { ready: "What should I bring?", passport: "How do I renew it?", phone: "How do I get a phone?", cert: "Where can I get it?" }
-    : { ready: "무엇을 가져가나요?", passport: "어떻게 재발급하나요?", phone: "휴대폰은 어떻게 개통하나요?", cert: "어디서 떼나요?" };
+    : { ready: "무엇을 가져가나요?", passport: "어떻게 재발급하나요?", phone: "휴대폰은 어떻게 개통하나요?", cert: "발급 방법 확인" };
   return labels[kind] || (locale === "en" ? "View next step" : "다음 단계 보기");
 }
 function nextAction(v, locale = "ko") {

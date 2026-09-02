@@ -3,8 +3,8 @@ import React from "react";
 
 export function BridgeMark({ size = 60 }) {
   return (
-    <div className="maite-wordmark" style={{ width: size * 1.65, height: size * 0.48 }}>
-      <img src="/assets/maite-wordmark.png" alt="MAITE" />
+    <div className="maite-wordmark" style={{ width: size * 2.5 }}>
+      <img src="/assets/dari-logo.png" alt="DARI" />
     </div>
   );
 }
@@ -95,10 +95,10 @@ export function Rail({ active, locale = "ko" }) {
       {labels.map((label, i) => (
         <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1 }}>
           <div style={{ width: 10, height: 10, borderRadius: 99,
-            background: i < active ? "var(--ok)" : i === active ? "var(--brand-2)" : "transparent",
+            background: i < active ? "var(--ok)" : i === active ? "var(--brand)" : "transparent",
             border: i > active ? "1.5px solid var(--line)" : "none" }} />
           <div style={{ fontSize: 11.5, fontWeight: i === active ? 800 : 600,
-            color: i === active ? "oklch(0.5 0.1 45)" : i < active ? "oklch(0.4 0.012 60)" : "oklch(0.65 0.01 60)",
+            color: i === active ? "var(--brand)" : i < active ? "var(--ok)" : "oklch(0.65 0.01 60)",
             fontFamily: "'Noto Sans KR',sans-serif", whiteSpace: "nowrap" }}>{label}</div>
         </div>
       ))}
@@ -127,17 +127,16 @@ export function Field({ label, value, confidence, editable = false, dirty, error
   const low = confidence != null && confidence < CONF_THRESHOLD;
   const en = locale === "en";
   return (
-    <div style={{ padding: "13px 15px", borderRadius: 13, background: low ? "oklch(0.8 0.1 80 / 0.16)" : "#fff",
-      border: error ? "1.5px solid #b64b3d" : low ? "1.5px solid var(--warn)" : "1px solid var(--line)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono',monospace", color: low ? "oklch(0.45 0.09 80)" : "var(--muted)" }}>{label}</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: low ? "oklch(0.5 0.14 80)" : "var(--ok)" }}>
+    <div className={`profile-field${error ? " error" : low ? " needs-review" : !editable ? " readonly" : ""}${dirty ? " dirty" : ""}`}>
+      <div className="profile-field-head">
+        <span className="profile-field-label">{label}</span>
+        <span className="profile-field-status">
           {error ? (en ? "Check required" : "확인 필요") : dirty ? (en ? "Edited" : "수정됨") : low ? (en ? "Check required" : "확인 필요") : !editable ? (en ? "Read only" : "수정 불가") : ""}
         </span>
       </div>
       <input className="profile-field-input" value={value ?? ""} disabled={!editable}
         onChange={editable ? (event) => onChange?.(event.target.value) : undefined} />
-      {error && <div style={{ marginTop: 5, color: "#b64b3d", fontSize: 10.5 }}>{error}</div>}
+      {error && <div className="profile-field-error">{error}</div>}
     </div>
   );
 }
@@ -149,19 +148,17 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
   const choice = inputType === "select" || inputType === "address";
   const en = locale === "en";
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div>
-        <b style={{ fontSize: 14.5, lineHeight: 1.45 }}>{label}</b>
-        {hint && <div style={{ marginTop: 5, fontSize: 14, color: "var(--muted)", lineHeight: 1.5 }}>{hint}</div>}
+    <div className="chat-question-card">
+      <div className="chat-question-copy">
+        <b>{label}</b>
+        {hint && <div>{hint}</div>}
       </div>
 
       {choice ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div className="chat-question-options">
           {options.map((option) => (
             <button key={option.value} type="button" disabled={disabled}
-              onClick={() => onSubmit(option.value)} className="tap"
-              style={{ minHeight: 48, padding: "0 15px", borderRadius: 11, fontSize: 15, fontWeight: 700,
-                border: "1px solid var(--line)", background: "#fff", color: "oklch(0.25 0.012 60)" }}>
+              onClick={() => onSubmit(option.value)} className="chat-question-option tap">
               {option.label}
             </button>
           ))}
@@ -171,13 +168,11 @@ export function QuestionCard({ payload, options, value, onChange, onSubmit, disa
         </div>
       ) : (
         <form onSubmit={(event) => { event.preventDefault(); if (value.trim()) onSubmit(value.trim()); }}
-          style={{ display: "flex", gap: 8 }}>
-          <input className="profile-field-input" style={{ flex: 1 }} value={value} disabled={disabled}
+          className="chat-question-form">
+          <input className="chat-question-input" value={value} disabled={disabled}
             onChange={(event) => onChange(event.target.value)} placeholder={en ? "Enter your answer" : "답변을 입력하세요"} />
           <button type="submit" disabled={disabled || !value.trim()} className="tap"
-            style={{ minHeight: 48, padding: "0 16px", borderRadius: 11, border: 0, fontSize: 15, fontWeight: 700,
-              background: disabled || !value.trim() ? "oklch(0.86 0.01 60)" : "oklch(0.22 0.012 60)",
-              color: disabled || !value.trim() ? "oklch(0.55 0.01 60)" : "#fff" }}>{en ? "Send" : "보내기"}</button>
+            >{en ? "Send" : "보내기"}</button>
         </form>
       )}
     </div>
