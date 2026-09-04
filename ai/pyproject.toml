@@ -46,6 +46,10 @@ explicit = true
 # 이름이 test_ 로 시작해 pytest 가 수집하려 들고, 모듈 최상단에서 sys.argv 를
 # 읽어 "-q" 를 파일 경로로 착각하고 죽는다. 수집 범위를 tests/ 로 좁힌다.
 testpaths = ["tests"]
+# tests/ 에 __init__.py 가 없어 pytest 는 tests/ 만 sys.path 에 넣는다. 그래서
+# `pytest` 콘솔 스크립트로 돌리면 app 을 import 하지 못한다(`python -m pytest`
+# 는 CWD 가 들어가 우연히 됐다). ai/ 를 명시적으로 올린다.
+pythonpath = ["."]
 
 [dependency-groups]
 dev = [
