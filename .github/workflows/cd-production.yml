@@ -1,10 +1,24 @@
 name: CD Production
 
+# master push 로 배포한다. 이미지는 GHCR 에 올리고, EC2 에는 SSM 으로
+# compose·Caddyfile·배포스크립트를 실어 보낸 뒤 pull 시킨다.
+#
+# 인스턴스에서 빌드하지 않는다 — t3.medium 2vCPU 에서 20분짜리 AI 빌드를
+# 배포마다 하는 건 낭비고, 서비스와 CPU 를 다툰다.
+#
+# 롤백: workflow_dispatch 에 이전 SHA 를 image_tag 로 넣으면 빌드를 건너뛰고
+#       그 이미지로 되돌린다.
+
 on:
   push:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 이미지 태그. 비우면 이번 커밋 SHA 로 새로 빌드한다. 롤백은 이전 SHA 를 넣는다."
+        required: false
+        type: string
 
 concurrency:
   group: production
@@ -12,114 +26,88 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
   id-token: write
 
-env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-  EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
-
-  ECR_REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
-  ECR_FRONTEND_REPOSITORY: ${{ vars.ECR_FRONTEND_REPOSITORY }}
-  ECR_BACKEND_REPOSITORY: ${{ vars.ECR_BACKEND_REPOSITORY }}
-  ECR_AI_REPOSITORY: ${{ vars.ECR_AI_REPOSITORY }}
-
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image_prefix: ${{ steps.plan.outputs.image_prefix }}
+      image_tag: ${{ steps.plan.outputs.image_tag }}
+      build: ${{ steps.plan.outputs.build }}
+
+    steps:
+      - name: Resolve image prefix and tag
+        id: plan
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # GHCR 저장소 이름은 소문자만 받는다. settle-AGENT 를 그대로 쓰면 거부된다.
+          prefix="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          echo "image_prefix=${prefix}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${INPUT_TAG}" ]; then
+            echo "롤백 배포 — 태그 ${INPUT_TAG}, 빌드 건너뜀"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "image_tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "신규 배포 — 태그 ${GITHUB_SHA}"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-frontend:
     name: Build and push frontend
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
+        uses: actions/checkout@v7
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: frontend-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-
-      - name: Log in to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2.1.6
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.2.0
 
-      - name: Build and push frontend
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
         uses: docker/build-push-action@v7.2.0
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
-          platforms: linux/amd64
           push: true
-          build-args: |
-            VITE_API_BASE_URL=/api
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
-
-  build-ai:
-    name: Build and push AI
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: ai-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-
-      - name: Log in to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2.1.6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.2.0
-
-      - name: Build and push AI
-        uses: docker/build-push-action@v7.2.0
-        with:
-          context: ./ai
-          file: ./ai/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_AI_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha,scope=ai
-          cache-to: type=gha,mode=max,scope=ai
+          tags: ${{ needs.plan.outputs.image_prefix }}/frontend:${{ needs.plan.outputs.image_tag }}
+          cache-from: type=gha,scope=cd-frontend
+          cache-to: type=gha,mode=max,scope=cd-frontend
 
   build-backend:
     name: Build and push backend
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
+        uses: actions/checkout@v7
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
-          role-session-name: backend-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
-
-      - name: Log in to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2.1.6
+          persist-credentials: false
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -131,7 +119,8 @@ jobs:
             backend/server/*.gradle*
             backend/server/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Package Spring backend once
+      # 러너에서 한 번만 패키징하고, 이미지는 JRE 위에 jar 만 얹는다.
+      - name: Package Spring backend
         working-directory: backend/server
         shell: bash
         run: |
@@ -145,218 +134,200 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.2.0
 
-      - name: Build and push backend
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
         uses: docker/build-push-action@v7.2.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.runtime
-          platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          tags: ${{ needs.plan.outputs.image_prefix }}/backend:${{ needs.plan.outputs.image_tag }}
+          cache-from: type=gha,scope=cd-backend
+          cache-to: type=gha,mode=max,scope=cd-backend
 
-  deploy:
-    name: Deploy to EC2 with SSM
-    needs:
-      - build-frontend
-      - build-ai
-      - build-backend
-
+  build-ai:
+    name: Build and push AI
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 임베딩 모델과 코퍼스 임베딩은 앱 코드보다 위 레이어에 있다(ai/Dockerfile).
+      # 앱만 바뀐 배포는 이 캐시를 타고 몇 분에 끝난다.
+      - name: Build and push
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: ./ai
+          file: ./ai/Dockerfile
+          push: true
+          tags: ${{ needs.plan.outputs.image_prefix }}/ai:${{ needs.plan.outputs.image_tag }}
+          cache-from: type=gha,scope=cd-ai
+          cache-to: type=gha,mode=max,scope=cd-ai
+
+  deploy:
+    name: Deploy to EC2 via SSM
+    needs:
+      - plan
+      - build-frontend
+      - build-backend
+      - build-ai
+    if: >-
+      always()
+      && needs.plan.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN }}
+      IMAGE_PREFIX: ${{ needs.plan.outputs.image_prefix }}
+      IMAGE_TAG: ${{ needs.plan.outputs.image_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # 변수가 비면 configure-aws-credentials 가 알 수 없는 에러로 죽는다.
+      # 무엇이 비었는지 여기서 이름을 대고 실패한다.
+      - name: Guard required variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for v in AWS_REGION AWS_ROLE_ARN EC2_INSTANCE_ID PUBLIC_DOMAIN; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Actions variable ${v} 가 비어 있습니다 (Settings → Secrets and variables → Actions → Variables)."
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
 
       - name: Validate deployment files
         shell: bash
         run: |
           set -euo pipefail
-
-          test -f compose.production.yml
+          test -f compose.selfhost.yml
           test -f deploy/Caddyfile
-          test -f deploy/prepare-runtime-env.sh
+          test -f deploy/remote-deploy.sh
+          bash -n deploy/remote-deploy.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
           role-session-name: deploy-${{ github.run_id }}-${{ github.run_attempt }}
-          mask-aws-account-id: true
 
-      - name: Create SSM deployment command
+      - name: Send deploy command
+        id: send
         shell: bash
         run: |
           set -euo pipefail
 
-          {
-            echo "AWS_REGION=${AWS_REGION}"
-            echo "ECR_REGISTRY=${ECR_REGISTRY}"
-            echo "ECR_FRONTEND_REPOSITORY=${ECR_FRONTEND_REPOSITORY}"
-            echo "ECR_BACKEND_REPOSITORY=${ECR_BACKEND_REPOSITORY}"
-            echo "ECR_AI_REPOSITORY=${ECR_AI_REPOSITORY}"
-            echo "IMAGE_TAG=${GITHUB_SHA}"
-            echo "PUBLIC_HTTP_PORT=80"
-            echo "PUBLIC_HTTPS_PORT=443"
-            echo "PUBLIC_DOMAIN=15-165-61-91.sslip.io"
-            echo "FRONTEND_CONTAINER_PORT=3000"
-            echo "BACKEND_CONTAINER_PORT=8080"
-            echo "AI_CONTAINER_PORT=8000"
-            echo "RDS_SECRET_ID=rds!db-9e062b45-1069-445e-9b94-894666f24268"
-            echo "APP_SECRET_ID=fsai/hackathon/app-runtime"
-            echo "RDS_ENDPOINT=fsai-hackathon-pg.cxcaw6gicm6c.ap-northeast-2.rds.amazonaws.com"
-            echo "RDS_PORT=5432"
-            echo "RDS_DATABASE=settlement"
-            echo "AWS_S3_BUCKET=fsai-hackathon-assets-apne2-20260819"
-          } > deploy.env
-
-          COMPOSE_B64="$(base64 -w 0 compose.production.yml)"
-          CADDY_B64="$(base64 -w 0 deploy/Caddyfile)"
-          RUNTIME_ENV_B64="$(base64 -w 0 deploy/prepare-runtime-env.sh)"
-          ENV_B64="$(base64 -w 0 deploy.env)"
-
           jq -n \
-            --arg compose "$COMPOSE_B64" \
-            --arg caddy "$CADDY_B64" \
-            --arg runtime_env "$RUNTIME_ENV_B64" \
-            --arg envfile "$ENV_B64" \
-            --arg region "$AWS_REGION" \
-            --arg registry "$ECR_REGISTRY" \
+            --arg compose "$(base64 -w 0 compose.selfhost.yml)" \
+            --arg caddy "$(base64 -w 0 deploy/Caddyfile)" \
+            --arg script "$(base64 -w 0 deploy/remote-deploy.sh)" \
+            --arg prefix "$IMAGE_PREFIX" \
+            --arg tag "$IMAGE_TAG" \
             '{
               commands: [
                 "set -euo pipefail",
-                "mkdir -p /opt/fsai/deploy",
-                (
-                  "printf %s " + ($compose | @sh) +
-                  " | base64 -d > /opt/fsai/compose.production.yml"
-                ),
-                (
-                  "printf %s " + ($caddy | @sh) +
-                  " | base64 -d > /opt/fsai/deploy/Caddyfile"
-                ),
-                (
-                  "printf %s " + ($runtime_env | @sh) +
-                  " | base64 -d > /opt/fsai/deploy/prepare-runtime-env.sh"
-                ),
-                (
-                  "printf %s " + ($envfile | @sh) +
-                  " | base64 -d > /opt/fsai/.env"
-                ),
-                (
-                  "aws ecr get-login-password --region " +
-                  ($region | @sh) +
-                  " | docker login --username AWS --password-stdin " +
-                  ($registry | @sh)
-                ),
-                "cd /opt/fsai",
-                "set -a && . /opt/fsai/.env && set +a",
-                "chmod 700 /opt/fsai/deploy/prepare-runtime-env.sh",
-                "/opt/fsai/deploy/prepare-runtime-env.sh",
-                "docker compose --env-file .env -f compose.production.yml config --quiet",
-                "docker compose --env-file .env -f compose.production.yml pull",
-                "docker compose --env-file .env -f compose.production.yml up -d --remove-orphans",
-                "docker compose --env-file .env -f compose.production.yml up -d --no-deps --force-recreate gateway",
-                "docker compose --env-file .env -f compose.production.yml ps",
-                "curl --fail --silent --show-error --retry 24 --retry-delay 5 --retry-all-errors --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health | grep -qx ok",
-                "BACKEND_READY=false",
-                "BACKEND_DEADLINE=$(( $(date +%s) + 300 ))",
-                "BACKEND_ATTEMPT=0",
-                "while [ \"$(date +%s)\" -lt \"$BACKEND_DEADLINE\" ]; do",
-                "  BACKEND_ATTEMPT=$((BACKEND_ATTEMPT + 1))",
-                "  if curl --connect-timeout 3 --max-time 5 --fail --silent --show-error --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/backend | jq -e \".status == \\\"ok\\\"\" >/dev/null; then BACKEND_READY=true; echo \"Backend is ready after ${BACKEND_ATTEMPT} attempt(s)\"; break; fi",
-                "  echo \"Waiting for backend readiness (attempt ${BACKEND_ATTEMPT})\"",
-                "  sleep 5",
-                "done",
-                "if [ \"$BACKEND_READY\" != \"true\" ]; then",
-                "  echo \"Backend readiness timed out after 300 seconds\"",
-                "  docker compose --env-file .env -f compose.production.yml logs --tail=200 backend gateway",
-                "  exit 1",
-                "fi",
-                "AI_READY=false",
-                "AI_DEADLINE=$(( $(date +%s) + 600 ))",
-                "AI_ATTEMPT=0",
-                "while [ \"$(date +%s)\" -lt \"$AI_DEADLINE\" ]; do",
-                "  AI_ATTEMPT=$((AI_ATTEMPT + 1))",
-                "  if curl --connect-timeout 3 --max-time 5 --fail --silent --show-error --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}/health/ai | jq -e \".ok == true and .mode == \\\"agent\\\" and .persistent == true and .rag.ready == true\" >/dev/null; then AI_READY=true; echo \"AI is ready after ${AI_ATTEMPT} attempt(s)\"; break; fi",
-                "  echo \"Waiting for AI readiness (attempt ${AI_ATTEMPT})\"",
-                "  sleep 5",
-                "done",
-                "if [ \"$AI_READY\" != \"true\" ]; then",
-                "  echo \"AI readiness timed out after 600 seconds\"",
-                "  docker compose --env-file .env -f compose.production.yml logs --tail=200 ai gateway",
-                "  exit 1",
-                "fi",
-                "docker image prune -f --filter '\''until=168h'\''"
+                "mkdir -p /opt/settle/deploy",
+                ("printf %s " + ($compose | @sh) + " | base64 -d > /opt/settle/compose.selfhost.yml"),
+                ("printf %s " + ($caddy   | @sh) + " | base64 -d > /opt/settle/deploy/Caddyfile"),
+                ("printf %s " + ($script  | @sh) + " | base64 -d > /opt/settle/deploy/remote-deploy.sh"),
+                "chmod 700 /opt/settle/deploy/remote-deploy.sh",
+                ("IMAGE_PREFIX=" + ($prefix | @sh) + " IMAGE_TAG=" + ($tag | @sh)
+                  + " /opt/settle/deploy/remote-deploy.sh")
               ]
             }' > ssm-parameters.json
 
-      - name: Send deployment command
-        id: deploy
-        shell: bash
-        run: |
-          set -euo pipefail
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "CD ${IMAGE_TAG:0:12}" \
+            --timeout-seconds 1200 \
+            --parameters "file://ssm-parameters.json" \
+            --query Command.CommandId --output text)"
 
-          COMMAND_ID="$(
-            aws ssm send-command \
-              --instance-ids "$EC2_INSTANCE_ID" \
-              --document-name "AWS-RunShellScript" \
-              --comment "Deploy GitHub commit ${GITHUB_SHA}" \
-              --timeout-seconds 1200 \
-              --parameters file://ssm-parameters.json \
-              --query "Command.CommandId" \
-              --output text
-          )"
+          echo "command_id=${command_id}" >> "$GITHUB_OUTPUT"
+          echo "SSM CommandId: ${command_id}"
 
-          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
-          echo "SSM command: ${COMMAND_ID}"
-
-      - name: Wait for deployment result
+      - name: Wait for deploy to finish
         shell: bash
         env:
-          COMMAND_ID: ${{ steps.deploy.outputs.command_id }}
+          COMMAND_ID: ${{ steps.send.outputs.command_id }}
         run: |
           set -euo pipefail
 
-          STATUS="Pending"
-
-          for attempt in $(seq 1 120); do
-            STATUS="$(
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$EC2_INSTANCE_ID" \
-                --query "Status" \
-                --output text 2>/dev/null || true
-            )"
-
-            case "$STATUS" in
-              Success)
-                break
-                ;;
-              Failed|Cancelled|TimedOut|Cancelling)
-                break
-                ;;
+          status=Pending
+          deadline=$(( $(date +%s) + 1500 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            status="$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" --instance-id "$EC2_INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
             esac
-
-            echo "Waiting for SSM command (${attempt}/120): ${STATUS:-Pending}"
-            sleep 5
+            sleep 10
           done
 
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$EC2_INSTANCE_ID" \
-            --query '{
-              Status: Status,
-              Output: StandardOutputContent,
-              Error: StandardErrorContent
-            }' \
-            --output json
+          echo "── 인스턴스 출력 ──────────────────────────────"
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" --query StandardOutputContent --output text || true
+          echo "── 인스턴스 에러 ──────────────────────────────"
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" --query StandardErrorContent --output text || true
 
-          if [[ "$STATUS" != "Success" ]]; then
-            echo "Deployment failed with status: $STATUS"
-            exit 1
-          fi
+          [ "$status" = "Success" ] || { echo "::error::SSM 배포 실패 (status=${status})"; exit 1; }
+
+      # 인스턴스 안의 헬스체크는 --resolve 로 127.0.0.1 을 보므로 외부 접속을
+      # 증명하지 못한다. 공인 DNS 로 러너에서 한 번 더 확인해야 배포 성공이
+      # 접속 가능의 근거가 된다.
+      - name: Verify from the public internet
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "frontend"
+          curl --fail --silent --show-error --retry 20 --retry-delay 5 --retry-all-errors \
+            "https://${PUBLIC_DOMAIN}/health" | tr -d '[:space:]' | grep -qx ok
+
+          echo "backend"
+          curl --fail --silent --show-error "https://${PUBLIC_DOMAIN}/health/backend" \
+            | jq -e '.status == "ok"'
+
+          echo "ai"
+          curl --fail --silent --show-error "https://${PUBLIC_DOMAIN}/health/ai" \
+            | jq -e '.ok == true and .mode == "agent" and .persistent == true and .rag.ready == true'
+
+          echo "https://${PUBLIC_DOMAIN} 외부 접속 확인 완료 (tag ${IMAGE_TAG})"
