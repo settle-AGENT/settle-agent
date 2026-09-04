@@ -1,0 +1,98 @@
+# CodeRabbit 설정 — https://docs.coderabbit.ai/reference/configuration
+#
+# 이 리포에는 코드가 아니라 문서와 주석으로만 지켜지는 불변식이 몇 개 있다.
+# path_instructions 로 그것들을 PR 마다 기계가 다시 확인하게 한다.
+
+language: ko-KR
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  collapse_walkthrough: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - develop
+      - master
+
+  path_filters:
+    # 생성물 — 사람이 손으로 고치지 않는다. corpus/manual 은 각각 397·1,212 조각이다.
+    - "!ai/rules/corpus.json"
+    - "!ai/rules/manual.json"
+    - "!**/uv.lock"
+    - "!**/package-lock.json"
+    - "!**/gradle-wrapper.jar"
+    - "!**/gradlew"
+    - "!**/gradlew.bat"
+    # 바이너리·샘플 데이터
+    - "!seed/**"
+    - "!ai/corpus/**"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.svg"
+    - "!**/*.pdf"
+
+  path_instructions:
+    - path: "ai/app/agent/graph.py"
+      instructions: |
+        이 파일은 의도적으로 통제된 상태 기계다. LLM 에게 자율적인 툴 선택권을
+        주지 않고, 경로가 이 파일에 고정되어 있다. 다음을 어기면 반드시 지적할 것.
+        - approval_gate 를 우회해 executor 로 가는 엣지가 새로 생기면 안 된다.
+          L2 액션은 LLM 이 어떻게 동작하든 사용자 승인 없이 실행될 수 없어야 한다.
+        - 노드를 추가하면 END 로 도달하는 경로가 있는지 확인할 것.
+        - 사용자에게 보이는 문구는 {ko, en} 딕셔너리로 두고 locale 로 고른다.
+          한쪽 언어만 추가된 문구가 있으면 지적할 것.
+
+    - path: "ai/app/api/schemas.py"
+      instructions: |
+        프론트·백엔드와의 응답 계약이다. **필드 추가만 허용되고 삭제·개명은 금지**다.
+        기존 필드를 지우거나 이름을 바꾸는 변경이 있으면 반드시 지적할 것.
+
+    - path: "ai/app/nodes/doc_builder.py"
+      instructions: |
+        서류 생성은 LLM 을 쓰지 않는다. 값 생성은 mappings/*.yaml 기반의 결정적
+        매핑이어야 한다. llm 모듈 호출이나 모델이 값을 지어내는 코드가 들어오면 지적할 것.
+        렌더에는 마스킹하지 않은 평문 프로필을 쓴다 — 마스킹은 응답을 만들 때만 적용된다.
+
+    - path: "ai/app/tools/rag_store.py"
+      instructions: |
+        코퍼스 → rag.chunk 의 유일한 적재 경로다. 적재 경로가 다시 갈라지는 변경
+        (별도 스크립트로 다른 테이블에 넣는 등)이 있으면 지적할 것.
+        임베딩 차원이 바뀌면 테이블 재생성이 따라와야 한다.
+
+    - path: "ai/app/**/*.py"
+      instructions: |
+        - 예외를 조용히 삼키지 말 것. 벡터 검색이 죽어도 BM25 로 조용히 떨어지면
+          아무도 모른다. 삼킬 거면 /health 같은 곳에 상태를 드러내야 한다.
+        - 사용자에게 나가는 문구는 {ko, en} 로 두고 locale 로 고른다.
+
+    - path: "backend/server/src/main/java/**/*.java"
+      instructions: |
+        - 프로덕션은 JPA_DDL_AUTO=validate 로 돈다. 엔티티를 바꾸면 스키마
+          마이그레이션 계획이 함께 있어야 한다. Hibernate 가 알아서 고쳐주지 않는다.
+        - S3 presigned URL 요청에 Authorization 헤더를 붙이면 서명 불일치로 403 이다.
+
+    - path: "frontend/frontend-react/src/**"
+      instructions: |
+        - 신분증 촬영은 getUserMedia 를 쓴다. secure context 가 아니면 동작하지 않는다.
+        - presigned PUT 에는 Authorization 헤더를 붙이면 안 된다.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        - 시크릿을 로그로 흘리지 말 것.
+        - 배포 헬스체크가 인스턴스 내부(127.0.0.1)만 보면 외부 접속을 증명하지 못한다.
+          공인 DNS 로 확인하는 단계가 남아 있는지 볼 것.
+
+    - path: "compose*.yml"
+      instructions: |
+        env_file 의 format: raw 는 따옴표를 값에 그대로 넣는다. 값에 따옴표를 쓰면 안 된다.
+
+chat:
+  auto_reply: true
