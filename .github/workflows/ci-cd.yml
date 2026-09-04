@@ -72,7 +72,7 @@ jobs:
           echo "Changed files:"
           cat "$changed_files"
 
-          global_pattern='^(\.github/workflows/|docker-compose\.yml$|compose\.production\.yml$|deploy/)'
+          global_pattern='^(\.github/workflows/|docker-compose\.yml$|compose\.(local|selfhost)\.yml$|deploy/)'
 
           if grep -Eq "^(frontend/)|${global_pattern}" "$changed_files"; then
             echo "frontend=true" >> "$GITHUB_OUTPUT"
@@ -107,19 +107,20 @@ jobs:
       - name: Validate local compose
         run: docker compose config --quiet
 
-      - name: Validate production compose
+      - name: Validate self-hosted compose
         shell: bash
         env:
-          ECR_REGISTRY: 000000000000.dkr.ecr.ap-northeast-2.amazonaws.com
+          IMAGE_PREFIX: ghcr.io/settle-agent/settle-agent
           IMAGE_TAG: ci
           PUBLIC_DOMAIN: ci.example.invalid
+          POSTGRES_PASSWORD: ci
         run: |
           set -euo pipefail
 
           # env_file 참조 때문에 파일이 존재해야 검증이 통과한다
           touch .env.secrets
           touch runtime.env
-          docker compose --file compose.production.yml config --quiet
+          docker compose --file compose.selfhost.yml config --quiet
 
   frontend:
     name: Frontend
@@ -206,6 +207,38 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # WeasyPrint 는 Pango/cairo 를 dlopen 한다. 없으면 PDF 생성이 조용히
+      # 실패하고 HTML 만 남아 test_doc_builder 가 깨진다.
+      # glib·ffi 는 pango 가 끌고 오므로 적지 않는다 — Ubuntu 24.04 의 t64
+      # 개명(libglib2.0-0 → libglib2.0-0t64)에 걸리지 않게 상위만 적는다.
+      - name: Install WeasyPrint system libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfribidi0 \
+            libcairo2 shared-mime-info fonts-nanum
+
+      - name: Install uv
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache uv downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('ai/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      # 이미지 빌드는 20분대다. 유닛테스트를 먼저 돌려 빨리 실패시킨다.
+      - name: Run AI unit tests
+        working-directory: ai
+        run: uv run --frozen pytest -q
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.2.0

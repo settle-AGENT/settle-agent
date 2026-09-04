@@ -41,6 +41,12 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[tool.pytest.ini_options]
+# scripts/test_ocr.py 는 테스트가 아니라 손으로 돌리는 OCR 확인용 CLI 다.
+# 이름이 test_ 로 시작해 pytest 가 수집하려 들고, 모듈 최상단에서 sys.argv 를
+# 읽어 "-q" 를 파일 경로로 착각하고 죽는다. 수집 범위를 tests/ 로 좁힌다.
+testpaths = ["tests"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

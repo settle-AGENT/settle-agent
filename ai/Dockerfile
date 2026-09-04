@@ -38,24 +38,36 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project \
     && uv cache clean
 
-COPY app ./app
-COPY rules ./rules
-COPY scripts ./scripts
-COPY mappings ./mappings
-COPY templates ./templates
-
 ENV PATH="/app/.venv/bin:$PATH"
 
 # 임베딩 모델을 이미지에 굽는다 — 런타임에 HF 를 타지 않는다.
 # 실패를 넘기지 않는다. 모델이 없으면 벡터 검색이 통째로 죽고, 그 사실이
 # 런타임에야 드러난다. 빌드에서 잡는 편이 낫다.
+#
+# 앱 코드 COPY 보다 위에 있어야 한다. 아래에 두면 app/ 을 한 글자만 고쳐도
+# 이 레이어가 무효화돼 모델을 매번 다시 받는다 — CI·CD 가 그 비용을 낸다.
 RUN mkdir -p "$HF_HOME" \
     && python -c "from sentence_transformers import SentenceTransformer; import os; SentenceTransformer(os.environ['EMBED_MODEL'])"
 
 # 코퍼스 임베딩도 미리 계산해 굽는다. 컨테이너는 이 파일을 읽어 upsert 만
 # 하므로 기동이 몇 초로 끝난다 — 매번 1,600여 조각을 임베딩하지 않는다.
+#
+# export_rag.py 가 실제로 여는 것만 먼저 복사한다. 그 의존은
+# app.tools.rag_store → app.tools.embed + rules/ 가 전부다(둘 다 빈
+# __init__.py 를 거친다). 그래서 이 레이어는 코퍼스나 임베딩 코드가
+# 바뀔 때만 다시 돈다.
+COPY rules ./rules
+COPY scripts ./scripts
+COPY app/__init__.py ./app/__init__.py
+COPY app/tools ./app/tools
+
 RUN python scripts/export_rag.py /app/rag_chunks.jsonl \
     && wc -l /app/rag_chunks.jsonl
+
+# 자주 바뀌는 것은 여기부터. 위 레이어들은 캐시에 남는다.
+COPY app ./app
+COPY mappings ./mappings
+COPY templates ./templates
 
 # chown 대상을 쓰기가 필요한 곳으로 좁힌다. /app 전체를 chown 하면
 # venv 가 통째로 새 레이어에 복제돼 이미지가 배로 커진다.
