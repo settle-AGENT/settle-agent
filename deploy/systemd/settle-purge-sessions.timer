@@ -1,0 +1,9 @@
+[Unit]
+Description=settle 상담 세션 보관기간 시행 (매일 03:30 KST)
+
+[Timer]
+OnCalendar=*-*-* 18:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
