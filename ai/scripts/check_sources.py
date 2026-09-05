@@ -44,6 +44,11 @@ _MANUAL_VERSION = re.compile(r"「외국인체류 안내매뉴얼」\s*\(\s*(\d{
 _FORM_VERSION = re.compile(r"개정\s*(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.")
 
 
+# 대조할 로컬 파일이 없어 정합성 검사를 건너뛴다는 표시. None(=읽지 못함)과
+# 구분해야 한다 — 전자는 정상이고 후자는 문제다.
+SKIP = object()
+
+
 class Finding:
     """검사에 걸린 것 하나."""
 
@@ -64,7 +69,9 @@ def _actual_version(source: dict) -> tuple[str | None, str]:
     if kind == "statute":
         name = source.get("file")
         if not name:
-            return None, "file 이 선언되지 않았다"
+            # 코퍼스에 넣지 않고 지켜보기만 하는 법령(예: 시행규칙). 대조할
+            # 로컬 파일이 없으니 정합성은 건너뛰고 노후도만 본다.
+            return SKIP, "로컬 사본 없음 — 노후도만 본다"
         path = AI_ROOT / name
         if not path.exists():
             return None, f"{name} 이 없다"
@@ -123,7 +130,9 @@ def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
         declared = str(source.get("version", ""))
         actual, where = _actual_version(source)
 
-        if actual is None:
+        if actual is SKIP:
+            pass                       # 대조할 사본이 없다. 문제가 아니다.
+        elif actual is None:
             findings.append(Finding(source["id"], "missing", where))
         elif actual != declared:
             findings.append(Finding(
@@ -144,7 +153,8 @@ def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
         rows.append({
             "id": source["id"], "name": source["name"],
             "kind": source.get("kind", ""), "version": declared,
-            "actual": actual, "age": age, "limit": limit,
+            "actual": None if actual is SKIP else actual,
+            "age": age, "limit": limit,
         })
 
     return rows, findings
