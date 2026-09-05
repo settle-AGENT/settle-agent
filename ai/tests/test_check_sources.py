@@ -69,7 +69,7 @@ def test_missing_file_is_reported(monkeypatch):
     assert [f.kind for f in findings] == ["missing"]
 
 
-@pytest.mark.parametrize("kind", ["mismatch", "stale", "missing"])
+@pytest.mark.parametrize("kind", ["mismatch", "stale", "missing", "future"])
 def test_issue_body_says_what_to_do(kind):
     """알림만 오고 무엇을 할지 없으면 아무도 안 움직인다."""
     rows = [{"id": "x", "name": "어떤 자료", "kind": "statute",
@@ -117,21 +117,40 @@ def test_unverified_declarations_are_not_shown_as_ok():
     검사를 건너뛰었고 표에는 "ok" 로 찍혔다. 통과했다는 것과 확인했다는 것은
     다르다.
     """
-    rows, findings = check_sources.check()
+    # 기준 날짜를 고정한다. 인자 없이 부르면 오늘을 쓰는데, immigration_rule 은
+    # 2027-03-05 부터 stale 이 되어 표에서 "!" 로 바뀐다 — 달력 때문에 관계없는
+    # PR 이 멈춘다.
+    rows, findings = check_sources.check(today=date(2026, 9, 5))
 
     rule = next(r for r in rows if r["id"] == "immigration_rule")
     assert rule["unverified"] is True
 
     table = check_sources.render_text(rows, findings)
-    line = next(l for l in table.splitlines() if rule["name"] in l)
-    assert "미대조" in line
+    row_text = next(t for t in table.splitlines() if rule["name"] in t)
+    assert "미대조" in row_text
     assert "로컬 사본이 없어" in table
 
 
 def test_sources_with_a_local_copy_are_verified():
     """반대로, 사본이 있는 것은 실제로 대조된다."""
-    rows, _ = check_sources.check()
+    rows, _ = check_sources.check(today=date(2026, 9, 5))
 
     act = next(r for r in rows if r["id"] == "immigration_act")
     assert act["unverified"] is False
     assert act["actual"] == act["version"]
+
+
+def test_a_future_last_verified_is_reported(monkeypatch):
+    """앞선 날짜를 그냥 두면 그 자료는 재확인 대상에서 영영 빠진다."""
+    monkeypatch.setattr(check_sources, "_load", lambda: {"sources": [{
+        "id": "visa_matrix", "name": "체류자격 매트릭스", "kind": "internal",
+        "version": "2026-08-19",
+        "last_verified": "2027-01-01",            # 오타로 미래가 됐다고 하자
+        "recheck_after_days": 180,
+        "declared_in": "rules/visa_matrix.yaml",
+    }]})
+
+    _, findings = check_sources.check(today=date(2026, 9, 5))
+
+    assert [f.kind for f in findings] == ["future"]
+    assert "앞서" in findings[0].message

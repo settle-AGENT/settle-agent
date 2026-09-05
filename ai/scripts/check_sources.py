@@ -145,6 +145,13 @@ def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
         if verified is None:
             findings.append(Finding(source["id"], "missing",
                                     "last_verified 를 읽지 못했다"))
+        elif age < 0:
+            # 앞선 날짜면 age 가 음수라 age > limit 을 영영 넘지 못한다. 오타
+            # 하나로 그 자료가 재확인 대상에서 조용히 빠진다 — 지금까지 고쳐 온
+            # "통과했지만 확인되지 않은" 부류와 같은 종류의 구멍이다.
+            findings.append(Finding(
+                source["id"], "future",
+                f"last_verified 가 오늘보다 {abs(age)}일 앞서 있다 ({verified})"))
         elif age > limit:
             findings.append(Finding(
                 source["id"], "stale",
@@ -161,7 +168,8 @@ def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
     return rows, findings
 
 
-_LABEL = {"mismatch": "선언과 실제가 다름", "stale": "확인 필요", "missing": "읽지 못함"}
+_LABEL = {"mismatch": "선언과 실제가 다름", "stale": "확인 필요",
+          "missing": "읽지 못함", "future": "앞선 날짜"}
 
 
 def render_text(rows: list[dict], findings: list[Finding]) -> str:
@@ -207,28 +215,37 @@ def render_github(rows: list[dict], findings: list[Finding]) -> str:
         out.append(f"| {row.get('name', f.source_id)} | `{row.get('version', '?')}` "
                    f"| **{_LABEL[f.kind]}** — {f.message} |")
 
+    # 아래 안내문은 리스트 안에서 여러 줄로 이어 붙인다. 괄호로 묶지 않으면
+    # 콤마 하나를 빠뜨렸을 때 두 항목이 조용히 한 문장으로 합쳐진다.
     out += ["", "### 무엇을 하면 되나", ""]
     if any(f.kind == "stale" for f in findings):
         out += [
-            "**확인 필요** — 원본이 개정됐는지 사람이 봐야 합니다. 법령은 "
-            "[국가법령정보센터](https://www.law.go.kr), 매뉴얼·서식은 "
-            "[하이코리아](https://www.hikorea.go.kr) 자료실입니다.",
+            ("**확인 필요** — 원본이 개정됐는지 사람이 봐야 합니다. 법령은 "
+             "[국가법령정보센터](https://www.law.go.kr), 매뉴얼·서식은 "
+             "[하이코리아](https://www.hikorea.go.kr) 자료실입니다."),
             "",
             "- 그대로면 `ai/rules/sources.yaml` 의 `last_verified` 만 오늘 날짜로 올립니다.",
-            "- 바뀌었으면 원본을 교체하고 `version` 과 `last_verified` 를 함께 올립니다. "
-            "코퍼스 재생성은 `ai/README.md` 를 따릅니다.",
+            ("- 바뀌었으면 원본을 교체하고 `version` 과 `last_verified` 를 함께 "
+             "올립니다. 코퍼스 재생성은 `ai/README.md` 를 따릅니다."),
             "",
         ]
     if any(f.kind == "mismatch" for f in findings):
         out += [
-            "**선언과 실제가 다름** — 원본만 갈아끼우고 `sources.yaml` 을 안 고쳤을 때 "
-            "납니다. 둘 중 맞는 쪽으로 맞춰 주세요.",
+            ("**선언과 실제가 다름** — 원본만 갈아끼우고 `sources.yaml` 을 안 "
+             "고쳤을 때 납니다. 둘 중 맞는 쪽으로 맞춰 주세요."),
+            "",
+        ]
+    if any(f.kind == "future" for f in findings):
+        out += [
+            ("**앞선 날짜** — `last_verified` 가 오늘보다 뒤입니다. 오타일 "
+             "가능성이 큽니다. 그대로 두면 그 자료는 재확인 대상에서 계속 "
+             "빠집니다."),
             "",
         ]
     if any(f.kind == "missing" for f in findings):
         out += [
-            "**읽지 못함** — 파일이 없거나 형식이 바뀌었습니다. 검사기가 "
-            "낡았을 수도 있으니 `ai/scripts/check_sources.py` 도 함께 보세요.",
+            ("**읽지 못함** — 파일이 없거나 형식이 바뀌었습니다. 검사기가 "
+             "낡았을 수도 있으니 `ai/scripts/check_sources.py` 도 함께 보세요."),
             "",
         ]
     out.append("서식이 바뀌었다면 템플릿만이 아니라 `ai/mappings/*.yaml` 의 필드 매핑과 "

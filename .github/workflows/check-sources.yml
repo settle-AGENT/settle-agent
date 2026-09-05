@@ -93,10 +93,13 @@ jobs:
               : process.env.BODY)
               + `\n\n---\n<sub>매일 도는 Source freshness 워크플로가 갱신합니다. 마지막 확인 ${new Date().toISOString().slice(0, 10)}.</sub>`;
 
-            const { data: open } = await github.rest.issues.listForRepo({
+            // listForRepo 는 PR 도 함께 돌려준다. 걸러내지 않으면 같은 라벨이
+            // 붙은 PR 의 제목과 본문을 이 잡이 덮어쓴다.
+            const { data: rows } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: label,
             });
+            const open = rows.filter((row) => !row.pull_request);
 
             if (open.length) {
               await github.rest.issues.update({
@@ -119,11 +122,11 @@ jobs:
         with:
           script: |
             const label = 'source-freshness';
-            const { data: open } = await github.rest.issues.listForRepo({
+            const { data: rows } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: label,
             });
-            for (const issue of open) {
+            for (const issue of rows.filter((row) => !row.pull_request)) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
