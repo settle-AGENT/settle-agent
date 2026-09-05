@@ -1,0 +1,143 @@
+name: Source freshness
+
+# 근거 자료가 낡았는지 매일 본다.
+#
+# 자동으로 고치지 않는다. 서식이 바뀌면 템플릿뿐 아니라 mappings 의 필드
+# 매핑과 visa_matrix 의 required_docs 까지 함께 손봐야 하고, 매뉴얼 판이
+# 바뀌면 build_manual.py 의 장 경계 탐지가 깨질 수 있다. 감지는 기계가,
+# 반영은 사람이 한다.
+#
+# 이슈를 매일 새로 만들지 않는다. 같은 라벨의 열린 이슈가 있으면 본문만
+# 갱신한다 — 매일 하나씩 쌓이면 아무도 안 본다.
+
+on:
+  schedule:
+    - cron: "0 0 * * *"        # 매일 09:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: source-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # 점검기는 yaml 만 있으면 된다. 프로젝트 전체를 동기화하면 torch 까지
+      # 받느라 몇 분이 든다 — 매일 도는 잡에서 낼 비용이 아니다.
+      - name: Run the freshness check
+        id: check
+        shell: bash
+        working-directory: ai
+        run: |
+          set +e
+          body="$(uv run --no-project --with pyyaml python scripts/check_sources.py --format github)"
+          status=$?
+          set -e
+
+          {
+            echo "body<<CHECK_EOF"
+            echo "$body"
+            echo "CHECK_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -eq 0 ]; then
+            echo "state=clean" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 1 ]; then
+            echo "state=findings" >> "$GITHUB_OUTPUT"
+          else
+            # 점검기 자체가 깨진 것이다. "문제 없음" 과 구분해야 한다 —
+            # 조용히 성공하면 낡은 자료를 몇 달이고 못 알아챈다.
+            echo "state=broken" >> "$GITHUB_OUTPUT"
+          fi
+
+          uv run --no-project --with pyyaml python scripts/check_sources.py || true
+
+      - name: Open or update the issue
+        if: steps.check.outputs.state != 'clean'
+        uses: actions/github-script@v7
+        env:
+          STATE: ${{ steps.check.outputs.state }}
+          BODY: ${{ steps.check.outputs.body }}
+        with:
+          script: |
+            const label = 'source-freshness';
+            const broken = process.env.STATE === 'broken';
+            const title = broken
+              ? '근거 자료 점검기가 실패했습니다'
+              : '근거 자료 확인이 필요합니다';
+            const body = (broken
+              ? ['점검기 자체가 실패했습니다. 자료가 낡지 않았다는 뜻이 아니라,',
+                 '낡았는지 **알 수 없다**는 뜻입니다. 워크플로 로그를 확인해 주세요.',
+                 '', `실행: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                ].join('\n')
+              : process.env.BODY)
+              + `\n\n---\n<sub>매일 도는 Source freshness 워크플로가 갱신합니다. 마지막 확인 ${new Date().toISOString().slice(0, 10)}.</sub>`;
+
+            // listForRepo 는 두 가지를 조심해야 한다.
+            //  - PR 도 함께 돌려준다. 걸러내지 않으면 같은 라벨이 붙은 PR 의
+            //    제목과 본문을 이 잡이 덮어쓴다.
+            //  - 기본 30건만 준다. 못 찾으면 이슈를 새로 만들어 쌓는다.
+            const rows = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+            const open = rows.filter((row) => !row.pull_request);
+
+            if (open.length) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number, title, body,
+              });
+              core.notice(`기존 이슈 #${open[0].number} 를 갱신했습니다.`);
+              return;
+            }
+
+            const { data: created } = await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title, body, labels: [label],
+            });
+            core.notice(`이슈 #${created.number} 를 열었습니다.`);
+
+      - name: Close the issue when everything is current
+        if: steps.check.outputs.state == 'clean'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'source-freshness';
+            // 위와 같은 이유로 PR 을 걸러내고 전체 페이지를 본다. 첫 페이지만
+            // 보면 통과했는데도 열린 이슈가 남는다.
+            const rows = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: label, per_page: 100,
+            });
+            for (const issue of rows.filter((row) => !row.pull_request)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '점검을 통과해 자동으로 닫습니다.',
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
+              });
+            }

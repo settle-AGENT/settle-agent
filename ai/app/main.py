@@ -62,11 +62,19 @@ def _warm_embedder() -> None:
 @app.get("/health", tags=["meta"])
 def health():
     from app.tools import rag_store
+    from app.rules import loader
     return {
         "ok": True,
         "mode": "agent",
         "persistent": agent.is_persistent(),   # False 면 재시작 시 세션 소멸
         "rag": rag_store.status(),             # ready 가 False 면 BM25 단독
+        # 이 컨테이너가 어느 판을 근거로 답하는지. 배포된 것이 낡았는지
+        # 밖에서 확인하려면 이 값이 필요하다.
+        "sources": {
+            "manifest": loader.SOURCES_VERSION,
+            "matrix": loader.MATRIX_VERSION,
+            "items": loader.source_versions(),
+        },
     }
 
 
