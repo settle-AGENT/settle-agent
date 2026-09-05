@@ -33,7 +33,7 @@ ask() {   # ask VAR "프롬프트" [기본값]
 }
 
 echo "── 배포 설정 ──"
-ask PUBLIC_DOMAIN     "도메인"            "kaffy.kro.kr"
+ask PUBLIC_DOMAIN     "도메인"            "kaffy.p-e.kr"
 ask AWS_REGION        "AWS 리전"          "ap-northeast-2"
 ask AWS_S3_BUCKET     "S3 버킷명"
 echo "── 외부 API 키 ──"
