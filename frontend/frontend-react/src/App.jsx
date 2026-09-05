@@ -584,6 +584,10 @@ export default function App() {
   };
 
   const decideApproval = async (approved) => {
+    if (!approved) {
+      setApprovalVisible(false);
+      return;
+    }
     if (approvalLoading || !approval?.action_id) return;
     setApprovalLoading(true);
     setApprovalError("");
@@ -1177,7 +1181,7 @@ export default function App() {
   if (step === 1) {
     return (
       <Shell modal={activeModal}>
-        {isAuthenticated && <TopBar title={t("설정", "Settings")} onBack={() => back(0)} right={<ExitButton locale={locale} onClick={() => go(0)} />} />}
+        {isAuthenticated && <TopBar title={t("설정", "Settings")} onBack={() => back(0)} right={<HomeButton locale={locale} onClick={() => go(0)} />} />}
         <div className="scroll" style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 28, padding: "0 26px" }}>
           <div>
             <h2 style={H2}>{t("사용할 언어를 선택하세요", "Choose your language")}</h2>
@@ -1265,11 +1269,11 @@ export default function App() {
       stopCamera();
       fileInputRef.current?.click();
     };
-    const skipCurrentDocument = () => {
+    const skipDocumentCapture = () => {
       if (captureLoading || cameraStarting) return;
       stopCamera();
       setCaptureError(null);
-      setScan((scan + 1) % scanPages.length);
+      go(4);
     };
     const currentShot = shots[scanPages[scan].key];
     const allShotsReady = scanPages.every((page) => Boolean(shots[page.key]));
@@ -1314,6 +1318,7 @@ export default function App() {
           <div className="capture-stage-status">{captureLoading ? t("AI가 문서를 읽는 중", "AI is reading the document") : cameraStarting ? t("카메라 준비 중", "Preparing camera") : cameraOpen ? t("카메라 준비됨", "Camera ready") : currentShot ? t("업로드 완료", "Upload complete") : t("촬영하기 또는 파일 첨부를 선택해 주세요", "Choose Camera or File upload")}</div>
         </div>
         <CaptureAlert error={captureError} locale={locale}
+          onClose={() => setCaptureError(null)}
           onDeviceCamera={() => nativeCameraInputRef.current?.click()}
           onReviewEarlier={() => {
             setScan(0);
@@ -1334,7 +1339,7 @@ export default function App() {
               {currentShot ? t("파일로 교체", "Replace with file") : t("파일 첨부", "File upload")}
             </button>
             {!allShotsReady && (
-              <button type="button" disabled={captureLoading || cameraStarting} onClick={skipCurrentDocument} className="capture-tertiary-action tap">
+              <button type="button" disabled={captureLoading || cameraStarting} onClick={skipDocumentCapture} className="capture-tertiary-action tap">
                 {t("건너뛰기", "Skip")}
               </button>
             )}
@@ -1429,7 +1434,7 @@ export default function App() {
     if (verdict) {
       const editAnswers = () => setVerdict(null);
       return <ReviewResultScreen locale={locale} modal={activeModal} verdict={verdict}
-        onBack={editAnswers} onNext={() => go(6)} />;
+        onBack={editAnswers} onExit={requestOnboardingExit} onNext={() => go(6)} />;
     }
 
     const question = ui.type === "question" ? ui.payload : null;
@@ -1572,7 +1577,7 @@ export default function App() {
 
     return (
       <Shell modal={activeModal}>
-        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<span className="consultation-status"><i />{t("상담 중", "In session")}</span>} />
+        <TopBar title={t("AI 상담", "AI consultation")} onBack={backFromConsultation} right={<div className="top-actions"><span className="consultation-status"><i />{t("상담 중", "In session")}</span><HomeButton locale={locale} onClick={requestOnboardingExit} /></div>} />
         <div className="consultation-progress" aria-label={t("전체 5단계 중 상담 단계", "Consultation, step 4 of 5")}>
           <span className="consultation-progress-label">{t("4 / 5 · 상담", "4 / 5 · Consultation")}</span>
           <div aria-hidden="true">{[0, 1, 2, 3, 4].map((item) => <i key={item} className={item <= 3 ? "active" : ""} />)}</div>
@@ -1679,7 +1684,7 @@ export default function App() {
   if (step === 5) {
     const tasks = agentState?.tasks || [];
     return <DocumentTaskFlow tasks={tasks} answers={answers} locale={locale}
-      modal={activeModal} onBack={() => back(4)} onReturnToChat={returnToChat} onOpen={(actionId) => { setPreviewActionId(actionId); go(7); }} />;
+      modal={activeModal} onBack={() => back(4)} onExit={requestOnboardingExit} onReturnToChat={returnToChat} onOpen={(actionId) => { setPreviewActionId(actionId); go(7); }} />;
 
     /* Legacy task list retained below until the next layout cleanup. */
     const startTask = async (task) => {
@@ -1761,7 +1766,7 @@ export default function App() {
   // ── 6 준비 안내 ──
   if (step === 6 && verdict) {
     return <PreparationScreen locale={locale} modal={activeModal} verdict={verdict}
-      onBack={() => back(4)} onNext={() => go(7)} />;
+      onBack={() => back(4)} onExit={requestOnboardingExit} onNext={() => go(7)} />;
   }
 
   // ── 7 신청서 만들기 ──
@@ -1775,7 +1780,7 @@ export default function App() {
     const goal = APPLICATION_GOALS[previewActionId] || APPLICATION_GOALS.open_bank_account;
     return <DocumentApplicationBuilder locale={locale} modal={activeModal} application={selectedApplication}
       goal={goal} documents={documents} loading={previewLoading} error={previewError}
-      onBack={() => back(5)} onCreate={openPdfPreview} onOpenDocument={openStoredDocument} />;
+      onBack={() => back(5)} onExit={requestOnboardingExit} onCreate={openPdfPreview} onOpenDocument={openStoredDocument} />;
 
     /* Legacy builder retained below until the next layout cleanup. */
     const alternatives = applicationIds.filter((actionId) => actionId !== previewActionId);
@@ -1847,7 +1852,7 @@ export default function App() {
       loading={ledgerLoading} error={ledgerError} onBack={() => back(cabinetBackStep)}
       tasks={agentState?.tasks || []} sessionDrafts={sessionDrafts} currentSessionId={sessionId}
       onPreview={openStoredDocument} onDownload={downloadPdf} onStartChat={returnToChat}
-      onOpenTask={openSavedWork} />;
+      onOpenTask={openSavedWork} onExit={requestOnboardingExit} />;
 
   if (false && step === 9)
     return (
@@ -1895,7 +1900,7 @@ export default function App() {
     return <PdfPreviewScreen locale={locale} modal={activeModal} preview={preview}
       previewBlobUrl={previewBlobUrl} pdfPage={pdfPage} onPageChange={setPdfPage}
       approval={approval} onBack={() => back(7)} onDownload={() => downloadPdf(preview)}
-      onIssue={() => setApprovalVisible(true)} />;
+      onIssue={() => setApprovalVisible(true)} onExit={requestOnboardingExit} />;
   }
   return (
     <Shell modal={activeModal}>
@@ -1912,11 +1917,11 @@ export default function App() {
 }
 
 // ── 작은 헬퍼 컴포넌트 ──
-function ReviewResultScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+function ReviewResultScreen({ locale = "ko", modal, verdict, onBack, onExit, onNext }) {
   const t = (ko, en) => locale === "en" ? en : ko;
   return (
     <Shell modal={modal}>
-      <TopBar title={t("사전 확인 결과", "Pre-check result")} onBack={onBack} right={<span className="review-status"><i />{t("사전 확인 완료", "Pre-check complete")}</span>} />
+      <TopBar title={t("사전 확인 결과", "Pre-check result")} onBack={onBack} right={<div className="top-actions"><span className="review-status"><i />{t("사전 확인 완료", "Pre-check complete")}</span><HomeButton locale={locale} onClick={onExit} /></div>} />
       <Rail active={3} locale={locale} />
       <div className="scroll review-scroll">
         <section className="review-hero">
@@ -1953,7 +1958,7 @@ function ReviewResultScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
   );
 }
 
-function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToChat, onOpen }) {
+function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onExit, onReturnToChat, onOpen }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   const taskById = Object.fromEntries(tasks.map((task) => [task.id, task]));
   const steps = [
@@ -1961,7 +1966,7 @@ function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToCha
     { actionId: "open_bank_account", title: pick("\uacc4\uc88c\uac1c\uc124\uc2e0\uccad\uc11c", "Bank account application"), description: pick("\ucd5c\uc885 \ubaa9\ud45c \u2014 \uc740\ud589 \uc601\uc5c5\uc810 \uc81c\ucd9c\uc6a9", "Final goal \u2014 for submission at a bank branch") },
   ];
   return <Shell modal={modal}>
-    <TopBar title={pick("\ud560 \uc77c", "Tasks")} onBack={onBack} />
+    <TopBar title={pick("\ud560 \uc77c", "Tasks")} onBack={onBack} right={<HomeButton locale={locale} onClick={onExit} />} />
     <Rail active={3} locale={locale} />
     <div className="document-flow-head"><h2>{pick("\uacc4\uc88c \uac1c\uc124\uae4c\uc9c0 \uc11c\ub958 2\uac1c", "Two documents to open your account")}</h2><p>{pick("\uacc4\uc88c\ub97c \ub9cc\ub4e4\ub824\uba74 \uba3c\uc800 \uc678\uad6d\uc778\ub4f1\ub85d\uc774 \ub418\uc5b4 \uc788\uc5b4\uc57c \ud574\uc694. \uadf8\ub798\uc11c \ub450 \uc11c\ub958\ub97c \uc21c\uc11c\ub300\ub85c \ub9cc\ub4e4\uc5b4 \ub4dc\ub824\uc694.", "You need alien registration first. We will prepare both documents in order.")}</p></div>
     <div className="scroll document-flow-list">
@@ -1978,12 +1983,12 @@ function DocumentTaskFlow({ tasks, answers, locale, modal, onBack, onReturnToCha
   </Shell>;
 }
 
-function PreparationScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
+function PreparationScreen({ locale = "ko", modal, verdict, onBack, onExit, onNext }) {
   const t = (ko, en) => locale === "en" ? en : ko;
   const action = nextAction(verdict, locale);
   return (
     <Shell modal={modal}>
-      <TopBar title={t("준비할 것", "What to prepare")} onBack={onBack} />
+      <TopBar title={t("준비할 것", "What to prepare")} onBack={onBack} right={<HomeButton locale={locale} onClick={onExit} />} />
       <Rail active={4} locale={locale} />
       <div className="preparation-head">
         <section className="preparation-summary">
@@ -2009,10 +2014,10 @@ function PreparationScreen({ locale = "ko", modal, verdict, onBack, onNext }) {
   );
 }
 
-function DocumentApplicationBuilder({ locale, modal, application, goal, documents, loading, error, onBack, onCreate, onOpenDocument }) {
+function DocumentApplicationBuilder({ locale, modal, application, goal, documents, loading, error, onBack, onExit, onCreate, onOpenDocument }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   return <Shell modal={modal}>
-    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} />
+    <TopBar title={pick("\uc2e0\uccad\uc11c \ub9cc\ub4e4\uae30", "Create application")} onBack={onBack} right={<HomeButton locale={locale} onClick={onExit} />} />
     <Rail active={4} locale={locale} />
     <div className="builder-head">
       <h2>{pick(`${application.ko}\ub97c \ub9cc\ub4e4\uac8c\uc694`, `Let's create your ${application.en.toLowerCase()}`)}</h2>
@@ -2027,7 +2032,7 @@ function DocumentApplicationBuilder({ locale, modal, application, goal, document
   </Shell>;
 }
 
-function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLedger, loading, error, tasks = [], sessionDrafts = [], currentSessionId, onBack, onPreview, onDownload, onStartChat, onOpenTask }) {
+function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLedger, loading, error, tasks = [], sessionDrafts = [], currentSessionId, onBack, onPreview, onDownload, onStartChat, onOpenTask, onExit }) {
   const pick = (ko, en) => locale === "en" ? en : ko;
   const documents = [...rawDocuments]
     .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
@@ -2055,7 +2060,7 @@ function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLe
     return !hasDocument && task.status === "in_progress";
   });
   return <Shell modal={modal}>
-    <TopBar title={pick("\ub0b4 \uc11c\ub958\ud568", "My documents")} onBack={onBack} />
+    <TopBar title={pick("\ub0b4 \uc11c\ub958\ud568", "My documents")} onBack={onBack} right={<HomeButton locale={locale} onClick={onExit} />} />
     <div className="scroll cabinet-content">
       <section className="cabinet-section">
         <div className="cabinet-section-head"><h2>{pick("\uc800\uc7a5 \ubb38\uc11c", "Saved documents")}</h2><small>{documents.length + pendingWorks.length}</small></div>
@@ -2078,13 +2083,13 @@ function DocumentCabinet({ locale, modal, documents: rawDocuments, ledger: rawLe
   </Shell>;
 }
 
-function PdfPreviewScreen({ locale = "ko", modal, preview, previewBlobUrl, pdfPage = 1, onPageChange, approval, onBack, onDownload, onIssue }) {
+function PdfPreviewScreen({ locale = "ko", modal, preview, previewBlobUrl, pdfPage = 1, onPageChange, approval, onBack, onDownload, onIssue, onExit }) {
   const t = (ko, en) => locale === "en" ? en : ko;
   const pageCount = Number(preview.page_count) > 0 ? Number(preview.page_count) : 0;
   const page = pageCount ? Math.min(Math.max(pdfPage, 1), pageCount) : 1;
   return (
     <Shell modal={modal}>
-      <TopBar title={preview.title} onBack={onBack} />
+      <TopBar title={preview.title} onBack={onBack} right={<HomeButton locale={locale} onClick={onExit} />} />
       <div className="scroll pdf-preview-content">
         {(preview.warnings || []).length > 0 && (
           <div role="alert" className="pdf-preview-notice">
@@ -2221,8 +2226,8 @@ function AccountCard({ title, subtitle, account }) {
     </section>
   );
 }
-function ExitButton({ onClick, locale = "ko" }) {
-  return <button type="button" onClick={onClick} className="exit-button">{locale === "en" ? "Exit" : "나가기"}</button>;
+function HomeButton({ onClick, locale = "ko" }) {
+  return <button type="button" onClick={onClick} className="exit-button">{locale === "en" ? "Home" : "홈"}</button>;
 }
 function LangToggle({ locale = "ko", onChange }) {
   return (
@@ -2236,7 +2241,7 @@ function TopActions({ locale, onLocale, onExit }) {
   return (
     <div className="top-actions">
       <LangToggle locale={locale} onChange={onLocale} />
-      <ExitButton onClick={onExit} locale={locale} />
+      <HomeButton onClick={onExit} locale={locale} />
     </div>
   );
 }
@@ -2291,11 +2296,11 @@ function ExitConfirmModal({ onContinue, onExit, locale = "ko" }) {
     <div role="dialog" aria-modal="true" aria-labelledby="exit-title" className="modal-backdrop">
       <div className="exit-dialog">
         <div className="exit-dialog-icon" aria-hidden="true">☁</div>
-        <h3 id="exit-title">{en ? "Pause for now?" : "진행을 잠시 멈출까요?"}</h3>
+        <h3 id="exit-title">{en ? "Return home?" : "홈으로 돌아갈까요?"}</h3>
         <p>{en ? "Photos are not stored in your browser. Only your progress is saved temporarily on this device, and your server profile is restored after you sign in again." : "사진 자체는 브라우저에 보관하지 않고, 진행 단계만 이 기기에 임시 저장해요. 다음에 로그인하면 서버에 저장된 프로필로 이어갈 수 있어요."}</p>
         <div className="exit-dialog-actions">
           <button type="button" onClick={onContinue} className="tap">{en ? "Keep going" : "계속 진행"}</button>
-          <button type="button" onClick={onExit} className="tap primary">{en ? "Save and exit" : "저장하고 나가기"}</button>
+          <button type="button" onClick={onExit} className="tap primary">{en ? "Go home" : "홈으로 이동"}</button>
         </div>
       </div>
     </div>
@@ -2416,7 +2421,7 @@ function mismatchValue(key, value, locale = "ko") {
   return String(value);
 }
 
-function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier }) {
+function CaptureAlert({ error, locale = "ko", onClose, onDeviceCamera, onReviewEarlier }) {
   const en = locale === "en";
   if (!error) return null;
   const mismatch = error.code === "validation_failed";
@@ -2425,6 +2430,11 @@ function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier })
   return (
     <div className="capture-alert-backdrop">
       <div role="alertdialog" aria-modal="true" className="capture-alert-dialog">
+        <button type="button" className="capture-alert-close tap" onClick={onClose} aria-label={en ? "Close error popup" : "오류 팝업 닫기"}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
         <div className={`capture-alert-icon${mismatch ? " warning" : " error"}`} aria-hidden="true">!</div>
         <h3>{mismatch
           ? (en ? "The photo details do not match" : "사진 정보가 서로 일치하지 않아요")
@@ -2440,7 +2450,7 @@ function CaptureAlert({ error, locale = "ko", onDeviceCamera, onReviewEarlier })
           </div>
         )}
         {parsingFailed && <code>extraction_failed {en ? "(unreadable)" : "(파싱 불가)"}</code>}
-        <button type="button" onClick={mismatch ? onReviewEarlier : onDeviceCamera}>
+        <button type="button" className="capture-alert-action tap" onClick={mismatch ? onReviewEarlier : onDeviceCamera}>
           {mismatch ? (en ? "Attach again" : "다시 첨부하기") : (en ? "Retake photo" : "다시 촬영하기")}
         </button>
       </div>
