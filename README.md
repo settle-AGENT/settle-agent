@@ -241,7 +241,7 @@ ai/
 backend/server/    Spring Boot — domain: auth · member · file · document · agent · action · profile · card · application
 frontend/frontend-react/
                    React + Vite (App.jsx 단일 스텝 라우팅)
-deploy/            Caddyfile · 런타임 env 렌더링
+deploy/            Caddyfile · 배포 스크립트 · IAM·CORS 정책
 mock-institution/  기관 API 시뮬레이터
 seed/              샘플 신분증 이미지 · 프로필
 ```
