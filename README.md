@@ -141,6 +141,21 @@ planner → router ─┬→ slot_filler          부족한 값 질문
 액션: `alien_registration` · `mobile_subscription` · `open_bank_account` · `residence_change` · `work_activity`.
 현재 매트릭스에 상세 정의가 채워진 자격은 D-2 다.
 
+### 선행조건과 완료는 다른 질문이다
+
+`satisfied_if` 는 "이 값이 프로필에 있으면 현실에서는 이미 끝난 일" 이라는 뜻이다.
+외국인등록번호가 그렇다 — 등록을 마쳐야 나오는 번호이므로, 가지고 있다는 사실
+자체가 등록을 마쳤다는 증거다. planner 는 이것을 두 집합으로 나눠 쓴다.
+
+| 집합 | 답하는 질문 | 채우는 주체 |
+|---|---|---|
+| `prereq_satisfied` | 현실에서 이미 끝난 일인가 → 뒤따르는 과제를 연다 | `satisfied_if` · executor |
+| `completed` | 앱이 서류를 만들어 승인까지 받았나 → `done` 으로 표시한다 | executor (서류가 있는 과제) |
+
+둘을 겸하게 두면 등록증을 이미 가진 사람이 계좌를 열려고 할 때 필요도 없는
+통합신청서부터 만들어야 한다. 은행이 묻는 것은 등록된 사람인지이지, 이 앱으로
+통합신청서를 만들었는지가 아니다.
+
 ## 검색 (RAG)
 
 두 코퍼스를 함께 검색하고, 검색된 근거 안에서만 LLM 이 답한다.
@@ -173,9 +188,42 @@ profile + mappings/*.yaml → Jinja2 (templates/*.html) → WeasyPrint → PDF
 
 - 렌더에는 마스킹하지 않은 평문 프로필을 쓴다 (서버 내부에서만 생성).
   마스킹은 **응답을 만들 때만** 적용되고 state 원본은 항상 평문이다.
+  그래서 무엇을 얼마나 들고 있는지가 중요하다 — 아래 "개인정보" 절 참고.
 - OCR 신뢰도 0.95 미만 필드는 서류와 화면 양쪽에 '확인요망'으로 표시된다.
 - WeasyPrint 는 Pango/cairo 를 dlopen 한다. 시스템 라이브러리가 없으면 PDF 생성이
   조용히 실패하고 HTML 만 남는다 (`ai/Dockerfile` 참고).
+
+## 개인정보
+
+무엇을 들고 있고 언제 버리는지.
+
+| 데이터 | 어디에 | 언제 사라지나 |
+|---|---|---|
+| 신분증 원본 사진 | S3 `members/{id}/uploads/` | **OCR 직후 즉시 삭제** (`FileService.discardOriginal`) |
+| OCR 원문 | — | **저장하지 않는다.** 추출 함수 밖으로 나가지 않는다 |
+| 프로필 · 대화 | 체크포인터 (Postgres) | 보관기간 스크립트로 정리 (아래) |
+| 생성 서류 PDF | S3 `members/{id}/generated-documents/` | 남는다 — 서류함은 회원 자산이다 |
+| 임시 렌더 결과 | `ai/output/*.html`, `*.pdf` | 아직 정리하지 않는다 |
+
+- **응답에 예외 메시지를 싣지 않는다.** OCR·프로필 처리 중 난 예외에는 신분증에서
+  읽은 값이 섞일 수 있다. 클라이언트에는 예외 **타입만** 나가고, 원인은 서버
+  로그의 traceback 에만 남는다.
+- 외국인등록번호는 응답에서 마스킹된다(`990101-*******`). state 원본은 평문이므로
+  저장 매체 암호화가 따로 필요하다 — `deploy/aws-hardening.md`.
+
+```bash
+uv run python scripts/purge_stale_sessions.py                # 30일 이상 방치된 세션
+uv run python scripts/purge_raw_texts.py                     # 옛 체크포인트의 OCR 원문 (1회)
+```
+
+둘 다 기본이 dry-run 이다. `--apply` 를 붙여야 실제로 지운다.
+
+세션 보관기간은 **마지막 활동 기준 30일**이다. 생성 기준이 아니라 활동 기준인
+이유는, 90일 기한을 추적하는 앱에서 나이만으로 지우면 계속 쓰는 사람의 D-day 가
+매번 리셋되기 때문이다.
+
+AWS 쪽에서 해야 하는 것(버킷 기본 암호화, 퍼블릭 차단, EBS 암호화)은
+[deploy/aws-hardening.md](deploy/aws-hardening.md) 에 모아 두었다.
 
 ## 주요 엔드포인트
 
@@ -237,11 +285,11 @@ ai/
   rules/           체류자격 매트릭스 · 근거법령 · 코퍼스
   mappings/        서식 필드 매핑
   templates/       서식 HTML
-  scripts/         코퍼스 구축 · 임베딩 · 적재
+  scripts/         코퍼스 구축 · 임베딩 · 적재 · 보관기간 정리
 backend/server/    Spring Boot — domain: auth · member · file · document · agent · action · profile · card · application
 frontend/frontend-react/
                    React + Vite (App.jsx 단일 스텝 라우팅)
-deploy/            Caddyfile · 배포 스크립트 · IAM·CORS 정책
+deploy/            Caddyfile · 배포 스크립트 · IAM·CORS 정책 · AWS 보안 설정 안내
 mock-institution/  기관 API 시뮬레이터
 seed/              샘플 신분증 이미지 · 프로필
 ```
@@ -263,3 +311,7 @@ seed/              샘플 신분증 이미지 · 프로필
 
 배포 인프라는 EC2 한 대다. Postgres(pgvector)도 같은 박스의 컨테이너로 돌고,
 매니지드 의존은 S3 하나뿐이다. 자세한 것은 `compose.selfhost.yml` 주석 참고.
+
+Postgres 가 EC2 위의 컨테이너이므로 저장 암호화는 RDS 설정이 아니라 **EBS 볼륨
+암호화**다. 기존 볼륨에는 제자리 적용이 안 되고 스냅샷 교체가 필요하다 —
+절차와 남은 항목은 [deploy/aws-hardening.md](deploy/aws-hardening.md) 에 있다.

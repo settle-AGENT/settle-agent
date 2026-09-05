@@ -118,11 +118,15 @@ async def extract_upload(
     except Exception as exc:                                  # noqa: BLE001
         # 버그 — 사용자에게 "다시 촬영하세요" 라고 하면 영원히 해결되지 않는다.
         traceback.print_exc()
+        # 예외 메시지를 응답에 싣지 않는다. 여기까지 오는 예외는 OCR·프로필
+        # 처리 중에 난 것이라, 메시지에 신분증에서 읽은 값이나 프로필이 섞여
+        # 있을 수 있다. 그것이 클라이언트로 나가면 마스킹도 암호화도 소용없다.
+        # 원인은 위 traceback 으로 서버 로그에만 남긴다. 타입은 개인정보를
+        # 담지 않으면서 어디서 깨졌는지 좁혀 주므로 남긴다.
         raise HTTPException(500, detail=agent.localize_error(session_id, {
             "error": "internal",
             "message": "서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            "details": {"reason": f"{type(exc).__name__}: {exc}",
-                        "doc_type": doc_type, "filename": file.filename},
+            "details": {"reason": type(exc).__name__, "doc_type": doc_type},
         }))
 
 
@@ -145,6 +149,13 @@ def chat(req: ChatRequest):
     return agent.send_message(req.session_id, req.message)
 
 
+# 이 경로는 응답 조립(_localized)을 거치지 않으므로 여기서 locale 을 고른다.
+STREAM_ERROR = {
+    "ko": "답변을 만들지 못했습니다. 잠시 후 다시 시도해주세요.",
+    "en": "I could not put together an answer. Please try again in a moment.",
+}
+
+
 @app.post("/api/chat/stream", tags=["agent"])
 def chat_stream(req: ChatRequest):
     """Stream actual agent execution stages, followed by the final AgentResponse."""
@@ -160,7 +171,14 @@ def chat_stream(req: ChatRequest):
             result = agent.send_message(req.session_id, req.message, emit=emit)
             events.put({"type": "result", "data": result})
         except Exception as exc:  # noqa: BLE001
-            events.put({"type": "error", "message": str(exc)})
+            # extract-upload 와 같은 이유로 예외 메시지를 내보내지 않는다.
+            # 이 경로는 프로필·대화를 들고 도는 그래프 전체를 감싸고 있어서,
+            # 어떤 값이 예외 문자열에 섞일지 여기서 알 수 없다.
+            traceback.print_exc()
+            locale = agent.locale_of(req.session_id)
+            events.put({"type": "error",
+                        "message": STREAM_ERROR.get(locale, STREAM_ERROR["en"]),
+                        "reason": type(exc).__name__})
         finally:
             from app.tools import progress as progress_events
             progress_events.set_emitter(req.session_id, None)
