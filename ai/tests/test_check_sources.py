@@ -108,3 +108,30 @@ def test_findings_and_clean_use_distinct_exit_codes(monkeypatch):
 
     monkeypatch.setattr(check_sources, "check", lambda today=None: ([], []))
     assert check_sources.main() == check_sources.OK
+
+
+def test_unverified_declarations_are_not_shown_as_ok():
+    """대조할 사본이 없는 선언을 "ok" 로 보여주면 안 된다.
+
+    실제로 시행규칙 시행일에 틀린 값이 들어가 있었는데, 대조할 파일이 없어
+    검사를 건너뛰었고 표에는 "ok" 로 찍혔다. 통과했다는 것과 확인했다는 것은
+    다르다.
+    """
+    rows, findings = check_sources.check()
+
+    rule = next(r for r in rows if r["id"] == "immigration_rule")
+    assert rule["unverified"] is True
+
+    table = check_sources.render_text(rows, findings)
+    line = next(l for l in table.splitlines() if rule["name"] in l)
+    assert "미대조" in line
+    assert "로컬 사본이 없어" in table
+
+
+def test_sources_with_a_local_copy_are_verified():
+    """반대로, 사본이 있는 것은 실제로 대조된다."""
+    rows, _ = check_sources.check()
+
+    act = next(r for r in rows if r["id"] == "immigration_act")
+    assert act["unverified"] is False
+    assert act["actual"] == act["version"]

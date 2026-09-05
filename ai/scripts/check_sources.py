@@ -154,6 +154,7 @@ def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
             "id": source["id"], "name": source["name"],
             "kind": source.get("kind", ""), "version": declared,
             "actual": None if actual is SKIP else actual,
+            "unverified": actual is SKIP,
             "age": age, "limit": limit,
         })
 
@@ -169,8 +170,25 @@ def render_text(rows: list[dict], findings: list[Finding]) -> str:
     bad = {f.source_id for f in findings}
     for r in rows:
         age = f"{r['age']}일" if r["age"] is not None else "?"
-        mark = "!" if r["id"] in bad else "ok"
+        if r["id"] in bad:
+            mark = "!"
+        elif r["unverified"]:
+            # 통과했다고 맞다는 뜻이 아니다. 대조할 사본이 없어 아무도 확인하지
+            # 않은 값이라는 뜻이다. 실제로 여기 틀린 시행일이 하나 들어가 있었고,
+            # "ok" 로 보였기 때문에 읽는 사람도 그냥 지나쳤다.
+            mark = "미대조"
+        else:
+            mark = "ok"
         out.append(f"{r['name'][:33]:<34} {r['version']:<12} {age:>8}  {mark}")
+
+    unverified = [r for r in rows if r["unverified"] and r["id"] not in bad]
+    if unverified:
+        out.append("")
+        out.append("  미대조 — 로컬 사본이 없어 선언한 값을 대조하지 못했다. "
+                   "원본과 맞는지는 사람이 봐야 한다.")
+        for r in unverified:
+            out.append(f"    {r['id']} = {r['version']}")
+
     if findings:
         out.append("")
         for f in findings:

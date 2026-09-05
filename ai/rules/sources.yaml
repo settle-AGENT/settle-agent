@@ -73,12 +73,18 @@ sources:
   - id: immigration_rule
     name: 출입국관리법 시행규칙
     kind: statute
-    version: "2025-07-01"
+    version: "2026-01-23"
+    decree_no: 법무부령 제1106호   # 2026. 1. 23. 일부개정
     last_verified: "2026-09-05"
     recheck_after_days: 180
     url: https://www.law.go.kr/법령/출입국관리법시행규칙
     governs: integrated_application_form
-    note: 코퍼스에는 넣지 않는다. 별지 제34호서식의 근거 법령으로만 지켜본다.
+    note: >-
+      코퍼스에는 넣지 않는다. 별지 제34호서식의 근거 법령으로만 지켜본다.
+      개정됐다고 서식이 반드시 바뀌는 것은 아니다 — 이 시행규칙은 2026-01-23 에
+      일부개정됐지만 별지 제34호서식은 2022-04-12 판 그대로다. 신호는 "서식이
+      바뀌었다" 가 아니라 "서식을 확인해 볼 때다" 라는 뜻이다.
+      입법예고안이 올라와 있으므로 다음 개정이 예정되어 있다.
 
   # ── 안내매뉴얼 ──────────────────────────────────────────
   # 원본 PDF 는 리포에 없다(15MB, gitignore). 결과물 rules/manual.json 만
