@@ -171,8 +171,18 @@ ACTION_TITLES: dict[str, dict] = {
                           "en": "Submit account opening application"},
 }
 
-NO_ID = {"ko": "신분증을 올려주시면 무엇을 하셔야 하는지 알려드릴게요.",
-         "en": "Upload your ID and I will tell you what you need to do."}
+# 아직 아무것도 안 올린 사람에게 나가는 첫 안내. 여기서 "신분증을 올려주세요"
+# 한 줄만 하면, 등록증이 없어서 물어본 사람은 답을 못 듣고 막힌다 — 계좌든
+# 통신이든 대개 외국인등록이 선행인데 그 말을 안 해 주기 때문이다.
+# 아직 체류자격을 모르므로 특정 자격의 규정을 단정하지 않고, 등록증이 있는
+# 경우와 없는 경우 각각 무엇을 하면 되는지만 말한다.
+NO_ID = {"ko": "먼저 신분증을 확인해야 무엇을 하실 수 있는지 알려드릴 수 있어요. "
+               "외국인등록증이 있으시면 촬영해 주세요. 아직 등록증이 없으시면 "
+               "외국인등록이 먼저인데, 통합신청서는 제가 작성해 드릴 수 있어요.",
+         "en": "I need to see your ID before I can tell you what you can do. "
+               "Photograph your residence card if you have one. If you do not "
+               "have it yet, alien registration comes first — and I can fill "
+               "in that application for you."}
 VISA_LEAD = {"ko": "체류자격만 알면 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
              "en": "Once I know your visa status I can tell you what to do."}
 VISA_UNSUPPORTED = {
