@@ -58,7 +58,11 @@ public class FileService {
         if (upload.status() == UploadStatus.PROCESSING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "upload_processing");
         }
-        if (upload.status() == UploadStatus.DONE) {
+        // DONE 과 FAILED 는 둘 다 종료 상태다. FAILED 를 통과시키면 방금 지운
+        // 원본을 다시 내려받으려 하고, 삭제가 실패해 원본이 남아 있었다면 같은
+        // 신분증으로 OCR 이 한 번 더 돈다. 재시도는 새 업로드로 한다 —
+        // 프론트도 시도마다 uploadId 를 새로 발급받는다.
+        if (upload.status() == UploadStatus.DONE || upload.status() == UploadStatus.FAILED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "upload_already_processed");
         }
 

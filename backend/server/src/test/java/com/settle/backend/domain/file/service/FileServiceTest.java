@@ -68,6 +68,23 @@ class FileServiceTest {
     }
 
     @Test
+    void refusesToReprocessAFailedUpload() {
+        // FAILED 는 종료 상태다. 통과시키면 원본을 다시 내려받거나 같은
+        // 신분증으로 OCR 을 한 번 더 돌리게 된다.
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.arc_front)
+        );
+        FileService.PreparedUpload prepared = service.prepareForExtraction(MEMBER_ID, upload.uploadId());
+        service.markFailed(prepared.ticket());
+
+        assertThatThrownBy(() -> service.prepareForExtraction(MEMBER_ID, upload.uploadId()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("409 CONFLICT");
+    }
+
+    @Test
     void rejectsAnotherMembersUploadAsNotFound() {
         FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
         FileService service = new FileService(new InMemoryUploadRepository(), gateway);
