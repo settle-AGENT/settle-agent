@@ -154,3 +154,29 @@ def test_a_future_last_verified_is_reported(monkeypatch):
 
     assert [f.kind for f in findings] == ["future"]
     assert "앞서" in findings[0].message
+
+
+def test_month_only_last_verified_is_not_accepted(monkeypatch):
+    """월까지만 적힌 last_verified 를 받아 주면 노후도가 한 달까지 어긋난다."""
+    monkeypatch.setattr(check_sources, "_load", lambda: {"sources": [{
+        "id": "visa_matrix", "name": "체류자격 매트릭스", "kind": "internal",
+        "version": "2026-08-19",
+        "last_verified": "2026-09",               # 날짜가 없다
+        "recheck_after_days": 180,
+        "declared_in": "rules/visa_matrix.yaml",
+    }]})
+
+    _, findings = check_sources.check(today=date(2026, 9, 5))
+
+    assert [f.kind for f in findings] == ["missing"]
+    assert "last_verified" in findings[0].message
+
+
+def test_version_may_still_be_month_precision():
+    """version 은 월 단위여도 된다 — 매뉴얼이 그렇다. 문자열로 비교한다."""
+    rows, findings = check_sources.check(today=date(2026, 9, 5))
+
+    manual = next(r for r in rows if r["id"] == "residence_manual")
+    assert manual["version"] == "2026-08"
+    assert manual["actual"] == "2026-08"
+    assert not [f for f in findings if f.source_id == "residence_manual"]

@@ -111,12 +111,17 @@ def _actual_version(source: dict) -> tuple[str | None, str]:
 
 
 def _as_date(value: str) -> date | None:
-    for fmt in ("%Y-%m-%d", "%Y-%m"):
-        try:
-            return datetime.strptime(str(value), fmt).date()
-        except ValueError:
-            continue
-    return None
+    """last_verified 전용. 날짜까지 적힌 것만 받는다.
+
+    월까지만 적힌 값("2026-09")도 받아 주면 1일로 채워지고, 그만큼 노후도가
+    최대 한 달 어긋난다. version 은 매뉴얼처럼 월 단위인 것이 있어 문자열로
+    비교하지만, last_verified 는 "며칠 지났나" 를 재는 값이라 날짜가 있어야
+    한다. 형식이 어긋나면 통과시키지 않고 읽지 못했다고 알린다.
+    """
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def check(today: date | None = None) -> tuple[list[dict], list[Finding]]:
