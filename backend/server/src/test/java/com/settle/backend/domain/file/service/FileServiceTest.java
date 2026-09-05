@@ -9,6 +9,8 @@ import com.settle.backend.domain.file.entity.DocumentType;
 import com.settle.backend.domain.file.entity.UploadStatus;
 import com.settle.backend.domain.file.repository.InMemoryUploadRepository;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
@@ -61,8 +63,54 @@ class FileServiceTest {
                 .hasMessageContaining("404 NOT_FOUND");
     }
 
+    @Test
+    void deletesTheIdPhotoOnceExtractionSucceeds() {
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.arc_front)
+        );
+        FileService.PreparedUpload prepared = service.prepareForExtraction(MEMBER_ID, upload.uploadId());
+
+        service.markDone(prepared.ticket());
+
+        assertThat(gateway.deleted).containsExactly(prepared.ticket().objectKey());
+    }
+
+    @Test
+    void deletesTheIdPhotoEvenWhenExtractionFails() {
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.passport)
+        );
+        FileService.PreparedUpload prepared = service.prepareForExtraction(MEMBER_ID, upload.uploadId());
+
+        service.markFailed(prepared.ticket());
+
+        assertThat(gateway.deleted).containsExactly(prepared.ticket().objectKey());
+    }
+
+    @Test
+    void keepsTheRequestSuccessfulWhenTheDeleteFails() {
+        // 추출은 이미 끝났다. 정리에 실패했다고 성공한 요청을 뒤집지 않는다.
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
+        gateway.deleteFails = true;
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.arc_back)
+        );
+        FileService.PreparedUpload prepared = service.prepareForExtraction(MEMBER_ID, upload.uploadId());
+
+        service.markDone(prepared.ticket());
+
+        assertThat(gateway.deleted).isEmpty();
+    }
+
     private static final class FakeS3 implements S3FileGateway {
         private final StoredFile storedFile;
+        private final List<String> deleted = new ArrayList<>();
+        private boolean deleteFails;
 
         private FakeS3(StoredFile storedFile) {
             this.storedFile = storedFile;
@@ -80,6 +128,14 @@ class FileServiceTest {
         @Override
         public StoredFile download(String objectKey) {
             return storedFile;
+        }
+
+        @Override
+        public void delete(String objectKey) {
+            if (deleteFails) {
+                throw new IllegalStateException("s3 unavailable");
+            }
+            deleted.add(objectKey);
         }
     }
 }
