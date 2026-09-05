@@ -109,7 +109,8 @@ class AgentState(TypedDict, total=False):
 
     # ── 기록 ──────────────────────────────────────────────
     ledger: Annotated[list[LedgerEntry], operator.add]
-    raw_texts: Annotated[list[str], replace]              # OCR 원문, 응답엔 미포함
+    # OCR 원문(raw_texts)은 여기 두지 않는다. 읽는 곳이 없는데 신분증 전문이
+    # 체크포인트에 평문으로 영구 저장됐다. 목적 없는 보관은 그 자체가 위험이다.
     dropped: Annotated[list[str], replace]                # 검증 탈락 필드
 
     # ── 대화 ──────────────────────────────────────────────
@@ -146,7 +147,6 @@ def new_state(session_id: str, locale: str = "en") -> AgentState:
         pending_approval=None,
         approval_decision=None,
         ledger=[],
-        raw_texts=[],
         dropped=[],
         messages=[],
         reply=None,

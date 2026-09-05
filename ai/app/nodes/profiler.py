@@ -3,6 +3,8 @@
 마스킹 규칙:
   - mask()는 **응답을 만들 때만** 적용된다. state 원본은 항상 평문.
   - 서류(PDF)는 서버 내부에서 원본 평문으로 렌더된다.
+  - OCR 원문은 추출 함수 밖으로 내보내지 않는다. state 에 넣으면 체크포인터가
+    그대로 DB 에 저장하고, 지울 주체가 없어진다.
 """
 import re
 
@@ -166,7 +168,8 @@ def run(state: dict, image_bytes: bytes, doc_type: str, ext: str = "jpg") -> tup
 
     state.setdefault("profile", {}).update(r["profile"])     # 평문 저장
     state.setdefault("confidence", {}).update(r["confidence"])
-    state["raw_texts"] = r["raw_texts"]        # Ledger용, 응답엔 미포함
+    # OCR 원문은 state 로 옮기지 않는다. 추출이 끝나면 쓸 일이 없고, state 는
+    # 그대로 직렬화돼 DB 에 남는다. 여기서 끊어야 남지 않는다.
     state["dropped"] = r["dropped"]
 
     return state, profile_to_payload(state["profile"], state["confidence"], doc_type)

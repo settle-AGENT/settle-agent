@@ -323,7 +323,6 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
     state = _graph().invoke(_patch(session_id, {
         "profile": holder["profile"],
         "confidence": holder["confidence"],
-        "raw_texts": holder.get("raw_texts", []),
         "dropped": holder.get("dropped", []),
     }), _cfg(session_id))
 
