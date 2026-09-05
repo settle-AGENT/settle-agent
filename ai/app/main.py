@@ -149,6 +149,13 @@ def chat(req: ChatRequest):
     return agent.send_message(req.session_id, req.message)
 
 
+# 이 경로는 응답 조립(_localized)을 거치지 않으므로 여기서 locale 을 고른다.
+STREAM_ERROR = {
+    "ko": "답변을 만들지 못했습니다. 잠시 후 다시 시도해주세요.",
+    "en": "I could not put together an answer. Please try again in a moment.",
+}
+
+
 @app.post("/api/chat/stream", tags=["agent"])
 def chat_stream(req: ChatRequest):
     """Stream actual agent execution stages, followed by the final AgentResponse."""
@@ -168,8 +175,9 @@ def chat_stream(req: ChatRequest):
             # 이 경로는 프로필·대화를 들고 도는 그래프 전체를 감싸고 있어서,
             # 어떤 값이 예외 문자열에 섞일지 여기서 알 수 없다.
             traceback.print_exc()
+            locale = agent.locale_of(req.session_id)
             events.put({"type": "error",
-                        "message": "답변을 만들지 못했습니다. 잠시 후 다시 시도해주세요.",
+                        "message": STREAM_ERROR.get(locale, STREAM_ERROR["en"]),
                         "reason": type(exc).__name__})
         finally:
             from app.tools import progress as progress_events

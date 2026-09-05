@@ -15,11 +15,12 @@
 
 ```bash
 aws s3api put-bucket-encryption --bucket BUCKET_NAME \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}'
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 ```
 
 키를 직접 관리하려면 `AES256` 대신 `aws:kms`와 `KMSMasterKeyID`를 쓴다. 그
 경우 앱의 IAM 역할에 `kms:GenerateDataKey`·`kms:Decrypt`가 추가로 필요하다.
+`BucketKeyEnabled`는 SSE-KMS 전용이라 위의 AES256 설정에는 넣지 않는다.
 
 생성된 PDF는 서버가 SDK로 직접 올리므로 코드에서 `ServerSideEncryption.AES256`을
 명시해 두었다(`AwsS3FileGateway.uploadPdf`). 버킷 설정이 꺼져도 그쪽은 암호화된다.
@@ -43,6 +44,10 @@ aws s3api put-public-access-block --bucket BUCKET_NAME \
 
 `FileService`가 OCR이 끝난 신분증 원본을 즉시 지운다. 권한이 없으면 삭제가
 실패하고(로그에 `업로드 원본 삭제 실패`가 찍힌다) 원본이 그대로 쌓인다.
+
+삭제 권한은 `members/*/uploads/*` 로만 좁혀 두었다. 앱이 지우는 것은 업로드
+원본뿐이고, 키를 잘못 계산하는 버그가 나더라도 서류함(`generated-documents/`)이
+날아가지 않아야 한다.
 
 갱신된 정책은 [`iam-s3-policy.json`](iam-s3-policy.json)에 있다.
 

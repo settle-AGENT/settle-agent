@@ -59,17 +59,27 @@ def totals(conn) -> tuple[int, int]:
         return cur.fetchone()
 
 
-def purge(conn, threads: list[str]) -> dict[str, int]:
-    """세 테이블에서 해당 thread 를 지운다. 한 트랜잭션으로 처리한다."""
-    deleted = {t: 0 for t in TABLES}
-    if not threads:
-        return deleted
+def purge(conn, cutoff: str) -> tuple[list[str], dict[str, int]]:
+    """대상을 고르는 것과 지우는 것을 한 트랜잭션 안에서 한다.
 
+    미리 뽑아 둔 목록을 재사용하면, 세는 시점과 지우는 시점 사이에 사용자가
+    세션을 다시 열었을 때 방금 쓴 체크포인트까지 함께 지운다. 30일 방치된
+    세션이 하필 그 사이에 살아날 확률은 낮지만, 창을 좁히는 비용이 없다.
+    """
+    deleted = {t: 0 for t in TABLES}
     with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "SELECT thread_id FROM checkpoints "
+            "GROUP BY thread_id "
+            "HAVING max(checkpoint->>'ts') < %s", (cutoff,))
+        threads = [row[0] for row in cur.fetchall()]
+        if not threads:
+            return threads, deleted
+
         for table in TABLES:
             cur.execute(f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (threads,))
             deleted[table] = cur.rowcount
-    return deleted
+    return threads, deleted
 
 
 def main() -> int:
@@ -111,7 +121,11 @@ def main() -> int:
             return 0
 
         print("\n지웁니다...")
-        deleted = purge(conn, stale)
+        # 목록은 트랜잭션 안에서 다시 계산한다. 위에서 센 것과 개수가 다를 수
+        # 있고, 그때는 트랜잭션 안의 것이 맞다.
+        purged, deleted = purge(conn, cutoff)
+        if len(purged) != len(stale):
+            print(f"  (대상 재계산: {len(stale)} → {len(purged)}개)")
         for table in TABLES:
             print(f"  {table:<18} {deleted[table]}행 삭제")
 

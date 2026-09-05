@@ -51,6 +51,23 @@ class FileServiceTest {
     }
 
     @Test
+    void deletesTheOriginalWhenTheUploadIsNotAPng() {
+        // 형식이 틀렸어도 올라온 것은 신분증 사진일 수 있다. 이 티켓은 FAILED 라
+        // 다시 쓰이지 않으므로, 여기서 안 지우면 원본이 영영 남는다.
+        FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", "not-png".getBytes()));
+        FileService service = new FileService(new InMemoryUploadRepository(), gateway);
+        PresignedUploadResponse upload = service.issueUploadUrl(
+                MEMBER_ID, new PresignedUploadRequest(DocumentType.arc_front)
+        );
+
+        assertThatThrownBy(() -> service.prepareForExtraction(MEMBER_ID, upload.uploadId()))
+                .isInstanceOf(ResponseStatusException.class);
+
+        assertThat(gateway.deleted).hasSize(1);
+        assertThat(gateway.deleted.get(0)).contains("/uploads/");
+    }
+
+    @Test
     void rejectsAnotherMembersUploadAsNotFound() {
         FakeS3 gateway = new FakeS3(new S3FileGateway.StoredFile("image/png", PNG));
         FileService service = new FileService(new InMemoryUploadRepository(), gateway);

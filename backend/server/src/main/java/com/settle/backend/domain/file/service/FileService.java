@@ -72,7 +72,10 @@ public class FileService {
         uploadRepository.save(upload);
 
         if (!PNG_CONTENT_TYPE.equalsIgnoreCase(stored.contentType()) || !isPng(stored.bytes())) {
-            uploadRepository.save(upload.withStatus(UploadStatus.FAILED));
+            // 형식이 틀렸다고 내용까지 무해한 것은 아니다 — 올라온 것은 여전히
+            // 신분증 사진일 수 있다. 이 티켓은 FAILED 가 되어 다시 쓰이지
+            // 않으므로, 여기서 지우지 않으면 아무도 열지 않는 원본이 영영 남는다.
+            markFailed(upload);
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type");
         }
 
