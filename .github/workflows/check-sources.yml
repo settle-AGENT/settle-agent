@@ -93,11 +93,13 @@ jobs:
               : process.env.BODY)
               + `\n\n---\n<sub>매일 도는 Source freshness 워크플로가 갱신합니다. 마지막 확인 ${new Date().toISOString().slice(0, 10)}.</sub>`;
 
-            // listForRepo 는 PR 도 함께 돌려준다. 걸러내지 않으면 같은 라벨이
-            // 붙은 PR 의 제목과 본문을 이 잡이 덮어쓴다.
-            const { data: rows } = await github.rest.issues.listForRepo({
+            // listForRepo 는 두 가지를 조심해야 한다.
+            //  - PR 도 함께 돌려준다. 걸러내지 않으면 같은 라벨이 붙은 PR 의
+            //    제목과 본문을 이 잡이 덮어쓴다.
+            //  - 기본 30건만 준다. 못 찾으면 이슈를 새로 만들어 쌓는다.
+            const rows = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: label,
+              state: 'open', labels: label, per_page: 100,
             });
             const open = rows.filter((row) => !row.pull_request);
 
@@ -122,9 +124,11 @@ jobs:
         with:
           script: |
             const label = 'source-freshness';
-            const { data: rows } = await github.rest.issues.listForRepo({
+            // 위와 같은 이유로 PR 을 걸러내고 전체 페이지를 본다. 첫 페이지만
+            // 보면 통과했는데도 열린 이슈가 남는다.
+            const rows = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: label,
+              state: 'open', labels: label, per_page: 100,
             });
             for (const issue of rows.filter((row) => !row.pull_request)) {
               await github.rest.issues.createComment({
