@@ -1,0 +1,9 @@
+[Unit]
+Description=settle 신분증 원본 삭제 감시
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=BUCKET=settle-assets-apne2-20260904
+ExecStart=/opt/settle/check-upload-cleanup.sh

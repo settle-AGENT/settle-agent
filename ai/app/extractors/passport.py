@@ -233,5 +233,4 @@ def extract_profile(image_bytes: bytes, doc_type: str = "passport",
         "profile": profile,
         "confidence": confidence,
         "dropped": mismatched,
-        "raw_texts": texts,
     }

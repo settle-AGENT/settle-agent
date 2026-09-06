@@ -9,6 +9,9 @@
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
+		# 첫 요청까지 평문으로 나가지 않게 한다. Caddy 가 80 → 443 리다이렉트를
+		# 하지만 그 리다이렉트 자체가 평문이고, 신분증을 올리는 서비스다.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	}
 
 	handle /health/backend {

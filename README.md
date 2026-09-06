@@ -141,6 +141,21 @@ planner → router ─┬→ slot_filler          부족한 값 질문
 액션: `alien_registration` · `mobile_subscription` · `open_bank_account` · `residence_change` · `work_activity`.
 현재 매트릭스에 상세 정의가 채워진 자격은 D-2 다.
 
+### 선행조건과 완료는 다른 질문이다
+
+`satisfied_if` 는 "이 값이 프로필에 있으면 현실에서는 이미 끝난 일" 이라는 뜻이다.
+외국인등록번호가 그렇다 — 등록을 마쳐야 나오는 번호이므로, 가지고 있다는 사실
+자체가 등록을 마쳤다는 증거다. planner 는 이것을 두 집합으로 나눠 쓴다.
+
+| 집합 | 답하는 질문 | 채우는 주체 |
+|---|---|---|
+| `prereq_satisfied` | 현실에서 이미 끝난 일인가 → 뒤따르는 과제를 연다 | `satisfied_if` · executor |
+| `completed` | 앱이 서류를 만들어 승인까지 받았나 → `done` 으로 표시한다 | executor (서류가 있는 과제) |
+
+둘을 겸하게 두면 등록증을 이미 가진 사람이 계좌를 열려고 할 때 필요도 없는
+통합신청서부터 만들어야 한다. 은행이 묻는 것은 등록된 사람인지이지, 이 앱으로
+통합신청서를 만들었는지가 아니다.
+
 ## 검색 (RAG)
 
 두 코퍼스를 함께 검색하고, 검색된 근거 안에서만 LLM 이 답한다.
@@ -149,6 +164,8 @@ planner → router ─┬→ slot_filler          부족한 값 질문
 |---|---|---|
 | `ai/rules/corpus.json` | 법령 조문 (출입국관리법·시행령·금융실명법·특정금융정보법) | 397 |
 | `ai/rules/manual.json` | 외국인체류 안내매뉴얼 (법무부, 2026. 8.) | 1,212 |
+
+어느 판을 근거로 답하는지는 `ai/rules/sources.yaml` 이 선언한다 — 아래 "자료 최신성" 절 참고.
 
 - 영문 질의는 먼저 **문서에 실제로 쓰인 낱말로** 옮긴다 (`part-time job` → `시간제취업 체류자격 외 활동`).
 - BM25(한글 음절 바이그램) + pgvector 코사인을 RRF 로 합친다. DB 가 없으면 BM25 단독.
@@ -163,6 +180,46 @@ planner → router ─┬→ slot_filler          부족한 값 질문
 > 받아 `ai/corpus/manual/` 에 두고 `build_manual.py` 를 돌린다. 결과물 `rules/manual.json` 은
 > 커밋되어 있으므로 코퍼스를 다시 만들 때만 원본이 필요하다.
 
+## 자료 최신성
+
+법령은 개정되고 매뉴얼은 판이 바뀌고 서식은 칸이 바뀐다. 무엇을 근거로 답하고
+있는지가 `ai/rules/sources.yaml` 한 곳에 선언되어 있다. 예전에는 이 정보가 법령
+PDF 파일명, `build_manual.py` 의 문자열 상수, 템플릿 HTML 안의 문구 세 군데에
+흩어져 있었고 아무도 읽지 않았다.
+
+두 날짜를 구분한다.
+
+| | 뜻 | 언제 바뀌나 |
+|---|---|---|
+| `version` | 그 자료 자체의 판·시행일 | 원본이 개정되어야 |
+| `last_verified` | 최신인지 우리가 마지막으로 확인한 날 | 확인만 해도 (판이 그대로여도) |
+
+**오래된 판이 곧 문제는 아니다** — 개정이 없었으면 3년 전 서식이 여전히 최신이다.
+문제는 확인한 지 오래된 것이다. 그래서 알림은 `version` 이 아니라 `last_verified`
+를 기준으로 울린다.
+
+```bash
+cd ai && uv run python scripts/check_sources.py
+```
+
+두 가지를 본다. **정합성** — 선언한 판이 실제 파일과 맞는가(법령 PDF 파일명의
+시행일, `build_manual.py` 의 상수, 템플릿의 개정일). 어긋났다면 원본만 갈아끼우고
+선언을 안 고친 것이다. **노후도** — `recheck_after_days` 가 지났는가.
+
+`.github/workflows/check-sources.yml` 이 매일 09:00 KST 에 돌려 `source-freshness`
+라벨의 이슈 하나를 열고 갱신한다. 매일 새로 만들지 않는다 — 쌓이면 아무도 안 본다.
+통과하면 자동으로 닫는다.
+
+**자동으로 고치지 않는다.** 서식이 바뀌면 템플릿뿐 아니라 `mappings/*.yaml` 의 필드
+매핑과 `visa_matrix.yaml` 의 `required_docs` 까지 함께 손봐야 하고, 매뉴얼 판이
+바뀌면 `build_manual.py` 의 장 경계 탐지가 깨질 수 있다. 감지는 기계가, 반영은
+사람이 한다.
+
+> 아직 네트워크를 쓰지 않는다. 원본이 실제로 개정됐는지 확인하려면 국가법령정보센터
+> OPEN API 키(OC)가 필요하다. 지금은 "확인한 지 오래됐으니 사람이 보라" 까지만 한다.
+
+떠 있는 컨테이너가 어느 판을 들고 있는지는 `/health` 의 `sources` 에 나온다.
+
 ## 서류 생성
 
 `ai/app/nodes/doc_builder.py` — **LLM 을 쓰지 않는다.** 값 생성은 전부 결정적 매핑이다.
@@ -173,9 +230,42 @@ profile + mappings/*.yaml → Jinja2 (templates/*.html) → WeasyPrint → PDF
 
 - 렌더에는 마스킹하지 않은 평문 프로필을 쓴다 (서버 내부에서만 생성).
   마스킹은 **응답을 만들 때만** 적용되고 state 원본은 항상 평문이다.
+  그래서 무엇을 얼마나 들고 있는지가 중요하다 — 아래 "개인정보" 절 참고.
 - OCR 신뢰도 0.95 미만 필드는 서류와 화면 양쪽에 '확인요망'으로 표시된다.
 - WeasyPrint 는 Pango/cairo 를 dlopen 한다. 시스템 라이브러리가 없으면 PDF 생성이
   조용히 실패하고 HTML 만 남는다 (`ai/Dockerfile` 참고).
+
+## 개인정보
+
+무엇을 들고 있고 언제 버리는지.
+
+| 데이터 | 어디에 | 언제 사라지나 |
+|---|---|---|
+| 신분증 원본 사진 | S3 `members/{id}/uploads/` | **OCR 직후 즉시 삭제** (`FileService.discardOriginal`) |
+| OCR 원문 | — | **저장하지 않는다.** 추출 함수 밖으로 나가지 않는다 |
+| 프로필 · 대화 | 체크포인터 (Postgres) | 보관기간 스크립트로 정리 (아래) |
+| 생성 서류 PDF | S3 `members/{id}/generated-documents/` | 남는다 — 서류함은 회원 자산이다 |
+| 임시 렌더 결과 | `ai/output/*.html`, `*.pdf` | 아직 정리하지 않는다 |
+
+- **응답에 예외 메시지를 싣지 않는다.** OCR·프로필 처리 중 난 예외에는 신분증에서
+  읽은 값이 섞일 수 있다. 클라이언트에는 예외 **타입만** 나가고, 원인은 서버
+  로그의 traceback 에만 남는다.
+- 외국인등록번호는 응답에서 마스킹된다(`990101-*******`). state 원본은 평문이므로
+  저장 매체 암호화가 따로 필요하다 — `deploy/aws-hardening.md`.
+
+```bash
+uv run python scripts/purge_stale_sessions.py                # 30일 이상 방치된 세션
+uv run python scripts/purge_raw_texts.py                     # 옛 체크포인트의 OCR 원문 (1회)
+```
+
+둘 다 기본이 dry-run 이다. `--apply` 를 붙여야 실제로 지운다.
+
+세션 보관기간은 **마지막 활동 기준 30일**이다. 생성 기준이 아니라 활동 기준인
+이유는, 90일 기한을 추적하는 앱에서 나이만으로 지우면 계속 쓰는 사람의 D-day 가
+매번 리셋되기 때문이다.
+
+AWS 쪽에서 해야 하는 것(버킷 기본 암호화, 퍼블릭 차단, EBS 암호화)은
+[deploy/aws-hardening.md](deploy/aws-hardening.md) 에 모아 두었다.
 
 ## 주요 엔드포인트
 
@@ -183,7 +273,7 @@ profile + mappings/*.yaml → Jinja2 (templates/*.html) → WeasyPrint → PDF
 
 | 메서드 | 경로 | |
 |---|---|---|
-| GET | `/health` | `persistent`, `rag` 상태 포함 |
+| GET | `/health` | `persistent`, `rag`, `sources`(근거 자료 판) 포함 |
 | POST | `/api/session` | 세션 생성·이어받기·리셋 |
 | POST | `/api/profile/extract-upload` | 신분증 업로드 → OCR → 프로필 |
 | POST | `/api/profile/confirm` | 확인 화면에서 고친 값 반영 |
@@ -237,11 +327,11 @@ ai/
   rules/           체류자격 매트릭스 · 근거법령 · 코퍼스
   mappings/        서식 필드 매핑
   templates/       서식 HTML
-  scripts/         코퍼스 구축 · 임베딩 · 적재
+  scripts/         코퍼스 구축 · 임베딩 · 적재 · 보관기간 정리 · 자료 최신성 점검
 backend/server/    Spring Boot — domain: auth · member · file · document · agent · action · profile · card · application
 frontend/frontend-react/
                    React + Vite (App.jsx 단일 스텝 라우팅)
-deploy/            Caddyfile · 런타임 env 렌더링
+deploy/            Caddyfile · 배포 스크립트 · IAM·CORS 정책 · AWS 보안 설정 안내
 mock-institution/  기관 API 시뮬레이터
 seed/              샘플 신분증 이미지 · 프로필
 ```
@@ -263,3 +353,7 @@ seed/              샘플 신분증 이미지 · 프로필
 
 배포 인프라는 EC2 한 대다. Postgres(pgvector)도 같은 박스의 컨테이너로 돌고,
 매니지드 의존은 S3 하나뿐이다. 자세한 것은 `compose.selfhost.yml` 주석 참고.
+
+Postgres 가 EC2 위의 컨테이너이므로 저장 암호화는 RDS 설정이 아니라 **EBS 볼륨
+암호화**다. 기존 볼륨에는 제자리 적용이 안 되고 스냅샷 교체가 필요하다 —
+절차와 남은 항목은 [deploy/aws-hardening.md](deploy/aws-hardening.md) 에 있다.

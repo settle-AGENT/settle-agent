@@ -1,0 +1,9 @@
+[Unit]
+Description=settle 상담 세션 보관기간 시행 30일
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/settle
+ExecStart=/bin/bash -c "docker compose -f compose.selfhost.yml --env-file .env exec -T ai python scripts/purge_stale_sessions.py --apply"

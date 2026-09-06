@@ -10,7 +10,10 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:settle-AGENT/settle-agent:ref:refs/heads/master"
+          "token.actions.githubusercontent.com:sub": [
+            "repo:settle-AGENT@321205218/settle-agent@1354485154:ref:refs/heads/master",
+            "repo:settle-AGENT/settle-agent:ref:refs/heads/master"
+          ]
         }
       }
     }

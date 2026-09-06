@@ -355,7 +355,9 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
         profile     읽어낸 필드만 (못 읽은 키는 없음)
         confidence  필드별 신뢰도
         dropped     검증에서 버려진 필드
-        raw_texts   OCR 원문 (디버깅·감사용)
+
+    OCR 원문은 반환하지 않는다. 호출부가 그것을 state 에 넣어 두는 바람에
+    신분증 전문이 체크포인트에 남았다. 필요하면 이 함수 안에서만 쓴다.
     """
     texts = clean_texts(extract_texts(call_clova(image_bytes, ext)))
 
@@ -402,5 +404,4 @@ def extract_profile(image_bytes: bytes, doc_type: DocType,
         "profile": profile,
         "confidence": confidence,
         "dropped": dropped,
-        "raw_texts": texts,
     }

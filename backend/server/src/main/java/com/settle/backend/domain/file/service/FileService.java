@@ -6,6 +6,8 @@ import com.settle.backend.domain.file.entity.UploadStatus;
 import com.settle.backend.domain.file.entity.UploadTicket;
 import com.settle.backend.domain.file.repository.UploadRepository;
 import java.time.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.UUID;
@@ -15,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class FileService {
+    private static final Logger log = LoggerFactory.getLogger(FileService.class);
     private static final String PNG_CONTENT_TYPE = "image/png";
     private static final byte[] PNG_SIGNATURE = {
             (byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
@@ -55,7 +58,11 @@ public class FileService {
         if (upload.status() == UploadStatus.PROCESSING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "upload_processing");
         }
-        if (upload.status() == UploadStatus.DONE) {
+        // DONE 과 FAILED 는 둘 다 종료 상태다. FAILED 를 통과시키면 방금 지운
+        // 원본을 다시 내려받으려 하고, 삭제가 실패해 원본이 남아 있었다면 같은
+        // 신분증으로 OCR 이 한 번 더 돈다. 재시도는 새 업로드로 한다 —
+        // 프론트도 시도마다 uploadId 를 새로 발급받는다.
+        if (upload.status() == UploadStatus.DONE || upload.status() == UploadStatus.FAILED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "upload_already_processed");
         }
 
@@ -69,7 +76,10 @@ public class FileService {
         uploadRepository.save(upload);
 
         if (!PNG_CONTENT_TYPE.equalsIgnoreCase(stored.contentType()) || !isPng(stored.bytes())) {
-            uploadRepository.save(upload.withStatus(UploadStatus.FAILED));
+            // 형식이 틀렸다고 내용까지 무해한 것은 아니다 — 올라온 것은 여전히
+            // 신분증 사진일 수 있다. 이 티켓은 FAILED 가 되어 다시 쓰이지
+            // 않으므로, 여기서 지우지 않으면 아무도 열지 않는 원본이 영영 남는다.
+            markFailed(upload);
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type");
         }
 
@@ -79,10 +89,30 @@ public class FileService {
 
     public void markDone(UploadTicket upload) {
         uploadRepository.save(upload.withStatus(UploadStatus.DONE));
+        discardOriginal(upload);
     }
 
     public void markFailed(UploadTicket upload) {
         uploadRepository.save(upload.withStatus(UploadStatus.FAILED));
+        discardOriginal(upload);
+    }
+
+    /** 추출이 끝난(또는 실패한) 신분증 원본을 지운다.
+     *
+     * 원본 사진은 이 시스템에서 가장 날것의 개인정보인데, OCR 이 끝나면 쓸 일이
+     * 없다. 티켓은 한 번 DONE·FAILED 가 되면 prepareForExtraction 이 다시 받아
+     * 주지 않으므로, 남겨 두면 아무도 읽지 않는 신분증 사진이 영구히 쌓인다.
+     *
+     * 지우지 못해도 사용자 흐름을 막지 않는다 — 추출은 이미 끝났고, 여기서
+     * 예외를 올리면 성공한 요청이 실패로 뒤집힌다. 대신 로그를 남겨 사람이
+     * 치울 수 있게 한다. */
+    private void discardOriginal(UploadTicket upload) {
+        try {
+            s3.delete(upload.objectKey());
+        } catch (RuntimeException exception) {
+            log.warn("업로드 원본 삭제 실패 — 수동 정리 필요: uploadId={} key={}",
+                    upload.id(), upload.objectKey(), exception);
+        }
     }
 
     private boolean isPng(byte[] bytes) {

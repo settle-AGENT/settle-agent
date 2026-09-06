@@ -76,12 +76,17 @@ def _deadline(spec: dict, profile: dict, today: date) -> tuple[str | None, int |
 
 
 def _status(action_id: str, spec: dict, completed: set[str],
-            in_progress: set[str]) -> str:
+            prereq_satisfied: set[str], in_progress: set[str]) -> str:
+    """done 은 completed 로, 잠김 여부는 prereq_satisfied 로 가른다.
+
+    두 집합이 다르다. 현실에서 이미 끝난 일(prereq_satisfied)은 뒤따르는 과제를
+    열어 주지만, 그 과제 자체가 done 이 되지는 않는다. build_task_graph 참고.
+    """
     if action_id in completed:
         return "done"
     if action_id in in_progress:
         return "in_progress"
-    if all(p in completed for p in spec.get("prereq", [])):
+    if all(p in prereq_satisfied for p in spec.get("prereq", [])):
         return "available"
     return "locked"
 
@@ -106,18 +111,28 @@ def build_task_graph(
     if not actions:
         return []                              # 미지원 체류자격
 
-    # 프로필에 값이 있으면 이미 끝낸 것으로 보는 과제가 있다. 다만 신청서를
-    # 생성하는 과제(form)는 OCR 값이 있다는 이유만으로 완료하면 안 된다.
-    # 신분증 업로드는 작성 준비일 뿐이고, 명시적 승인 후 executor가 completed에
-    # 넣었을 때만 완료다.
+    # satisfied_if 는 "이 값이 프로필에 있으면 현실에서는 이미 끝난 일" 이라는
+    # 뜻이다. 외국인등록번호가 그렇다 — 등록을 마쳐야 나오는 번호이므로, 그것을
+    # 가지고 있다는 사실 자체가 등록을 마쳤다는 증거다.
     #
-    # completed 에 합쳐 넣는 것이 핵심이다. 상태만 done 으로 바꾸면 그것을
-    # 선행조건으로 삼는 과제들이 계속 잠겨 있다 — 등록은 끝났는데 계좌는
-    # 영영 안 열리는 상태가 된다.
+    # 그런데 그 질문과 "앱이 그 서류를 만들어 승인까지 받았는가" 는 다른
+    # 질문이다. 예전에는 completed 하나가 둘을 겸했고, 서류를 만드는 과제
+    # (form)는 satisfied_if 를 무시하게 막아 두었다. 그 결과 등록증을 이미 가진
+    # 사람이 계좌를 열려면 필요도 없는 통합신청서부터 만들어야 했다.
+    # 은행이 묻는 것은 등록된 사람인지이지, 이 앱으로 통합신청서를 만들었는지가
+    # 아니다. 그래서 두 집합을 나눈다.
+    #
+    #   prereq_satisfied  선행조건 판정용. 현실에서 끝났으면 충족이다.
+    #   completed         과제 자체의 done 판정용. 앱이 만들 서류가 있는 과제는
+    #                     executor 가 승인 뒤에 넣어 줄 때만 완료다.
     completed = set(completed)
+    prereq_satisfied = set(completed)
     for aid, spec in actions.items():
         key = spec.get("satisfied_if")
-        if key and profile.get(key) and not spec.get("form"):
+        if not (key and profile.get(key)):
+            continue
+        prereq_satisfied.add(aid)
+        if not spec.get("form"):
             completed.add(aid)
 
     labels = {aid: _field(s, "label", locale) or aid
@@ -131,7 +146,7 @@ def build_task_graph(
         if spec.get("allowed") is False:
             continue                           # 이 자격으로는 불가한 액션
 
-        status = _status(aid, spec, completed, in_progress)
+        status = _status(aid, spec, completed, prereq_satisfied, in_progress)
         if aid in LOCKED_APPLICATIONS and status != "done":
             status = "locked"
         prereq = spec.get("prereq", [])
@@ -143,7 +158,7 @@ def build_task_graph(
             "status": status,
             "prereq": prereq,
             "blocked_by": [labels.get(p, p) for p in prereq
-                           if p not in completed] if status == "locked" else [],
+                           if p not in prereq_satisfied] if status == "locked" else [],
             "deadline": deadline,
             "d_day": d_day,
             "evidence": evidence_labels(spec.get("evidence", [])),

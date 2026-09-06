@@ -323,7 +323,6 @@ def extract(session_id: str, image: bytes, doc_type: DocType,
     state = _graph().invoke(_patch(session_id, {
         "profile": holder["profile"],
         "confidence": holder["confidence"],
-        "raw_texts": holder.get("raw_texts", []),
         "dropped": holder.get("dropped", []),
     }), _cfg(session_id))
 
@@ -876,15 +875,19 @@ def _guide(session_id: str, extra: dict, tasks: list[dict],
         if target["id"] != task["id"]:
             if action_id == "open_bank_account" and target["id"] == "alien_registration":
                 target_form = (actions_for(profile.get("visa_type")).get(target["id"]) or {}).get("form")
+                # 여기까지 왔다는 것은 외국인등록번호가 프로필에 없다는 뜻이다.
+                # 번호가 있으면 planner 가 선행조건을 충족으로 보고 계좌개설을
+                # 열어 주므로 이 가지에 오지 않는다. 그러니 "등록증 정보는
+                # 확인됐다" 고 말하면 안 된다 — 이 사람은 아직 등록 전이다.
                 reply = (
-                    "외국인등록증 정보는 확인됐지만 통합신청서가 아직 발급되지 않았어요. "
-                    "아래 버튼을 누르면 통합신청서 발급 화면으로 이동해요."
+                    "계좌를 개설하려면 외국인등록을 먼저 마쳐야 해요. "
+                    "아래 버튼을 누르면 통합신청서 작성 화면으로 이동해요."
                     if locale == "ko"
-                    else "Your residence card information is ready, but the integrated application has not been issued yet. "
-                    "Tap below to open the application screen."
+                    else "You need to finish your alien registration before you can open an account. "
+                    "Tap below to open the integrated application screen."
                 )
                 choice_payload = {"form": target_form}
-                offer["label"] = "통합신청서 발급하기" if locale == "ko" else "Issue integrated application"
+                offer["label"] = "통합신청서 작성하기" if locale == "ko" else "Fill in the integrated application"
             else:
                 reply = (
                     f"{task['label']} 전에 {target['label']} 완료 여부를 먼저 확인해야 해요. "
