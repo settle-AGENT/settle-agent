@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard } from "./components.jsx";
+import { BridgeMark, TopBar, Rail, PrimaryButton, Field, QuestionCard, TaskCard, legalEvidenceLabel } from "./components.jsx";
 import {
   signUp, login, uploadAndExtract, confirmProfile, previewAction, approveAction, getLedger,
   fetchDocument, nationalityLabel,
@@ -613,7 +613,12 @@ export default function App() {
   // AgentResponse 처리 순서는 계약대로 setState → render(ui) → appendMessage(reply).
   const applyAgent = (response, { appendReply = true } = {}) => {
     if (response?.state) {
-      setAgentState(response.state);
+      setAgentState((current) => ({
+        ...response.state,
+        locale: current?.locale === "ko" || current?.locale === "en"
+          ? current.locale
+          : response.state.locale || lang,
+      }));
       if (memberId && response.state.session_id) {
         const snapshot = {
           memberId,
@@ -2339,7 +2344,7 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
           </span>
         </div>
         <h3 style={{ margin: "12px 0 10px", fontSize: 19, lineHeight: 1.32 }}>
-          {en ? `Issue your ${label.toLowerCase()}?` : `${label}를 발급할까요?`}
+          {en ? `Issue your ${label.replace(/^Submit /, "").toLowerCase()}?` : `${label}를 발급할까요?`}
         </h3>
         <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: "oklch(0.35 0.012 60)" }}>
           {en
@@ -2350,7 +2355,7 @@ function ApprovalModal({ approval, loading, error, onDecision, locale = "ko" }) 
           <div key={item} style={{ marginTop: 7, fontSize: 12, color: "oklch(0.35 0.012 60)" }}>· {item}</div>
         ))}
         {(approval.evidence || []).map((item) => (
-          <div key={item} style={{ marginTop: 5, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Evidence" : "근거"} · {item}</div>
+          <div key={item} style={{ marginTop: 5, fontSize: 11.5, color: "var(--muted)" }}>{en ? "Evidence" : "근거"} · {legalEvidenceLabel(item, locale)}</div>
         ))}
         <p style={{ margin: "12px 0 0", fontSize: 12.5, lineHeight: 1.5, color: "oklch(0.35 0.012 60)" }}>
           {en ? "This app prepares the document for you. Submit the printed copy yourself at the bank or immigration office." : "이 앱은 서류를 만들어 드려요. 은행·출입국관리소 제출은 직접 해야 해요."}
