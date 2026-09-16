@@ -1,6 +1,17 @@
 // 여러 화면이 공유하는 작은 UI 조각들.
 import React from "react";
 
+const LEGAL_EVIDENCE_EN = new Map([
+  ["출입국관리법 제31조", "IMMIGRATION ACT, Article 31"],
+  ["금융실명거래 및 비밀보장에 관한 법률 제3조", "ACT ON REAL NAME FINANCIAL TRANSACTIONS AND CONFIDENTIALITY, Article 3"],
+  ["특정 금융거래정보의 보고 및 이용 등에 관한 법률 제5조의2", "ACT ON REPORTING AND USING SPECIFIED FINANCIAL TRANSACTION INFORMATION, Article 5-2"],
+]);
+
+export function legalEvidenceLabel(value, locale = "ko") {
+  if (locale !== "en") return value;
+  return LEGAL_EVIDENCE_EN.get(value) || value;
+}
+
 export function BridgeMark({ size = 60 }) {
   return (
     <div className="maite-wordmark" style={{ width: size * 2.5 }}>
@@ -226,9 +237,10 @@ export function TaskCard({ task, busy, onStart, locale = "ko" }) {
       {task.evidence?.length > 0 && (
         <details style={{ marginTop: 8 }}>
           <summary style={{ fontSize: 11, color: "var(--muted)", cursor: "pointer" }}>{en ? "Legal basis" : "근거 법령"}</summary>
-          {task.evidence.map((line) => (
-            <div key={line} title={line} style={{ marginTop: 4, fontSize: 11, color: "var(--muted)", lineHeight: 1.45 }}>· {line}</div>
-          ))}
+          {task.evidence.map((line) => {
+            const label = legalEvidenceLabel(line, locale);
+            return <div key={line} title={label} style={{ marginTop: 4, fontSize: 11, color: "var(--muted)", lineHeight: 1.45 }}>· {label}</div>;
+          })}
         </details>
       )}
 
