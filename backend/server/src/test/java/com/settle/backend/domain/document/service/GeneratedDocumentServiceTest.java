@@ -151,4 +151,65 @@ class GeneratedDocumentServiceTest {
         assertThat(reference.get("pdf_url"))
                 .isEqualTo("/api/documents/%s/download".formatted(documentId));
     }
+
+    @Test
+    void reconcilesLatestReadyDocumentWhenNoIssuedDocumentExists() {
+        GeneratedDocument latest = readyDocument("document-latest.pdf");
+        GeneratedDocument older = readyDocument("document-older.pdf");
+        when(documentRepository.findAllByMember_IdAndSessionIdAndActionIdOrderByCreatedAtDesc(
+                MEMBER_ID, "demo-001", "open_bank_account"
+        )).thenReturn(List.of(latest, older));
+
+        service.reconcileIssuedFromLedger(MEMBER_ID, "demo-001", "open_bank_account");
+
+        assertThat(latest.getStatus()).isEqualTo(GeneratedDocumentStatus.ISSUED);
+        assertThat(older.getStatus()).isEqualTo(GeneratedDocumentStatus.READY);
+        verify(documentRepository).save(latest);
+    }
+
+    @Test
+    void doesNotReconcileReadyDocumentsWhenIssuedDocumentAlreadyExists() {
+        GeneratedDocument issued = readyDocument("document-issued.pdf");
+        issued.markIssued();
+        GeneratedDocument latestReady = readyDocument("document-latest-ready.pdf");
+        GeneratedDocument olderReady = readyDocument("document-older-ready.pdf");
+        when(documentRepository.findAllByMember_IdAndSessionIdAndActionIdOrderByCreatedAtDesc(
+                MEMBER_ID, "demo-001", "open_bank_account"
+        )).thenReturn(List.of(latestReady, issued, olderReady));
+
+        service.reconcileIssuedFromLedger(MEMBER_ID, "demo-001", "open_bank_account");
+
+        assertThat(latestReady.getStatus()).isEqualTo(GeneratedDocumentStatus.READY);
+        assertThat(olderReady.getStatus()).isEqualTo(GeneratedDocumentStatus.READY);
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
+    void repeatedLedgerReconciliationDoesNotIssueAdditionalReadyDocument() {
+        GeneratedDocument latest = readyDocument("document-latest.pdf");
+        GeneratedDocument older = readyDocument("document-older.pdf");
+        when(documentRepository.findAllByMember_IdAndSessionIdAndActionIdOrderByCreatedAtDesc(
+                MEMBER_ID, "demo-001", "open_bank_account"
+        )).thenReturn(List.of(latest, older));
+
+        service.reconcileIssuedFromLedger(MEMBER_ID, "demo-001", "open_bank_account");
+        service.reconcileIssuedFromLedger(MEMBER_ID, "demo-001", "open_bank_account");
+
+        assertThat(latest.getStatus()).isEqualTo(GeneratedDocumentStatus.ISSUED);
+        assertThat(older.getStatus()).isEqualTo(GeneratedDocumentStatus.READY);
+        verify(documentRepository).save(latest);
+    }
+
+    private GeneratedDocument readyDocument(String fileName) {
+        GeneratedDocument document = new GeneratedDocument(
+                UUID.randomUUID(),
+                new Member("member@example.com", "password-hash"),
+                "demo-001",
+                "open_bank_account",
+                "계좌개설신청서",
+                "members/%s/generated-documents/%s".formatted(MEMBER_ID, fileName)
+        );
+        document.markReady(List.of());
+        return document;
+    }
 }

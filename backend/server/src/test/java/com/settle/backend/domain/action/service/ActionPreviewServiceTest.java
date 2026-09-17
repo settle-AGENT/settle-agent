@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -203,13 +204,17 @@ class ActionPreviewServiceTest {
     @Test
     void returnsLedgerForOwnSession() {
         when(aiActionClient.ledger(SESSION_ID))
-                .thenReturn(List.of(Map.of("action", "open_bank_account")));
+                .thenReturn(List.of(
+                        Map.of("action", "open_bank_account"),
+                        Map.of("action", "open_bank_account")
+                ));
         when(documentService.listIssuedHistory(MEMBER_ID))
                 .thenReturn(List.of(Map.of("action", "open_bank_account")));
 
         assertThat(service.ledger(MEMBER_ID, SESSION_ID))
                 .containsExactly(Map.of("action", "open_bank_account"));
-        verify(documentService).issueLatest(MEMBER_ID, SESSION_ID, "open_bank_account");
+        verify(documentService, times(2))
+                .reconcileIssuedFromLedger(MEMBER_ID, SESSION_ID, "open_bank_account");
     }
 
     private GeneratedDocument document() {

@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class GeneratedDocumentService {
@@ -92,6 +93,24 @@ public class GeneratedDocumentService {
             document.markIssued();
             documentRepository.save(document);
         });
+    }
+
+    @Transactional
+    public void reconcileIssuedFromLedger(UUID memberId, String sessionId, String actionId) {
+        List<GeneratedDocument> documents = documentRepository
+                .findAllByMember_IdAndSessionIdAndActionIdOrderByCreatedAtDesc(
+                        memberId, sessionId, actionId
+                );
+        if (documents.stream().anyMatch(document -> document.getStatus() == GeneratedDocumentStatus.ISSUED)) {
+            return;
+        }
+        documents.stream()
+                .filter(document -> document.getStatus() == GeneratedDocumentStatus.READY)
+                .findFirst()
+                .ifPresent(document -> {
+                    document.markIssued();
+                    documentRepository.save(document);
+                });
     }
 
     public List<Map<String, Object>> listIssuedHistory(UUID memberId) {
