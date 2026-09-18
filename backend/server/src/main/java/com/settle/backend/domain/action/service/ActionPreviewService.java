@@ -103,7 +103,7 @@ public class ActionPreviewService {
         aiActionClient.ledger(sessionId).forEach(entry -> {
             Object action = entry.get("action");
             if (action instanceof String actionId && !actionId.isBlank()) {
-                documentService.issueLatest(memberId, sessionId, actionId);
+                documentService.reconcileIssuedFromLedger(memberId, sessionId, actionId);
             }
         });
         return documentService.listIssuedHistory(memberId);
