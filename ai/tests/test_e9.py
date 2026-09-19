@@ -87,3 +87,66 @@ def test_e9_is_asked_about_a_workplace_not_a_school():
 
     assert "학교" not in asked
     assert graph._question("org_name", "D-2")["label"]["ko"] != asked
+
+
+# ── seed 고정물 ────────────────────────────────────────────
+# 페르소나 값을 코드에 또 적지 않는다. seed 가 한 곳의 출처이고, 여기서는
+# 그것이 실제로 돌아가는지만 본다 — 갈라지면 이 테스트가 먼저 깨진다.
+SEED = Path(__file__).resolve().parents[2] / "seed"
+
+
+def _seed(name: str):
+    import json
+    return json.loads((SEED / name).read_text(encoding="utf-8"))
+
+
+def test_seed_e9_files_exist():
+    for name in ("arc_e9_front.jpg", "arc_e9_back.jpg", "passport_e9.jpg",
+                 "mrz_e9.txt", "profile_e9.json", "tasks_e9.json"):
+        assert (SEED / name).is_file(), f"seed/{name} 이 없다"
+
+
+def test_seed_e9_mrz_checksums_are_valid():
+    """체크섬이 틀린 MRZ 를 넣어 두면 파서 테스트가 통과할 수 없다."""
+    line2 = (SEED / "mrz_e9.txt").read_text(encoding="utf-8").splitlines()[1]
+    weights = (7, 3, 1)
+
+    def check(s: str) -> str:
+        total = 0
+        for i, ch in enumerate(s):
+            v = int(ch) if ch.isdigit() else (0 if ch == "<" else ord(ch) - 55)
+            total += v * weights[i % 3]
+        return str(total % 10)
+
+    passport, p_c = line2[:9], line2[9]
+    birth, b_c = line2[13:19], line2[19]
+    expiry, e_c = line2[21:27], line2[27]
+    personal, pe_c = line2[28:42], line2[42]
+
+    assert check(passport) == p_c
+    assert check(birth) == b_c
+    assert check(expiry) == e_c
+    assert check(personal) == pe_c
+    assert check(passport + p_c + birth + b_c + expiry + e_c + personal + pe_c) == line2[43]
+
+
+def test_seed_e9_profile_matches_the_card_images():
+    profile = _seed("profile_e9.json")
+
+    assert profile["visa_type"] == "E-9"
+    assert profile["arc_no"] == "950312-5234567"     # 앞면에 인쇄된 값
+    assert profile["stay_expiry"] == "2027-06-30"    # 뒷면에 인쇄된 값
+    assert profile["nationality"] == "NPL"
+
+
+def test_seed_e9_tasks_match_what_the_planner_actually_produces():
+    """손으로 고친 고정물은 조용히 거짓말을 한다. 매번 다시 계산해 맞춘다."""
+    profile = _seed("profile_e9.json")
+    expected = _seed("tasks_e9.json")
+
+    actual = build_task_graph(profile, today=date(2026, 9, 19), locale="ko")
+
+    assert [t["id"] for t in actual] == [t["id"] for t in expected]
+    for got, want in zip(actual, expected):
+        for key in ("label", "status", "deadline", "d_day", "evidence"):
+            assert got[key] == want[key], f"{got['id']}.{key}"
