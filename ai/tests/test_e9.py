@@ -13,16 +13,16 @@ from app.nodes.planner import build_task_graph
 from app.rules.loader import actions_for
 
 PROFILE = {
-    "name_en": "NGUYEN VAN A",
-    "arc_no": "990101-5234567",
-    "nationality": "VNM",
-    "birth_date": "1999-01-01",
+    "name_en": "SITI",
+    "arc_no": "001130-8678945",
+    "nationality": "IDN",
+    "birth_date": "2000-11-30",
     "visa_type": "E-9",
-    "entry_date": "2026-08-15",
-    "stay_expiry": "2027-08-14",
-    "addr_kr": "Ansan Danwon-gu",
+    "entry_date": "2026-06-25",
+    "stay_expiry": "2029-06-30",
+    "addr_kr": "전라남도 영암군 삼호읍 대불로 88",
     "phone_kr": "010-1234-5678",
-    "org_name": "Settle Manufacturing Co.",
+    "org_name": "대불조선기자재(주)",
     "purpose": "salary",
     "income_source": "part_time",
 }
@@ -68,8 +68,8 @@ def test_e9_workplace_lands_in_the_workplace_box_not_the_school_box(
     html = Path(result["html_path"]).read_text(encoding="utf-8")
 
     school_cell, workplace_cell = html.split("근무처", 1)
-    assert "Settle Manufacturing Co." in workplace_cell
-    assert "Settle Manufacturing Co." not in school_cell
+    assert "대불조선기자재(주)" in workplace_cell
+    assert "대불조선기자재(주)" not in school_cell
 
 
 def test_unsupported_visa_message_lists_what_is_actually_supported():
@@ -134,9 +134,10 @@ def test_seed_e9_profile_matches_the_card_images():
     profile = _seed("profile_e9.json")
 
     assert profile["visa_type"] == "E-9"
-    assert profile["arc_no"] == "950312-5234567"     # 앞면에 인쇄된 값
-    assert profile["stay_expiry"] == "2027-06-30"    # 뒷면에 인쇄된 값
-    assert profile["nationality"] == "NPL"
+    assert profile["arc_no"] == "001130-8678945"     # 앞면에 인쇄된 값
+    assert profile["stay_expiry"] == "2029-06-30"    # 뒷면에 인쇄된 값
+    assert profile["nationality"] == "IDN"
+    assert profile["org_name"] == "대불조선기자재(주)"   # 뒷면 근무처 칸
 
 
 def test_seed_e9_tasks_match_what_the_planner_actually_produces():
