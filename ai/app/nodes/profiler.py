@@ -22,7 +22,7 @@ LABELS = {
     "stay_expiry": {"ko": "체류기간 만료일",  "en": "Stay expiry"},
     "addr_kr":     {"ko": "체류지",           "en": "Address"},
     "entry_date":  {"ko": "입국일",           "en": "Date of entry"},
-    "org_name":    {"ko": "소속 학교·기관",   "en": "School / Organization"},
+    "org_name":    {"ko": "소속 기관",        "en": "School or employer"},
     "phone_kr":    {"ko": "휴대전화",         "en": "Phone (KR)"},
     "purpose":     {"ko": "사용 목적",        "en": "Purpose"},
     "income_source": {"ko": "자금 출처",      "en": "Source of funds"},

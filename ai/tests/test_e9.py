@@ -13,16 +13,16 @@ from app.nodes.planner import build_task_graph
 from app.rules.loader import actions_for
 
 PROFILE = {
-    "name_en": "NGUYEN VAN A",
-    "arc_no": "990101-5234567",
-    "nationality": "VNM",
-    "birth_date": "1999-01-01",
+    "name_en": "SITI",
+    "arc_no": "001130-8678945",
+    "nationality": "IDN",
+    "birth_date": "2000-11-30",
     "visa_type": "E-9",
-    "entry_date": "2026-08-15",
-    "stay_expiry": "2027-08-14",
-    "addr_kr": "Ansan Danwon-gu",
+    "entry_date": "2026-06-25",
+    "stay_expiry": "2029-06-30",
+    "addr_kr": "전라남도 영암군 삼호읍 대불로 88",
     "phone_kr": "010-1234-5678",
-    "org_name": "Settle Manufacturing Co.",
+    "org_name": "대불조선기자재(주)",
     "purpose": "salary",
     "income_source": "part_time",
 }
@@ -68,8 +68,8 @@ def test_e9_workplace_lands_in_the_workplace_box_not_the_school_box(
     html = Path(result["html_path"]).read_text(encoding="utf-8")
 
     school_cell, workplace_cell = html.split("근무처", 1)
-    assert "Settle Manufacturing Co." in workplace_cell
-    assert "Settle Manufacturing Co." not in school_cell
+    assert "대불조선기자재(주)" in workplace_cell
+    assert "대불조선기자재(주)" not in school_cell
 
 
 def test_unsupported_visa_message_lists_what_is_actually_supported():
@@ -134,9 +134,10 @@ def test_seed_e9_profile_matches_the_card_images():
     profile = _seed("profile_e9.json")
 
     assert profile["visa_type"] == "E-9"
-    assert profile["arc_no"] == "950312-5234567"     # 앞면에 인쇄된 값
-    assert profile["stay_expiry"] == "2027-06-30"    # 뒷면에 인쇄된 값
-    assert profile["nationality"] == "NPL"
+    assert profile["arc_no"] == "001130-8678945"     # 앞면에 인쇄된 값
+    assert profile["stay_expiry"] == "2029-06-30"    # 뒷면에 인쇄된 값
+    assert profile["nationality"] == "IDN"
+    assert profile["org_name"] == "대불조선기자재(주)"   # 뒷면 근무처 칸
 
 
 def test_seed_e9_tasks_match_what_the_planner_actually_produces():
@@ -150,3 +151,118 @@ def test_seed_e9_tasks_match_what_the_planner_actually_produces():
     for got, want in zip(actual, expected):
         for key in ("label", "status", "deadline", "d_day", "evidence"):
             assert got[key] == want[key], f"{got['id']}.{key}"
+
+
+# ── 추출기 · 실제 E-9 등록증 OCR 결과 ──────────────────────
+# 아래 두 덩어리는 인도네시아 국적 E-9 등록증을 CLOVA OCR 에 실제로 태워
+# 받은 인식 결과다. 지어낸 것이 아니므로, 여기서 깨지면 실제로 깨진다.
+OCR_FRONT = """KOR
+외국인등록증
+RESIDENCE CARD
+Registration No.
+외국인등록번호
+001130-8678945
+성명
+SITI
+Name
+(시티)
+국가/지역
+INDONESIA
+Country / Region
+PHOTO
+Status
+체류자격
+비전문취업 (E-9)
+허가일 / 만료일
+2026.07.01. / 2029.06.30.
+Permission / Expiry
+체류지
+전라남도 영암군 삼호읍 대불로 88
+Address
+발급일자
+Issue Date 2026.07.01.
+서울출입국
+외국인청장인
+서울출입국 · 외국인청장
+CHIEF, SEOUL IMMIGRATION OFFICE""".splitlines()
+
+OCR_BACK = """체류자격 및 체류기간
+STATUS / PERIOD OF SOJOURN
+체류기간 만료일
+체류자격 Status
+비전문취업 (E-9)
+2029.06.30.
+Period of sojourn until
+체류지 CHANGE OF RESIDENCE
+신고일자 Date
+체류지 Address
+2026.07.01.
+전라남도 영암군 삼호읍 대불로 88
+근무처 PLACE OF EMPLOYMENT
+신고일자 Date
+근무처 Employer
+2026.07.01.
+대불조선기자재(주)
+발행국
+Issuing Country
+KOR
+IC CHIP / 안전칩
+일련번호
+Serial No.
+9944550066""".splitlines()
+
+
+def test_ocr_reads_e9_as_e9():
+    """체류자격을 못 읽으면 그 뒤 룰 엔진이 통째로 헛돈다."""
+    from app.extractors.arc import parse_rules
+
+    front, _ = parse_rules(OCR_FRONT, "arc_front")
+    back, _ = parse_rules(OCR_BACK, "arc_back")
+
+    assert front["visa_type"] == "E-9"
+    assert back["visa_type"] == "E-9"
+    assert front["arc_no"] == "001130-8678945"
+    assert front["nationality"] == "IDN"
+    assert back["stay_expiry"] == "2029-06-30"      # 두 날짜 중 늦은 쪽
+
+
+def test_a_single_word_name_is_read():
+    """성 없이 이름 하나만 쓰는 사람이 있다 — 인도네시아가 그렇고, 고용허가제
+    송출국이다. 이름을 못 읽으면 신청서의 성명란이 빈다."""
+    from app.extractors.arc import parse_rules
+
+    profile, confidence = parse_rules(OCR_FRONT, "arc_front")
+
+    assert profile["name_en"] == "SITI"
+    # 한 낱말은 표제어를 잘못 집을 수 있어 사용자 확인을 거쳐야 한다
+    assert confidence["name_en"] < 0.9
+
+
+def test_a_multi_word_name_still_wins_over_a_single_word_one():
+    """한 낱말을 허용하면서 여러 낱말 이름이 밀리면 그게 더 큰 손해다."""
+    from app.extractors.arc import parse_rules
+
+    texts = ["KOR 외국인등록증 RESIDENCE CARD", "990101-5123456",
+             "성명", "NGUYEN VAN A", "Name", "국가/지역", "VIETNAM"]
+    profile, confidence = parse_rules(texts, "arc_front")
+
+    assert profile["name_en"] == "NGUYEN VAN A"
+    assert confidence["name_en"] > 0.9
+
+
+def test_employer_is_read_from_the_back_of_the_card():
+    """근무처가 카드에 찍혀 있는데 되물으면 반복 입력을 줄인다는 말이 거짓이 된다."""
+    from app.extractors.arc import parse_rules
+
+    profile, _ = parse_rules(OCR_BACK, "arc_back")
+
+    assert profile["org_name"] == "대불조선기자재(주)"
+
+
+def test_reading_the_employer_does_not_pollute_the_address():
+    """근무처 칸이 생기면서 주소 뒤에 라벨이 따라붙을 수 있다."""
+    from app.extractors.arc import _trim_addr, parse_rules
+
+    profile, _ = parse_rules(OCR_BACK, "arc_back")
+
+    assert _trim_addr(profile["addr_kr"]) == "전라남도 영암군 삼호읍 대불로 88"
