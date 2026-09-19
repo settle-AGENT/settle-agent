@@ -1,0 +1,10 @@
+[Unit]
+Description=settle 신분증 원본 삭제 감시 (매일 03:15 KST)
+
+[Timer]
+# 서버는 UTC 로 돈다. 18:15 UTC = 03:15 KST — 트래픽이 없는 시간.
+OnCalendar=*-*-* 18:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
