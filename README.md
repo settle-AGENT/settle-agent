@@ -139,7 +139,15 @@ planner → router ─┬→ slot_filler          부족한 값 질문
 | `ai/mappings/*.yaml` | 서식 필드 매핑 (통합신청서, 계좌개설 신청서) |
 
 액션: `alien_registration` · `mobile_subscription` · `open_bank_account` · `residence_change` · `work_activity`.
-현재 매트릭스에 상세 정의가 채워진 자격은 D-2 다.
+현재 매트릭스에 상세 정의가 채워진 자격은 **D-2(유학) · E-9(비전문취업)** 이다.
+
+같은 액션이라도 자격에 따라 결론이 달라진다. E-9 의 `work_activity` 는
+`allowed: false` 다 — 고용허가제는 허가받은 사업장에서만 일하는 제도라 D-2 의
+시간제취업에 해당하는 것이 없고, 사업장을 옮기는 일은 고용센터(사업장 변경
+신청)와 출입국(근무처 변경허가)을 거치는 별개의 절차다. 그 액션은 아직 없다.
+
+`org_kind` 는 `org_name` 이 통합신청서의 어느 칸인지를 정한다(`school`/`workplace`).
+사용자에게는 소속 기관을 한 번만 묻지만, 서식에는 학교 칸과 근무처 칸이 따로 있다.
 
 ### 선행조건과 완료는 다른 질문이다
 

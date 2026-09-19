@@ -380,8 +380,8 @@ _FIELD_META = {
 
 _FIELD_REASONS = {
     "org_name": {
-        "ko": "학교명은 D-2 체류자의 재학 정보를 확인하고, 통합신청서나 계좌개설신청서의 소속 기관 항목을 자동으로 채우는 데 필요해요. 재학증명서에 적힌 정식 학교명으로 알려주세요.",
-        "en": "Your school name is used to confirm D-2 enrollment details and fill the organization field in supported application forms. Please enter the official name shown on your enrollment certificate.",
+        "ko": "소속 기관명은 통합신청서나 계좌개설신청서의 소속 기관 항목을 자동으로 채우는 데 필요해요. 증빙 서류(재학증명서·근로계약서 등)에 적힌 정식 명칭으로 알려주세요.",
+        "en": "Your organization name is used to fill the organization field in supported application forms. Please enter the official name shown on your supporting document (enrollment certificate, employment contract, and so on).",
     },
     "birth_date": {"ko": "생년월일은 신청서의 본인 확인 항목을 채우는 데 필요해요.", "en": "Your date of birth is needed for the identity section of the application."},
     "entry_date": {"ko": "입국일은 체류 관련 신청 요건과 신청서 항목을 확인하는 데 필요해요.", "en": "Your entry date is needed to check stay-related requirements and complete the application."},

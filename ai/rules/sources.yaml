@@ -15,7 +15,7 @@
 #
 # scripts/check_sources.py 가 이 파일을 읽어 검사한다.
 
-version: "2026-09-05"          # 이 목록 자체를 마지막으로 손본 날
+version: "2026-09-19"          # 이 목록 자체를 마지막으로 손본 날
 
 sources:
   # ── 법령 ────────────────────────────────────────────────
@@ -121,8 +121,8 @@ sources:
   - id: visa_matrix
     name: 체류자격 매트릭스
     kind: internal
-    version: "2026-08-19"
-    last_verified: "2026-09-05"
+    version: "2026-09-19"
+    last_verified: "2026-09-19"
     recheck_after_days: 180
     feeds: rules/visa_matrix.yaml
     declared_in: rules/visa_matrix.yaml

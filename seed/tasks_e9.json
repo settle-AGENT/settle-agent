@@ -1,0 +1,55 @@
+[
+  {
+    "id": "alien_registration",
+    "label": "외국인등록",
+    "status": "available",
+    "prereq": [],
+    "blocked_by": [],
+    "deadline": "2026-10-18",
+    "d_day": 29,
+    "evidence": [
+      "출입국관리법 제31조"
+    ]
+  },
+  {
+    "id": "mobile_subscription",
+    "label": "국내 통신 가입",
+    "status": "available",
+    "prereq": [
+      "alien_registration"
+    ],
+    "blocked_by": [],
+    "deadline": null,
+    "d_day": null,
+    "evidence": []
+  },
+  {
+    "id": "open_bank_account",
+    "label": "은행 계좌 개설",
+    "status": "available",
+    "prereq": [
+      "alien_registration"
+    ],
+    "blocked_by": [],
+    "deadline": null,
+    "d_day": null,
+    "evidence": [
+      "금융실명거래 및 비밀보장에 관한 법률 제3조",
+      "특정 금융거래정보의 보고 및 이용 등에 관한 법률 제5조의2"
+    ]
+  },
+  {
+    "id": "residence_change",
+    "label": "체류지 변경신고",
+    "status": "locked",
+    "prereq": [
+      "alien_registration"
+    ],
+    "blocked_by": [],
+    "deadline": null,
+    "d_day": null,
+    "evidence": [
+      "출입국관리법 제36조"
+    ]
+  }
+]

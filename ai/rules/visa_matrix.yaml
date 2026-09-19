@@ -1,10 +1,12 @@
-version: "2026-08-19"
+version: "2026-09-19"
 source: "출입국관리법 시행령 별표1 외"
 
 visa:
   D-2:
     name_ko: 유학
     name_en: Student
+    # org_name 이 통합신청서의 어느 칸인가. 유학은 학교, 취업은 근무처다.
+    org_kind: school
 
     actions:
       alien_registration:
@@ -71,6 +73,92 @@ visa:
         prereq: [alien_registration]
         form: bank_account_open
         required_docs: [passport, arc, enrollment_cert]
+        agency: bank
+        risk_level: L2
+        evidence: [real_name_3, ftra_5_2]
+        channels:
+          in_person: { available: true }
+          non_face_to_face:
+            available: true
+            extra_prereq: [mobile_subscription]
+        blocked_steps:
+          - step: identity_verification
+            reason_ko: "실명확인은 본인만 가능"
+            reason_en: "Identity verification must be done in person"
+            evidence: [real_name_3]
+  E-9:
+    name_ko: 비전문취업
+    name_en: Non-professional Employment
+    org_kind: workplace
+
+    # D-2 와 뼈대는 같지만 두 군데가 다르다.
+    #   소속을 증명하는 서류  재학증명서가 아니라 근로계약서·사업자등록증이다.
+    #   시간제취업            고용허가제는 허가받은 사업장에서만 일한다.
+    #                        D-2 의 체류자격외활동(시간제취업)에 해당하는 것이
+    #                        없고, 사업장을 옮기는 일은 근무처 변경허가라는
+    #                        별개의 절차다(아직 이 매트릭스에 없다).
+    actions:
+      alien_registration:
+        label_ko: 외국인등록
+        label_en: Alien Registration
+        allowed: true
+        satisfied_if: arc_no
+        prereq: []
+        deadline: { days: 90, from: entry_date }
+        form: integrated_application
+        form_type: registration
+        # 안내매뉴얼 비전문취업(E-9) p.330 — 신청서·여권원본·표준규격사진 1장·
+        # 수수료에 더해 사업자등록증 사본을 낸다. 재학증명서는 해당 없다.
+        required_docs: [passport, photo, business_registration, residence_proof]
+        agency: immigration
+        risk_level: L2
+        evidence: [immigration_31]
+
+      mobile_subscription:
+        label_ko: 국내 통신 가입
+        label_en: Mobile Subscription
+        allowed: true
+        satisfied_if: phone_kr
+        prereq: [alien_registration]
+        required_docs: [arc, passport]
+        agency: telecom
+        risk_level: L1
+        note_ko: "비대면 계좌개설의 선행 조건"
+        note_en: "Required before you can open an account without visiting a branch"
+
+      residence_change:
+        label_ko: 체류지 변경신고
+        label_en: Change of Residence
+        allowed: true
+        prereq: [alien_registration]
+        deadline: { days: 15, from: move_date }
+        form: integrated_application
+        form_type: address_change
+        required_docs: [arc, residence_proof]
+        agency: immigration
+        risk_level: L2
+        evidence: [immigration_36]
+
+      # 고용허가제는 허가받은 사업장에서만 일하는 제도다. 다른 일을 겸하려면
+      # 체류자격외활동허가가 아니라 근무처 변경·추가 허가를 받아야 하고, 그
+      # 절차는 고용센터(사업장 변경 신청)와 출입국(근무처변경 허가) 두 기관을
+      # 거친다. 아직 그 액션을 정의하지 않았으므로, 여기서는 "할 수 있다" 고
+      # 잘못 안내하지 않도록 닫아 둔다. planner 가 목록에서 아예 뺀다.
+      work_activity:
+        label_ko: 체류자격외활동허가
+        label_en: Activity Permit
+        allowed: false
+
+      open_bank_account:
+        label_ko: 은행 계좌 개설
+        label_en: Open Bank Account
+        allowed: true
+        account_type: limited
+        note_ko: "금융거래한도계좌로 개설되며, 목적 확인 후 한도 해제"
+        note_en: "Opens as a limited-transaction account; the cap is lifted once your purpose is verified"
+        prereq: [alien_registration]
+        form: bank_account_open
+        required_docs: [passport, arc, employment_contract]
         agency: bank
         risk_level: L2
         evidence: [real_name_3, ftra_5_2]
