@@ -1394,7 +1394,12 @@ export default function App() {
         if (error?.status === 422 && error?.code === "validation_failed") {
           const details = error.details;
           const entries = Array.isArray(details)
-            ? details.map((detail) => [detail.field, localizedText(detail.reason || error.message, locale, t("입력값을 확인해 주세요.", "Check this value."))])
+            ? details.map((detail) => [
+              detail.field,
+              locale === "en" && detail.field === "addr_kr" && detail.reason === "Please double-check Address"
+                ? "Please double-check your address."
+                : localizedText(detail.reason || error.message, locale, t("입력값을 확인해 주세요.", "Check this value.")),
+            ])
             : Object.entries(details || {}).map(([field, reason]) => [field, String(reason)]);
           setProfileErrors(Object.fromEntries(entries.filter(([field]) => field && field !== "message")));
         }
