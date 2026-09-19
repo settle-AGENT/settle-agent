@@ -13,6 +13,8 @@ from typing import Any
 import yaml
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from app.rules.loader import org_kind
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 MAPPING_DIR = BACKEND_DIR / "mappings"
 TEMPLATE_DIR = BACKEND_DIR / "templates"
@@ -137,6 +139,9 @@ def _flat(profile: dict, rule_values: dict) -> dict:
     birth = (profile.get("birth_date") or "").split("-")
     by, bm, bd = (birth + ["", "", ""])[:3]
 
+    org = profile.get("org_name", "")
+    org_slot = org_kind(profile.get("visa_type"))
+
     return {
         "surname": surname,
         "given_names": given,
@@ -154,9 +159,12 @@ def _flat(profile: dict, rule_values: dict) -> dict:
         "phone_kr": profile.get("phone_kr", ""),
         "addr_home": profile.get("addr_home_country", ""),
         "phone_home": profile.get("phone_home", ""),
-        "school_name": profile.get("org_name", ""),
+        # 소속 기관은 하나를 물어 받지만, 서식에는 학교 칸과 근무처 칸이 따로
+        # 있다. 어느 칸인지는 체류자격이 정한다 — E-9 소지자의 사업장 이름이
+        # "학교 이름" 칸에 찍히면 서식이 틀린다.
+        "school_name": profile.get("school_name") or (org if org_slot == "school" else ""),
         "school_phone": profile.get("school_phone", ""),
-        "workplace": profile.get("workplace", ""),
+        "workplace": profile.get("workplace") or (org if org_slot == "workplace" else ""),
         "biz_no": profile.get("biz_reg_no", ""),
         "work_phone": profile.get("work_phone", ""),
         "income": profile.get("annual_income", ""),

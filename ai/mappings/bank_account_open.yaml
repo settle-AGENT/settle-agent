@@ -55,8 +55,8 @@ fields:
   org_name:
     from: profile.org_name
     required: true
-    label_ko: 소속기관(학교)
-    label_en: School / Organization
+    label_ko: 소속기관
+    label_en: School or employer
   residency_status:
     from: rule.residency_status
     required: true
