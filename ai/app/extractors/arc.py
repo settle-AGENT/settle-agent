@@ -126,7 +126,16 @@ def _trim_addr(addr: str) -> str:
         if _ADDR_TAIL.search(toks[i]):
             return " ".join(toks[: i + 1])
     return " ".join(toks)    
-_RE_NAME = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]+)+\b")
+# 한 낱말 이름도 잡는다(`*`). 인도네시아처럼 성 없이 이름 하나만 쓰는 나라가
+# 있고, 그 나라는 고용허가제 송출국이다. 고르는 규칙은 parse_rules 에 있다.
+_RE_NAME = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]+)*\b")
+
+# 근무처. 취업 자격(E-9 등)의 등록증 뒷면에 인쇄된다. 회사 형태 표기를 닻으로
+# 삼는다 — "근무처" 라벨과 값 사이에 신고일자가 끼어 있어 위치로는 못 잡는다.
+# 문자군에 마침표를 넣지 않았다. 앞의 날짜(2026.07.01.)에서 끊기게 하기 위함이다.
+_RE_EMPLOYER = re.compile(
+    r"([가-힣A-Za-z0-9][가-힣A-Za-z0-9\s·]{0,28}?)\s*"
+    r"(\(\s*주\s*\)|㈜|\(\s*유\s*\)|주식회사|유한회사)")
 
 _LABEL_WORDS = {
     "KOR", "RESIDENCE", "CARD", "PHOTO", "CHIEF", "SEOUL", "IMMIGRATION",
@@ -233,6 +242,10 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
                 c["nationality"] = 0.96
                 break
 
+        # 두 낱말 이상을 먼저 찾는다. 하나도 없을 때만 한 낱말을 받는다 —
+        # 한 낱말은 표제어를 잘못 집을 위험이 커서, 신뢰도를 낮춰 화면에서
+        # 사용자 확인을 거치게 한다(profiler 기준 0.9 미만).
+        singles: list[str] = []
         for m in _RE_NAME.finditer(blob):
             cand = m.group(0).strip()
             words = cand.split()
@@ -244,6 +257,11 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
                 p["name_en"] = cand
                 c["name_en"] = 0.93
                 break
+            singles.append(cand)
+        else:
+            if singles:
+                p["name_en"] = singles[0]
+                c["name_en"] = 0.85
 
     else:  # arc_back
         dates = sorted({_fmt_date(m) for m in _RE_DATE.finditer(blob)})
@@ -258,6 +276,15 @@ def parse_rules(texts: list[str], doc_type: DocType) -> tuple[dict, dict]:
             if len(addr) >= 8:
                 p["addr_kr"] = addr
                 c["addr_kr"] = 0.93
+
+        # 근무처가 카드에 찍혀 있는데도 되물으면, 반복 입력을 줄인다는 약속이
+        # 깨진다. 회사 형태 표기가 없는 근무처(개인 농장 등)는 못 잡는다 —
+        # 그때는 지금까지처럼 사용자에게 묻는다.
+        if m := _RE_EMPLOYER.search(blob):
+            org = m.group(1).strip() + re.sub(r"\s+", "", m.group(2))
+            if len(org) >= 3:
+                p["org_name"] = org
+                c["org_name"] = 0.90
 
     return p, c
 
@@ -306,7 +333,7 @@ _FORMAT = {
     "birth_date": re.compile(r"\d{4}-\d{2}-\d{2}"),
 }
 # OCR 원문 대조가 의미 있는 필드 (날짜·코드는 정규화되므로 제외)
-_GROUNDED = ["name_en", "addr_kr"]
+_GROUNDED = ["name_en", "addr_kr", "org_name"]
 
 
 def _squash(s: str) -> str:

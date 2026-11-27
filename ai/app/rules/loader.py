@@ -39,5 +39,14 @@ def actions_for(visa_type: str) -> dict:
     return visa_spec(visa_type).get("actions", {})
 
 
+def org_kind(visa_type: str) -> str:
+    """org_name 이 학교인가 근무처인가. 통합신청서의 칸이 다르다.
+
+    선언하지 않은 자격은 school 로 본다 — 값을 엉뚱한 칸에 넣기보다 지금까지의
+    동작을 유지한다. 자격을 추가할 때 함께 적는 것이 맞다.
+    """
+    return visa_spec(visa_type).get("org_kind", "school")
+
+
 def evidence_labels(ids: list[str]) -> list[str]:
     return [EVIDENCE[i]["law"] for i in ids if i in EVIDENCE]

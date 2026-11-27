@@ -7,7 +7,11 @@ from datetime import date
 
 import pytest
 
+from app.rules.loader import MATRIX_VERSION
 from scripts import check_sources
+
+# 이 두 픽스처가 보는 것은 last_verified 다. 판까지 적어 두면 매트릭스를 고칠
+# 때마다 무관한 테스트가 깨지므로, 실제 파일에서 읽는다.
 
 
 def test_declared_versions_match_the_actual_files():
@@ -144,7 +148,7 @@ def test_a_future_last_verified_is_reported(monkeypatch):
     """앞선 날짜를 그냥 두면 그 자료는 재확인 대상에서 영영 빠진다."""
     monkeypatch.setattr(check_sources, "_load", lambda: {"sources": [{
         "id": "visa_matrix", "name": "체류자격 매트릭스", "kind": "internal",
-        "version": "2026-08-19",
+        "version": MATRIX_VERSION,
         "last_verified": "2027-01-01",            # 오타로 미래가 됐다고 하자
         "recheck_after_days": 180,
         "declared_in": "rules/visa_matrix.yaml",
@@ -160,7 +164,7 @@ def test_month_only_last_verified_is_not_accepted(monkeypatch):
     """월까지만 적힌 last_verified 를 받아 주면 노후도가 한 달까지 어긋난다."""
     monkeypatch.setattr(check_sources, "_load", lambda: {"sources": [{
         "id": "visa_matrix", "name": "체류자격 매트릭스", "kind": "internal",
-        "version": "2026-08-19",
+        "version": MATRIX_VERSION,
         "last_verified": "2026-09",               # 날짜가 없다
         "recheck_after_days": 180,
         "declared_in": "rules/visa_matrix.yaml",

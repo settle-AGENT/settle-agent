@@ -27,7 +27,12 @@ from app.nodes.planner import (
 )
 from app.nodes.doc_builder import DocumentIncomplete, render
 from app.nodes.profiler import display_value, label_of as _label_of
-from app.rules.loader import VISA_CODES, actions_for, evidence_labels
+from app.rules.loader import (
+    VISA_CODES,
+    VISA_MATRIX,
+    actions_for,
+    evidence_labels,
+)
 from app.tools import llm
 
 KST = timezone.utc  # 표시용. 실제 타임존은 서비스 설정에서 주입한다.
@@ -113,10 +118,67 @@ QUESTIONS: dict[str, dict] = {
 }
 
 
+# 자격별로 말이 달라지는 질문. 같은 org_name 이라도 D-2 에게는 학교이고
+# E-9 에게는 근무처다. 여기 없는 자격은 QUESTIONS 를 그대로 쓴다.
+#
+# value 는 건드리지 않는다 — 서식 매핑(mappings/*.yaml)의 enum 과 서버 검증
+# (service._FIELD_META)이 같은 값을 쓰므로, 바뀌는 것은 라벨과 보여줄 순서뿐이다.
+QUESTION_BY_VISA: dict[str, dict[str, dict]] = {
+    "E-9": {
+        "org_name": {
+            "label": {"ko": "어느 사업장에서 일하고 계신가요?",
+                      "en": "Which workplace do you work at?"},
+            "hint": {"ko": "근로계약서에 적힌 사업장 이름 그대로 적어주세요",
+                     "en": "As written on your employment contract"},
+        },
+        "purpose": {
+            "options": [
+                {"value": "salary", "label": {"ko": "급여 수령", "en": "Salary"}},
+                {"value": "living_expense",
+                 "label": {"ko": "생활비", "en": "Living expenses"}},
+                {"value": "remittance",
+                 "label": {"ko": "본국 송금", "en": "Remittance home"}},
+            ],
+        },
+        "income_source": {
+            "options": [
+                {"value": "part_time", "label": {"ko": "근로소득", "en": "Wages"}},
+                {"value": "savings", "label": {"ko": "예금·저축", "en": "Savings"}},
+                {"value": "family_support",
+                 "label": {"ko": "가족 지원", "en": "Family support"}},
+            ],
+        },
+    },
+}
+
+
+def _question(field: str, visa: str | None) -> dict:
+    """QUESTIONS 에 자격별 차이를 덮어쓴 것."""
+    base = QUESTIONS.get(field, {"label": field, "input_type": "text", "options": []})
+    override = QUESTION_BY_VISA.get(visa or "", {}).get(field)
+    return {**base, **override} if override else base
+
+
 def visa_options() -> list[dict]:
     """체류자격 선택지. visa_codes.yaml 이 한 곳의 출처다."""
     return [{"value": code, "label": f"{code} ({name})"}
             for code, name in VISA_CODES.items()]
+
+
+def supported_visas(locale: str) -> str:
+    """안내를 준비해 둔 자격 목록. 매트릭스가 한 곳의 출처다.
+
+    코드에 목록을 적어 두면 매트릭스에 자격을 추가한 뒤에도 "D-2 만 지원합니다"
+    라고 말하게 된다. 실제로 액션이 정의된 것만 센다.
+    """
+    out = []
+    for code in VISA_MATRIX:
+        if not actions_for(code):
+            continue
+        name = (VISA_CODES.get(code) if locale == "ko"
+                else VISA_MATRIX[code].get("name_en"))
+        out.append(f"{code}({name})" if name else code)
+    return ", ".join(out)
 
 
 def _text(value, locale: str) -> str | None:
@@ -186,9 +248,9 @@ NO_ID = {"ko": "먼저 신분증을 확인해야 무엇을 하실 수 있는지 
 VISA_LEAD = {"ko": "체류자격만 알면 무엇을 하셔야 하는지 알려드릴 수 있습니다.",
              "en": "Once I know your visa status I can tell you what to do."}
 VISA_UNSUPPORTED = {
-    "ko": "{} 는 아직 안내를 준비하지 못했습니다. 지금은 D-2(유학)만 "
+    "ko": "{} 는 아직 안내를 준비하지 못했습니다. 지금은 {} 을(를) "
           "지원합니다. 출입국·외국인종합안내센터(1345)에 문의해주세요.",
-    "en": "I do not have guidance for {} yet — only D-2 (Student) for now. "
+    "en": "I do not have guidance for {} yet — only {} for now. "
           "Please call the immigration center at 1345.",
 }
 
@@ -288,7 +350,7 @@ def slot_filler(state: AgentState) -> dict:
         return {"missing_fields": []}
 
     field = missing[0]
-    q = QUESTIONS.get(field, {"label": field, "input_type": "text", "options": []})
+    q = _question(field, state.get("profile", {}).get("visa_type"))
     locale = state.get("locale", "en")
 
     # 정적 문구는 여기서 locale 을 고른다 — 이 payload 는 번역을 거치지 않고 나간다.
@@ -738,7 +800,8 @@ def ask_visa(state: AgentState) -> dict:
 
     visa = profile.get("visa_type")
     if visa and not actions_for(visa):
-        return {"reply": _text(VISA_UNSUPPORTED, locale).format(visa),
+        return {"reply": _text(VISA_UNSUPPORTED, locale).format(
+                    visa, supported_visas(locale)),
                 "reply_locale": locale, "ui_type": "none"}
 
     q = QUESTIONS["visa_type"]
